@@ -12,7 +12,7 @@ void AUAVHUD::DrawHUD()
 {
 	Super::DrawHUD();
 
-	if (!bShowHUD)
+	if (!bShowUAVInfo)
 		return;
 
 	DrawStateInfo();

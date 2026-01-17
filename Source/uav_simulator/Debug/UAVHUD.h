@@ -36,9 +36,9 @@ protected:
 	// 电机推力
 	TArray<float> MotorThrusts;
 
-	// 是否显示HUD
+	// 是否显示UAV信息
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUD Settings")
-	bool bShowHUD = true;
+	bool bShowUAVInfo = true;
 
 private:
 	// 绘制状态信息
