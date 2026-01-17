@@ -49,12 +49,12 @@
 
 ## 开发阶段
 
-### Phase 1: 基础框架 (2-3周)
-- [ ] 创建 UAV Actor 基类
-- [ ] 实现基础物理模型（简化动力学）
-- [ ] 添加基础传感器（IMU、GPS）
-- [ ] 实现简单的姿态控制器
-- [ ] 创建测试场景和基础UI
+### Phase 1: 基础框架 ✅ (已完成)
+- [x] 创建 UAV Actor 基类 (Core/UAVActor.h/cpp)
+- [x] 实现基础物理模型（简化动力学）(Physics/UAVDynamics.h/cpp)
+- [x] 添加基础传感器（IMU、GPS）(Sensors/IMUSensor.h/cpp, GPSSensor.h/cpp)
+- [x] 实现简单的姿态控制器 (Control/AttitudeController.h/cpp)
+- [x] 创建测试场景和基础UI (Debug/DebugVisualizer, UAVHUD, UAVTestGameMode)
 
 ### Phase 2: 飞行控制 (2-3周)
 - [ ] 完善六自由度动力学模型
