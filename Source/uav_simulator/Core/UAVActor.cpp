@@ -5,6 +5,8 @@
 #include "../Sensors/SensorBase.h"
 #include "../Control/AttitudeController.h"
 #include "../Debug/DebugVisualizer.h"
+#include "../Debug/UAVHUD.h"
+#include "GameFramework/PlayerController.h"
 
 AUAVActor::AUAVActor()
 {
@@ -57,11 +59,19 @@ void AUAVActor::Tick(float DeltaTime)
 		DebugVisualizerComponent->DrawUAVState(CurrentState, GetActorLocation());
 		DebugVisualizerComponent->DrawTrajectoryHistory(GetActorLocation());
 	}
-}
 
-void AUAVActor::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
-{
-	Super::SetupPlayerInputComponent(PlayerInputComponent);
+	// 更新HUD显示
+	if (APlayerController* PC = GetWorld()->GetFirstPlayerController())
+	{
+		if (AUAVHUD* UAVHUDInstance = Cast<AUAVHUD>(PC->GetHUD()))
+		{
+			UAVHUDInstance->SetUAVState(CurrentState);
+			if (DynamicsComponent)
+			{
+				UAVHUDInstance->SetMotorThrusts(DynamicsComponent->GetMotorThrusts());
+			}
+		}
+	}
 }
 
 void AUAVActor::SetTargetAttitude(FRotator InTargetAttitude)

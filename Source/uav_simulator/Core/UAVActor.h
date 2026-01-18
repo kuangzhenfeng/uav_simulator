@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Pawn.h"
+#include "GameFramework/Actor.h"
 #include "UAVTypes.h"
 #include "UAVActor.generated.h"
 
@@ -17,7 +17,7 @@ class UDebugVisualizer;
  * 负责整合物理模型、传感器、控制器等组件
  */
 UCLASS()
-class UAV_SIMULATOR_API AUAVActor : public APawn
+class UAV_SIMULATOR_API AUAVActor : public AActor
 {
 	GENERATED_BODY()
 
@@ -29,7 +29,6 @@ protected:
 
 public:
 	virtual void Tick(float DeltaTime) override;
-	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
 	// 获取当前无人机状态
 	UFUNCTION(BlueprintCallable, Category = "UAV")
