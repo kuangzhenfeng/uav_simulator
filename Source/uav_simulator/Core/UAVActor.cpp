@@ -4,6 +4,7 @@
 #include "../Physics/UAVDynamics.h"
 #include "../Sensors/SensorBase.h"
 #include "../Control/AttitudeController.h"
+#include "../Control/PositionController.h"
 #include "../Debug/DebugVisualizer.h"
 #include "../Debug/UAVHUD.h"
 #include "GameFramework/PlayerController.h"
@@ -17,6 +18,9 @@ AUAVActor::AUAVActor()
 
 	// 创建姿态控制器组件
 	AttitudeControllerComponent = CreateDefaultSubobject<UAttitudeController>(TEXT("AttitudeController"));
+
+	// 创建位置控制器组件
+	PositionControllerComponent = CreateDefaultSubobject<UPositionController>(TEXT("PositionController"));
 
 	// 创建调试可视化组件
 	DebugVisualizerComponent = CreateDefaultSubobject<UDebugVisualizer>(TEXT("DebugVisualizer"));
@@ -70,6 +74,8 @@ void AUAVActor::Tick(float DeltaTime)
 			{
 				UAVHUDInstance->SetMotorThrusts(DynamicsComponent->GetMotorThrusts());
 			}
+			// 设置控制器参数用于HUD显示
+			UAVHUDInstance->SetControllerParams(AttitudeControllerComponent, PositionControllerComponent);
 		}
 	}
 }
@@ -98,9 +104,41 @@ void AUAVActor::UpdateSensors(float DeltaTime)
 
 void AUAVActor::UpdateController(float DeltaTime)
 {
-	if (AttitudeControllerComponent)
+	if (bUsePositionControl && PositionControllerComponent)
 	{
-		// 姿态控制器计算电机输出
+		// 位置控制模式
+		FRotator DesiredAttitude;
+		float DesiredThrust;
+
+		// 位置控制器计算期望姿态和推力
+		PositionControllerComponent->ComputeControl(
+			CurrentState, TargetPosition, FVector::ZeroVector, DesiredAttitude, DesiredThrust, DeltaTime);
+
+		// 使用姿态控制器跟踪期望姿态
+		if (AttitudeControllerComponent)
+		{
+			FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
+				CurrentState, DesiredAttitude, DeltaTime);
+
+			// 用位置控制器的推力替换姿态控制器的基础推力
+			// 计算姿态控制器的控制增量（相对于HoverThrust的偏差）
+			float HoverThrust = AttitudeControllerComponent->HoverThrust;
+			for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
+			{
+				float ControlDelta = MotorOutput.Thrusts[i] - HoverThrust;
+				MotorOutput.Thrusts[i] = DesiredThrust + ControlDelta;
+			}
+
+			// 将电机输出传递给物理模型
+			if (DynamicsComponent)
+			{
+				DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
+			}
+		}
+	}
+	else if (AttitudeControllerComponent)
+	{
+		// 姿态控制模式
 		FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
 			CurrentState, TargetAttitude, DeltaTime);
 

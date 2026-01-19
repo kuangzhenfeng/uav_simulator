@@ -27,6 +27,12 @@ FMotorOutput UAttitudeController::ComputeControl(const FUAVState& CurrentState, 
 	float PitchError = NormalizeAngle(TargetAttitude.Pitch - CurrentState.Rotation.Pitch);
 	float YawError = NormalizeAngle(TargetAttitude.Yaw - CurrentState.Rotation.Yaw);
 
+	// 调试日志：输出姿态信息
+	UE_LOG(LogTemp, Warning, TEXT("【AttitudeController】Target: R=%.2f P=%.2f Y=%.2f | Current: R=%.2f P=%.2f Y=%.2f | Error: R=%.2f P=%.2f Y=%.2f"),
+		TargetAttitude.Roll, TargetAttitude.Pitch, TargetAttitude.Yaw,
+		CurrentState.Rotation.Roll, CurrentState.Rotation.Pitch, CurrentState.Rotation.Yaw,
+		RollError, PitchError, YawError);
+
 	// 限制目标角度
 	RollError = FMath::Clamp(RollError, -MaxTiltAngle, MaxTiltAngle);
 	PitchError = FMath::Clamp(PitchError, -MaxTiltAngle, MaxTiltAngle);

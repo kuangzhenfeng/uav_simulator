@@ -16,13 +16,13 @@ struct FPIDParams
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID")
-	float Kp = 6.0f;
+	float Kp = 0.05f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID")
-	float Ki = 0.1f;
+	float Ki = 0.005f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID")
-	float Kd = 0.5f;
+	float Kd = 0.05f;
 
 	FPIDParams() {}
 	FPIDParams(float InKp, float InKi, float InKd) : Kp(InKp), Ki(InKi), Kd(InKd) {}
@@ -54,26 +54,28 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Attitude Controller")
 	void ResetController();
 
-protected:
-	// Roll PID参数
+	// Roll PID参数 (降低增益以提高稳定性)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID Parameters")
-	FPIDParams RollPID = FPIDParams(6.0f, 0.1f, 0.5f);
+	FPIDParams RollPID = FPIDParams(0.02f, 0.0f, 0.01f);
 
-	// Pitch PID参数
+	// Pitch PID参数 (降低增益以提高稳定性)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID Parameters")
-	FPIDParams PitchPID = FPIDParams(6.0f, 0.1f, 0.5f);
+	FPIDParams PitchPID = FPIDParams(0.02f, 0.0f, 0.01f);
 
-	// Yaw PID参数
+	// Yaw PID参数 (降低增益以提高稳定性)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID Parameters")
-	FPIDParams YawPID = FPIDParams(4.0f, 0.05f, 0.3f);
+	FPIDParams YawPID = FPIDParams(0.015f, 0.0f, 0.008f);
 
-	// 悬停推力 (0-1归一化)
+	// 悬停推力 (归一化值 0-1)
+	// 调整后的悬停推力值，通过实际测试微调
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control Parameters")
-	float HoverThrust = 0.6f;
+	float HoverThrust = 0.235f;
 
 	// 最大倾斜角度 (度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control Parameters")
 	float MaxTiltAngle = 30.0f;
+
+protected:
 
 private:
 	// PID积分项

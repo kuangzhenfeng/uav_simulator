@@ -56,12 +56,34 @@
 - [x] 实现简单的姿态控制器 (Control/AttitudeController.h/cpp)
 - [x] 创建测试场景和基础UI (Debug/DebugVisualizer, UAVHUD, UAVTestGameMode)
 
-### Phase 2: 飞行控制 (2-3周)
-- [ ] 完善六自由度动力学模型
-- [ ] 实现完整的姿态和位置控制器
-- [ ] 添加状态估计器（EKF）
-- [ ] 实现控制参数调试界面
-- [ ] 添加飞行数据记录功能
+### Phase 2: 飞行控制 ✅ (已完成)
+- [x] 完善六自由度动力学模型
+  - RK4 积分器提高数值精度和稳定性
+  - 添加陀螺效应（完整欧拉动力学方程）
+  - 改进空气阻力模型（二次阻力项）
+  - 改进 Yaw 力矩模型（基于物理参数）
+  - 新增文件：`Physics/UAVDynamics.h/cpp`（已更新）
+- [x] 实现完整的姿态和位置控制器
+  - 级联控制架构（位置→速度→姿态→推力）
+  - 控制限制（最大速度、倾斜角、推力范围）
+  - 积分抗饱和和重力补偿
+  - 新增文件：`Control/PositionController.h/cpp`
+- [x] 添加状态估计器（EKF）
+  - 扩展卡尔曼滤波器实现
+  - IMU 和 GPS 数据融合
+  - 简化对角协方差矩阵（实时性能优化）
+  - 新增文件：`Control/StateEstimator.h/cpp`
+- [x] 实现控制参数调试界面
+  - 运行时 PID 参数调整
+  - 参数保存/加载到 INI 配置文件
+  - 重置为默认值功能
+  - Blueprint 可调用接口
+  - 新增文件：`Debug/ControlParameterTuner.h/cpp`
+- [x] 添加飞行数据记录功能
+  - CSV 格式导出（位置、速度、姿态、电机推力）
+  - 可配置记录频率（默认 100Hz）
+  - 自动导出和数据管理
+  - 新增文件：`Debug/DataLogger.h/cpp`
 
 ### Phase 3: 轨迹规划 (2-3周)
 - [ ] 实现基础路径规划算法（A*、RRT）

@@ -10,6 +10,7 @@
 class UUAVDynamics;
 class USensorBase;
 class UAttitudeController;
+class UPositionController;
 class UDebugVisualizer;
 
 /**
@@ -51,6 +52,10 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
 	TObjectPtr<UAttitudeController> AttitudeControllerComponent;
 
+	// 位置控制器组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
+	TObjectPtr<UPositionController> PositionControllerComponent;
+
 	// 传感器列表
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
 	TArray<TObjectPtr<USensorBase>> Sensors;
@@ -71,7 +76,11 @@ protected:
 	UPROPERTY(BlueprintReadWrite, Category = "UAV Control")
 	FVector TargetPosition;
 
-	// 无人机物理参数
+	// 控制模式：true=位置控制，false=姿态控制
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Control")
+	bool bUsePositionControl = true;
+
+protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Parameters")
 	float Mass = 1.5f; // kg
 

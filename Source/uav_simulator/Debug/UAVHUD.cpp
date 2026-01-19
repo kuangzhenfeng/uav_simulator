@@ -2,6 +2,8 @@
 
 #include "UAVHUD.h"
 #include "Engine/Canvas.h"
+#include "../Control/AttitudeController.h"
+#include "../Control/PositionController.h"
 
 AUAVHUD::AUAVHUD()
 {
@@ -17,6 +19,7 @@ void AUAVHUD::DrawHUD()
 
 	DrawStateInfo();
 	DrawMotorInfo();
+	DrawControllerParams();
 }
 
 void AUAVHUD::SetUAVState(const FUAVState& InState)
@@ -90,5 +93,61 @@ void AUAVHUD::DrawMotorInfo()
 		FString MotorText = FString::Printf(TEXT("Motor %d: %.2f"), i, MotorThrusts[i]);
 		DrawText(MotorText, FColor::Orange, XPos, YPos);
 		YPos += LineHeight;
+	}
+}
+
+void AUAVHUD::SetControllerParams(UAttitudeController* AttitudeCtrl, UPositionController* PositionCtrl)
+{
+	AttitudeController = AttitudeCtrl;
+	PositionController = PositionCtrl;
+}
+
+void AUAVHUD::DrawControllerParams()
+{
+	if (!Canvas)
+		return;
+
+	float YPos = 350.0f;
+	float XPos = 50.0f;
+	float LineHeight = 20.0f;
+
+	// 姿态控制器参数
+	if (AttitudeController)
+	{
+		FString Title = TEXT("Attitude PID");
+		DrawText(Title, FColor::White, XPos, YPos, nullptr, 1.2f);
+		YPos += LineHeight * 1.5f;
+
+		FString RollText = FString::Printf(TEXT("Roll: Kp=%.3f Ki=%.3f Kd=%.3f"),
+			AttitudeController->RollPID.Kp, AttitudeController->RollPID.Ki, AttitudeController->RollPID.Kd);
+		DrawText(RollText, FColor::Cyan, XPos, YPos);
+		YPos += LineHeight;
+
+		FString PitchText = FString::Printf(TEXT("Pitch: Kp=%.3f Ki=%.3f Kd=%.3f"),
+			AttitudeController->PitchPID.Kp, AttitudeController->PitchPID.Ki, AttitudeController->PitchPID.Kd);
+		DrawText(PitchText, FColor::Cyan, XPos, YPos);
+		YPos += LineHeight;
+
+		FString YawText = FString::Printf(TEXT("Yaw: Kp=%.3f Ki=%.3f Kd=%.3f"),
+			AttitudeController->YawPID.Kp, AttitudeController->YawPID.Ki, AttitudeController->YawPID.Kd);
+		DrawText(YawText, FColor::Cyan, XPos, YPos);
+		YPos += LineHeight * 1.5f;
+	}
+
+	// 位置控制器参数
+	if (PositionController)
+	{
+		FString Title = TEXT("Position PID");
+		DrawText(Title, FColor::White, XPos, YPos, nullptr, 1.2f);
+		YPos += LineHeight * 1.5f;
+
+		FString PosText = FString::Printf(TEXT("Pos: Kp=%.2f Ki=%.2f Kd=%.2f"),
+			PositionController->Kp_Position, PositionController->Ki_Position, PositionController->Kd_Position);
+		DrawText(PosText, FColor::Yellow, XPos, YPos);
+		YPos += LineHeight;
+
+		FString VelText = FString::Printf(TEXT("Vel: Kp=%.2f Ki=%.2f Kd=%.2f"),
+			PositionController->Kp_Velocity, PositionController->Ki_Velocity, PositionController->Kd_Velocity);
+		DrawText(VelText, FColor::Yellow, XPos, YPos);
 	}
 }

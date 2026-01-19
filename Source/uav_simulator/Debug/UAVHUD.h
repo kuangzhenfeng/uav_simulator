@@ -29,12 +29,23 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV HUD")
 	void SetMotorThrusts(const TArray<float>& InThrusts);
 
+	// 设置控制器参数
+	UFUNCTION(BlueprintCallable, Category = "UAV HUD")
+	void SetControllerParams(class UAttitudeController* AttitudeCtrl, class UPositionController* PositionCtrl);
+
 protected:
 	// 当前UAV状态
 	FUAVState CurrentState;
 
 	// 电机推力
 	TArray<float> MotorThrusts;
+
+	// 控制器引用
+	UPROPERTY()
+	TObjectPtr<class UAttitudeController> AttitudeController;
+
+	UPROPERTY()
+	TObjectPtr<class UPositionController> PositionController;
 
 	// 是否显示UAV信息
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUD Settings")
@@ -46,4 +57,7 @@ private:
 
 	// 绘制电机推力
 	void DrawMotorInfo();
+
+	// 绘制控制器参数
+	void DrawControllerParams();
 };

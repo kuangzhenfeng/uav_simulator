@@ -52,7 +52,13 @@ protected:
 	float MaxThrust = 15.0f; // N (单个电机最大推力)
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics Parameters")
-	float DragCoefficient = 0.1f; // 空气阻力系数
+	float DragCoefficient = 0.1f; // 线性空气阻力系数
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics Parameters")
+	float QuadraticDragCoefficient = 0.01f; // 二次空气阻力系数
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics Parameters")
+	float MotorTorqueCoefficient = 0.0045f; // 电机扭矩系数 (N·m / N)
 
 	// 电机推力 (0-1归一化)
 	UPROPERTY(BlueprintReadOnly, Category = "Motor State")
@@ -61,6 +67,19 @@ protected:
 private:
 	// 计算总推力和力矩
 	void ComputeForcesAndTorques(FVector& OutForce, FVector& OutTorque) const;
+
+	// RK4积分器
+	FUAVState IntegrateRK4(const FUAVState& State, float DeltaTime);
+
+	// 计算状态导数
+	FUAVState ComputeDerivative(const FUAVState& State, float Time);
+
+	// 计算角加速度（包含陀螺效应）
+	FVector ComputeAngularAcceleration(const FVector& Torque, const FVector& AngularVelocity) const;
+
+	// 状态向量操作辅助函数
+	FUAVState AddStates(const FUAVState& A, const FUAVState& B) const;
+	FUAVState ScaleState(const FUAVState& State, float Scale) const;
 
 	// 重力常量 (UE5使用cm/s², 需要转换)
 	static constexpr float GravityAcceleration = 980.0f; // cm/s²
