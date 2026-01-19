@@ -8,5 +8,7 @@ Saved/
 *.xcworkspace
 *.sln
 *.suo
+*.code-workspace
 
 .DS_Store
+.vscode/
