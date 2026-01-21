@@ -7,6 +7,7 @@
 #include "../Control/PositionController.h"
 #include "../Debug/DebugVisualizer.h"
 #include "../Debug/UAVHUD.h"
+#include "../Debug/UAVLogConfig.h"
 #include "GameFramework/PlayerController.h"
 
 AUAVActor::AUAVActor()
@@ -125,7 +126,7 @@ void AUAVActor::UpdateController(float DeltaTime)
 			float HoverThrust = AttitudeControllerComponent->HoverThrust;
 			
 			// 调试日志：输出姿态控制器原始输出
-			UE_LOG(LogTemp, Warning, TEXT("【UAVActor】 AttitudeCtrl Raw: [%.3f, %.3f, %.3f, %.3f] | HoverThrust: %.3f | DesiredThrust: %.3f"),
+			UE_LOG(LogUAVActor, Log, TEXT("AttCtrl Raw: [%.3f, %.3f, %.3f, %.3f] | Hover: %.3f | DesThrust: %.3f"),
 				MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3],
 				HoverThrust, DesiredThrust);
 			
@@ -139,7 +140,7 @@ void AUAVActor::UpdateController(float DeltaTime)
 			}
 
 			// 调试日志：输出最终电机推力
-			UE_LOG(LogTemp, Warning, TEXT("【UAVActor】 Final Motor Thrusts: [%.3f, %.3f, %.3f, %.3f]"),
+			UE_LOG(LogUAVActor, Log, TEXT("Final Motors: [%.3f, %.3f, %.3f, %.3f]"),
 				MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3]);
 
 			// 将电机输出传递给物理模型

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UAVDynamics.h"
+#include "../Debug/UAVLogConfig.h"
 
 UUAVDynamics::UUAVDynamics()
 {
@@ -57,7 +58,7 @@ FUAVState UUAVDynamics::ComputeDerivative(const FUAVState& State, float Time)
 	FVector TotalTorque;
 	ComputeForcesAndTorques(ThrustForce, TotalTorque);
 	// 调试日志：输出推力和力矩信息
-	UE_LOG(LogTemp, Warning, TEXT("【UAVDynamics】ThrustForce: %s, TotalTorque: %s"), *ThrustForce.ToString(), *TotalTorque.ToString());
+	UE_LOG(LogUAVDynamics, Log, TEXT("ThrustForce: %s, TotalTorque: %s"), *ThrustForce.ToString(), *TotalTorque.ToString());
 
 	// 将推力从机体坐标系转换到世界坐标系
 	FQuat Orientation = State.Rotation.Quaternion();
