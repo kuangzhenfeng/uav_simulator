@@ -123,11 +123,24 @@ void AUAVActor::UpdateController(float DeltaTime)
 			// 用位置控制器的推力替换姿态控制器的基础推力
 			// 计算姿态控制器的控制增量（相对于HoverThrust的偏差）
 			float HoverThrust = AttitudeControllerComponent->HoverThrust;
+			
+			// 调试日志：输出姿态控制器原始输出
+			UE_LOG(LogTemp, Warning, TEXT("【UAVActor】 AttitudeCtrl Raw: [%.3f, %.3f, %.3f, %.3f] | HoverThrust: %.3f | DesiredThrust: %.3f"),
+				MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3],
+				HoverThrust, DesiredThrust);
+			
+			// 计算控制增量并应用到期望推力
 			for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
 			{
 				float ControlDelta = MotorOutput.Thrusts[i] - HoverThrust;
 				MotorOutput.Thrusts[i] = DesiredThrust + ControlDelta;
+				// 确保推力在有效范围内
+				MotorOutput.Thrusts[i] = FMath::Clamp(MotorOutput.Thrusts[i], 0.0f, 1.0f);
 			}
+
+			// 调试日志：输出最终电机推力
+			UE_LOG(LogTemp, Warning, TEXT("【UAVActor】 Final Motor Thrusts: [%.3f, %.3f, %.3f, %.3f]"),
+				MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3]);
 
 			// 将电机输出传递给物理模型
 			if (DynamicsComponent)

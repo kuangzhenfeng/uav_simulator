@@ -37,10 +37,34 @@ FMotorOutput UAttitudeController::ComputeControl(const FUAVState& CurrentState, 
 	RollError = FMath::Clamp(RollError, -MaxTiltAngle, MaxTiltAngle);
 	PitchError = FMath::Clamp(PitchError, -MaxTiltAngle, MaxTiltAngle);
 
-	// 计算PID控制输出
-	float RollControl = ComputePID(RollError, RollIntegral, LastRollError, RollPID, DeltaTime);
-	float PitchControl = ComputePID(PitchError, PitchIntegral, LastPitchError, PitchPID, DeltaTime);
-	float YawControl = ComputePID(YawError, YawIntegral, LastYawError, YawPID, DeltaTime);
+	// 获取角速度（rad/s转换为deg/s）
+	FVector AngularVelDeg = CurrentState.AngularVelocity * (180.0f / PI);
+
+	// 计算比例控制输出
+	float RollP = RollPID.Kp * RollError;
+	float PitchP = PitchPID.Kp * PitchError;
+	float YawP = YawPID.Kp * YawError;
+
+	// 计算角速度阻尼（使用角速度反馈代替误差微分）
+	// 减小阻尼系数，确保比例项主导控制方向
+	const float AngularDamping = 0.0006f;
+	float RollD = -AngularDamping * AngularVelDeg.X;
+	float PitchD = -AngularDamping * AngularVelDeg.Y;
+	float YawD = -AngularDamping * 0.5f * AngularVelDeg.Z;
+
+	// 合并比例和阻尼项
+	float RollControl = RollP + RollD;
+	float PitchControl = PitchP + PitchD;
+	float YawControl = YawP + YawD;
+
+	// 限制控制输出，防止单个电机推力变化过大
+	RollControl = FMath::Clamp(RollControl, -MaxControlOutput, MaxControlOutput);
+	PitchControl = FMath::Clamp(PitchControl, -MaxControlOutput, MaxControlOutput);
+	YawControl = FMath::Clamp(YawControl, -MaxControlOutput * 0.5f, MaxControlOutput * 0.5f);
+
+	// 调试日志：输出控制量详情
+	UE_LOG(LogTemp, Warning, TEXT("【AttitudeController】 P:(%.4f,%.4f) D:(%.4f,%.4f) Out:(%.4f,%.4f) AngVel:(%.1f,%.1f)"),
+		RollP, PitchP, RollD, PitchD, RollControl, PitchControl, AngularVelDeg.X, AngularVelDeg.Y);
 
 	// 将控制输出映射到电机推力
 	// 四旋翼X型配置:

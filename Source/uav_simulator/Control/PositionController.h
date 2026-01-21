@@ -42,9 +42,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Position Controller")
 	void Reset();
 
-	// 位置PID参数 (大幅降低增益以提高稳定性)
+	// 位置PID参数 (增大增益以提高响应速度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Position Control Parameters")
-	float Kp_Position = 0.1f;
+	float Kp_Position = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Position Control Parameters")
 	float Ki_Position = 0.0f;
@@ -52,9 +52,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Position Control Parameters")
 	float Kd_Position = 0.0f;
 
-	// 速度PID参数 (极低增益，纯P控制)
+	// 速度PID参数 (增大增益以产生足够的姿态角)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Velocity Control Parameters")
-	float Kp_Velocity = 0.05f;
+	float Kp_Velocity = 2.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Velocity Control Parameters")
 	float Ki_Velocity = 0.0f;

@@ -54,22 +54,26 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Attitude Controller")
 	void ResetController();
 
-	// Roll PID参数 (降低增益以提高稳定性)
+	// Roll PID参数 (增大Kp以主导控制方向)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID Parameters")
-	FPIDParams RollPID = FPIDParams(0.02f, 0.0f, 0.01f);
+	FPIDParams RollPID = FPIDParams(0.008f, 0.0f, 0.0f);
 
-	// Pitch PID参数 (降低增益以提高稳定性)
+	// Pitch PID参数 (增大Kp以主导控制方向)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID Parameters")
-	FPIDParams PitchPID = FPIDParams(0.02f, 0.0f, 0.01f);
+	FPIDParams PitchPID = FPIDParams(0.008f, 0.0f, 0.0f);
 
-	// Yaw PID参数 (降低增益以提高稳定性)
+	// Yaw PID参数 (增大Kp以主导控制方向)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID Parameters")
-	FPIDParams YawPID = FPIDParams(0.015f, 0.0f, 0.008f);
+	FPIDParams YawPID = FPIDParams(0.005f, 0.0f, 0.0f);
 
 	// 悬停推力 (归一化值 0-1)
 	// 调整后的悬停推力值，通过实际测试微调
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control Parameters")
-	float HoverThrust = 0.235f;
+	float HoverThrust = 0.245f;
+
+	// 控制输出限制（增大以允许更强的控制响应）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control Parameters")
+	float MaxControlOutput = 0.12f;
 
 	// 最大倾斜角度 (度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control Parameters")

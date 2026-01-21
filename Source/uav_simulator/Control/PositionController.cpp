@@ -61,7 +61,13 @@ void UPositionController::ComputeControl(const FUAVState& CurrentState, const FV
 	float RequiredThrustN = UAVMass * (GravityAcceleration + DesiredAcceleration.Z) / 100.0f;
 	// 归一化到[0,1]范围
 	float MaxTotalThrust = NumMotors * SingleMotorMaxThrust;
-	OutThrust = FMath::Clamp(RequiredThrustN / MaxTotalThrust, MinThrust, MaxThrust);
+	float RawThrust = RequiredThrustN / MaxTotalThrust;
+	OutThrust = FMath::Clamp(RawThrust, MinThrust, MaxThrust);
+
+	// 调试日志：输出推力计算详情
+	UE_LOG(LogTemp, Warning, TEXT("【PositionController, Thrust】 DesiredAccel: (%.1f,%.1f,%.1f) | RequiredThrustN: %.1f | RawThrust: %.3f | ClampedThrust: %.3f"),
+		DesiredAcceleration.X, DesiredAcceleration.Y, DesiredAcceleration.Z,
+		RequiredThrustN, RawThrust, OutThrust);
 
 	// 计算期望姿态（Roll和Pitch）
 	// 推力方向需要同时考虑水平和垂直方向的期望加速度
