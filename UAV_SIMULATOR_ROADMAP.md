@@ -85,28 +85,59 @@
   - 自动导出和数据管理
   - 新增文件：`Debug/DataLogger.h/cpp`
 
-### Phase 3: 轨迹规划 (2-3周)
+### Phase 3: AI行为树系统 ✅ (已完成)
+- [x] 添加AI模块依赖
+  - 更新 `uav_simulator.Build.cs` 添加 AIModule、GameplayTasks、NavigationSystem
+- [x] 创建UAVPawn类（支持AI控制）
+  - 继承自APawn，支持AIController
+  - 保留UAVActor的所有功能
+  - 新增文件：`Core/UAVPawn.h/cpp`
+- [x] 实现UAV AI控制器
+  - 行为树和黑板组件管理
+  - 自动启动行为树
+  - 黑板键值设置接口
+  - 新增文件：`AI/UAVAIController.h/cpp`
+- [x] 实现行为树任务节点
+  - **BTTask_UAVFlyToLocation**: 飞往目标位置
+  - **BTTask_UAVHover**: 悬停任务（支持定时和无限悬停）
+  - **BTTask_UAVPatrol**: 巡逻任务（多航点循环）
+  - 新增文件：`AI/Tasks/BTTask_UAVFlyToLocation.h/cpp`
+  - 新增文件：`AI/Tasks/BTTask_UAVHover.h/cpp`
+  - 新增文件：`AI/Tasks/BTTask_UAVPatrol.h/cpp`
+- [x] 实现行为树服务节点
+  - **BTService_UAVUpdateState**: 定期更新UAV状态到黑板
+  - 新增文件：`AI/Services/BTService_UAVUpdateState.h/cpp`
+- [x] 实现行为树装饰器
+  - **BTDecorator_UAVAtLocation**: 检查是否到达目标位置
+  - 新增文件：`AI/Decorators/BTDecorator_UAVAtLocation.h/cpp`
+- [x] 添加使用文档
+  - 详细的行为树配置指南
+  - 黑板键值说明
+  - 示例行为树结构
+  - 新增文件：`AI/README_BehaviorTree.md`
+
+### Phase 4: 轨迹规划 (2-3周)
 - [ ] 实现基础路径规划算法（A*、RRT）
 - [ ] 实现轨迹优化（最小snap）
 - [ ] 添加轨迹跟踪控制器
 - [ ] 实现动态避障
 - [ ] 可视化规划结果
 
-### Phase 4: 多机协同 (3-4周)
+### Phase 5: 多机协同 (3-4周)
 - [ ] 实现多无人机管理系统
 - [ ] 添加编队控制算法
 - [ ] 实现通信模拟
 - [ ] 添加碰撞避免
 - [ ] 实现任务分配算法
 
-### Phase 5: 任务规划 (2-3周)
+### Phase 6: 任务规划 (2-3周)
 - [ ] 设计任务描述语言
 - [ ] 实现任务解析器
 - [ ] 添加任务调度器
 - [ ] 实现任务监控系统
 - [ ] 添加重规划功能
 
-### Phase 6: 环境与优化 (2-3周)
+### Phase 7: 环境与优化 (2-3周)
 - [ ] 完善环境系统（风场、天气）
 - [ ] 添加复杂场景（城市、森林）
 - [ ] 性能优化
@@ -167,6 +198,17 @@ Source/uav_simulator/
 │   ├── MissionPlanner.h/cpp        # 任务规划
 │   ├── MissionExecutor.h/cpp       # 任务执行
 │   └── MissionMonitor.h/cpp        # 任务监控
+├── AI/
+│   ├── UAVAIController.h/cpp       # AI控制器
+│   ├── Tasks/
+│   │   ├── BTTask_UAVFlyToLocation.h/cpp  # 飞往位置任务
+│   │   ├── BTTask_UAVHover.h/cpp          # 悬停任务
+│   │   └── BTTask_UAVPatrol.h/cpp         # 巡逻任务
+│   ├── Services/
+│   │   └── BTService_UAVUpdateState.h/cpp # 状态更新服务
+│   ├── Decorators/
+│   │   └── BTDecorator_UAVAtLocation.h/cpp # 位置检查装饰器
+│   └── README_BehaviorTree.md      # 行为树使用文档
 └── Debug/
     ├── DebugVisualizer.h/cpp       # 调试可视化
     └── DataLogger.h/cpp            # 数据记录
