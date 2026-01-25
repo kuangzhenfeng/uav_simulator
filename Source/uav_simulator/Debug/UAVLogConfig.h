@@ -26,6 +26,9 @@
 
 // ============== 日志类别声明 ==============
 
+// 默认日志
+DECLARE_LOG_CATEGORY_EXTERN(LogDefault, Log, All);
+
 // 位置控制器日志
 DECLARE_LOG_CATEGORY_EXTERN(LogUAVPosition, Log, All);
 
