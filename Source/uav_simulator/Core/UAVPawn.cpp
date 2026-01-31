@@ -9,6 +9,9 @@
 #include "../Debug/UAVHUD.h"
 #include "../Debug/UAVLogConfig.h"
 #include "../AI/UAVAIController.h"
+#include "../Planning/TrajectoryTracker.h"
+#include "../Planning/ObstacleManager.h"
+#include "../Planning/PlanningVisualizer.h"
 #include "GameFramework/PlayerController.h"
 
 AUAVPawn::AUAVPawn()
@@ -31,10 +34,20 @@ AUAVPawn::AUAVPawn()
 	// 创建调试可视化组件
 	DebugVisualizerComponent = CreateDefaultSubobject<UDebugVisualizer>(TEXT("DebugVisualizer"));
 
+	// 创建轨迹跟踪组件
+	TrajectoryTrackerComponent = CreateDefaultSubobject<UTrajectoryTracker>(TEXT("TrajectoryTracker"));
+
+	// 创建障碍物管理组件
+	ObstacleManagerComponent = CreateDefaultSubobject<UObstacleManager>(TEXT("ObstacleManager"));
+
+	// 创建规划可视化组件
+	PlanningVisualizerComponent = CreateDefaultSubobject<UPlanningVisualizer>(TEXT("PlanningVisualizer"));
+
 	// 初始化状态
 	CurrentState = FUAVState();
 	TargetAttitude = FRotator::ZeroRotator;
 	TargetPosition = FVector::ZeroVector;
+	ControlMode = EUAVControlMode::Position;
 
 	// 设置AI控制器
 	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
@@ -121,57 +134,132 @@ void AUAVPawn::UpdateSensors(float DeltaTime)
 
 void AUAVPawn::UpdateController(float DeltaTime)
 {
-	if (bUsePositionControl && PositionControllerComponent)
+	// 根据控制模式选择不同的控制策略
+	switch (ControlMode)
 	{
-		// 位置控制模式
-		FRotator DesiredAttitude;
-		float DesiredThrust;
-
-		// 位置控制器计算期望姿态和推力
-		PositionControllerComponent->ComputeControl(
-			CurrentState, TargetPosition, FVector::ZeroVector, DesiredAttitude, DesiredThrust, DeltaTime);
-
-		// 使用姿态控制器跟踪期望姿态
-		if (AttitudeControllerComponent)
+	case EUAVControlMode::Trajectory:
 		{
-			FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
-				CurrentState, DesiredAttitude, DeltaTime);
-
-			// 用位置控制器的推力替换姿态控制器的基础推力
-			float HoverThrust = AttitudeControllerComponent->HoverThrust;
-			
-			// 调试日志
-			UE_LOG(LogUAVActor, Log, TEXT("AttCtrl Raw: [%.3f, %.3f, %.3f, %.3f] | Hover: %.3f | DesThrust: %.3f"),
-				MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3],
-				HoverThrust, DesiredThrust);
-			
-			// 计算控制增量并应用到期望推力
-			for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
+			// 轨迹跟踪模式
+			if (TrajectoryTrackerComponent && TrajectoryTrackerComponent->IsTracking() && PositionControllerComponent)
 			{
-				float ControlDelta = MotorOutput.Thrusts[i] - HoverThrust;
-				MotorOutput.Thrusts[i] = DesiredThrust + ControlDelta;
-				MotorOutput.Thrusts[i] = FMath::Clamp(MotorOutput.Thrusts[i], 0.0f, 1.0f);
+				FTrajectoryPoint DesiredState = TrajectoryTrackerComponent->GetDesiredState();
+
+				FRotator DesiredAttitude;
+				float DesiredThrust;
+
+				// 使用轨迹点的速度和加速度作为前馈
+				PositionControllerComponent->ComputeControl(
+					CurrentState, DesiredState.Position, DesiredState.Velocity, DesiredAttitude, DesiredThrust, DeltaTime);
+
+				if (AttitudeControllerComponent)
+				{
+					FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
+						CurrentState, DesiredAttitude, DeltaTime);
+
+					float HoverThrust = AttitudeControllerComponent->HoverThrust;
+
+					for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
+					{
+						float ControlDelta = MotorOutput.Thrusts[i] - HoverThrust;
+						MotorOutput.Thrusts[i] = DesiredThrust + ControlDelta;
+						MotorOutput.Thrusts[i] = FMath::Clamp(MotorOutput.Thrusts[i], 0.0f, 1.0f);
+					}
+
+					if (DynamicsComponent)
+					{
+						DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
+					}
+				}
 			}
-
-			UE_LOG(LogUAVActor, Log, TEXT("Final Motors: [%.3f, %.3f, %.3f, %.3f]"),
-				MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3]);
-
-			if (DynamicsComponent)
+			else
 			{
-				DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
+				// 轨迹跟踪完成或未激活，切换到位置保持
+				if (PositionControllerComponent && AttitudeControllerComponent)
+				{
+					FRotator DesiredAttitude;
+					float DesiredThrust;
+
+					PositionControllerComponent->ComputeControl(
+						CurrentState, TargetPosition, FVector::ZeroVector, DesiredAttitude, DesiredThrust, DeltaTime);
+
+					FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
+						CurrentState, DesiredAttitude, DeltaTime);
+
+					float HoverThrust = AttitudeControllerComponent->HoverThrust;
+
+					for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
+					{
+						float ControlDelta = MotorOutput.Thrusts[i] - HoverThrust;
+						MotorOutput.Thrusts[i] = DesiredThrust + ControlDelta;
+						MotorOutput.Thrusts[i] = FMath::Clamp(MotorOutput.Thrusts[i], 0.0f, 1.0f);
+					}
+
+					if (DynamicsComponent)
+					{
+						DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
+					}
+				}
 			}
 		}
-	}
-	else if (AttitudeControllerComponent)
-	{
-		// 姿态控制模式
-		FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
-			CurrentState, TargetAttitude, DeltaTime);
+		break;
 
-		if (DynamicsComponent)
+	case EUAVControlMode::Position:
 		{
-			DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
+			// 位置控制模式
+			if (PositionControllerComponent)
+			{
+				FRotator DesiredAttitude;
+				float DesiredThrust;
+
+				PositionControllerComponent->ComputeControl(
+					CurrentState, TargetPosition, FVector::ZeroVector, DesiredAttitude, DesiredThrust, DeltaTime);
+
+				if (AttitudeControllerComponent)
+				{
+					FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
+						CurrentState, DesiredAttitude, DeltaTime);
+
+					float HoverThrust = AttitudeControllerComponent->HoverThrust;
+
+					UE_LOG(LogUAVActor, Log, TEXT("AttCtrl Raw: [%.3f, %.3f, %.3f, %.3f] | Hover: %.3f | DesThrust: %.3f"),
+						MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3],
+						HoverThrust, DesiredThrust);
+
+					for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
+					{
+						float ControlDelta = MotorOutput.Thrusts[i] - HoverThrust;
+						MotorOutput.Thrusts[i] = DesiredThrust + ControlDelta;
+						MotorOutput.Thrusts[i] = FMath::Clamp(MotorOutput.Thrusts[i], 0.0f, 1.0f);
+					}
+
+					UE_LOG(LogUAVActor, Log, TEXT("Final Motors: [%.3f, %.3f, %.3f, %.3f]"),
+						MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3]);
+
+					if (DynamicsComponent)
+					{
+						DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
+					}
+				}
+			}
 		}
+		break;
+
+	case EUAVControlMode::Attitude:
+	default:
+		{
+			// 姿态控制模式
+			if (AttitudeControllerComponent)
+			{
+				FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
+					CurrentState, TargetAttitude, DeltaTime);
+
+				if (DynamicsComponent)
+				{
+					DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
+				}
+			}
+		}
+		break;
 	}
 }
 
@@ -180,5 +268,69 @@ void AUAVPawn::UpdatePhysics(float DeltaTime)
 	if (DynamicsComponent)
 	{
 		CurrentState = DynamicsComponent->UpdateDynamics(CurrentState, DeltaTime);
+	}
+}
+
+void AUAVPawn::SetTrajectory(const FTrajectory& InTrajectory)
+{
+	if (TrajectoryTrackerComponent)
+	{
+		TrajectoryTrackerComponent->SetTrajectory(InTrajectory);
+
+		// 如果轨迹有效，设置最终位置为目标位置
+		if (InTrajectory.bIsValid && InTrajectory.Points.Num() > 0)
+		{
+			TargetPosition = InTrajectory.Points.Last().Position;
+		}
+	}
+}
+
+void AUAVPawn::StartTrajectoryTracking()
+{
+	if (TrajectoryTrackerComponent)
+	{
+		ControlMode = EUAVControlMode::Trajectory;
+		TrajectoryTrackerComponent->StartTracking();
+	}
+}
+
+void AUAVPawn::StopTrajectoryTracking()
+{
+	if (TrajectoryTrackerComponent)
+	{
+		TrajectoryTrackerComponent->StopTracking();
+		ControlMode = EUAVControlMode::Position;
+	}
+}
+
+float AUAVPawn::GetTrajectoryProgress() const
+{
+	if (TrajectoryTrackerComponent)
+	{
+		return TrajectoryTrackerComponent->GetProgress();
+	}
+	return 0.0f;
+}
+
+bool AUAVPawn::IsTrajectoryComplete() const
+{
+	if (TrajectoryTrackerComponent)
+	{
+		return TrajectoryTrackerComponent->IsComplete();
+	}
+	return true;
+}
+
+void AUAVPawn::SetControlMode(EUAVControlMode NewMode)
+{
+	ControlMode = NewMode;
+
+	// 同步 bUsePositionControl 以保持向后兼容
+	bUsePositionControl = (NewMode == EUAVControlMode::Position || NewMode == EUAVControlMode::Trajectory);
+
+	// 如果从轨迹模式切换出去，停止轨迹跟踪
+	if (NewMode != EUAVControlMode::Trajectory && TrajectoryTrackerComponent)
+	{
+		TrajectoryTrackerComponent->StopTracking();
 	}
 }

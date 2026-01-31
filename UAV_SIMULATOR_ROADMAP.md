@@ -116,12 +116,45 @@
   - 示例行为树结构
   - 新增文件：`AI/README_BehaviorTree.md`
 
-### Phase 4: 轨迹规划 (2-3周)
-- [ ] 实现基础路径规划算法（A*、RRT）
-- [ ] 实现轨迹优化（最小snap）
-- [ ] 添加轨迹跟踪控制器
-- [ ] 实现动态避障
-- [ ] 可视化规划结果
+### Phase 4: 轨迹规划 ✅ (已完成)
+- [x] 实现基础路径规划算法
+  - **A*算法**: 3D网格化搜索、对角线移动、障碍物膨胀处理
+  - **RRT算法**: 快速随机探索树、目标偏置采样、可选RRT*优化
+  - 新增文件：`Planning/PathPlanner.h/cpp`（基类）
+  - 新增文件：`Planning/AStarPathPlanner.h/cpp`
+  - 新增文件：`Planning/RRTPathPlanner.h/cpp`
+- [x] 实现轨迹优化（最小snap）
+  - 5阶多项式轨迹生成
+  - 梯形速度规划时间分配
+  - 速度/加速度约束
+  - 新增文件：`Planning/TrajectoryOptimizer.h/cpp`
+- [x] 添加轨迹跟踪控制器
+  - 时间参数化轨迹跟踪
+  - 前馈+反馈控制架构
+  - 暂停/恢复/进度回调
+  - 新增文件：`Planning/TrajectoryTracker.h/cpp`
+  - 更新文件：`Control/PositionController.h/cpp`（加速度前馈支持）
+- [x] 实现障碍物管理与动态避障
+  - 障碍物注册、查询、碰撞检测
+  - 支持球体、盒体、圆柱体障碍物
+  - 动态障碍物跟踪
+  - 新增文件：`Planning/ObstacleManager.h/cpp`
+- [x] 可视化规划结果
+  - 规划路径、优化轨迹、障碍物可视化
+  - 跟踪状态实时显示
+  - 新增文件：`Planning/PlanningVisualizer.h/cpp`
+  - 更新文件：`Debug/DebugVisualizer.h/cpp`
+- [x] 行为树集成
+  - **BTTask_UAVFollowTrajectory**: 轨迹跟踪任务
+  - **BTService_UAVPathPlanning**: 路径规划服务（动态避障）
+  - 更新 BTTask_UAVFlyToLocation：添加路径规划选项
+  - 新增文件：`AI/Tasks/BTTask_UAVFollowTrajectory.h/cpp`
+  - 新增文件：`AI/Services/BTService_UAVPathPlanning.h/cpp`
+- [x] UAVPawn集成
+  - 添加 `EUAVControlMode` 控制模式枚举（Attitude/Position/Trajectory）
+  - 集成 TrajectoryTracker、ObstacleManager、PlanningVisualizer 组件
+  - 更新文件：`Core/UAVPawn.h/cpp`
+  - 更新文件：`Core/UAVTypes.h`（添加轨迹相关数据结构）
 
 ### Phase 5: 多机协同 (3-4周)
 - [ ] 实现多无人机管理系统

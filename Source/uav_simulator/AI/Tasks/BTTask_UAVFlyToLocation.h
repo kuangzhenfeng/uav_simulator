@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "BehaviorTree/BTTaskNode.h"
+#include "uav_simulator/Core/UAVTypes.h"
 #include "BTTask_UAVFlyToLocation.generated.h"
 
 /**
@@ -33,4 +34,33 @@ protected:
 	// 飞行速度
 	UPROPERTY(EditAnywhere, Category = "UAV")
 	float FlySpeed = 500.0f;
+
+	// ===== 路径规划选项 =====
+
+	// 是否使用路径规划
+	UPROPERTY(EditAnywhere, Category = "Path Planning")
+	bool bUsePathPlanning = false;
+
+	// 路径规划算法
+	UPROPERTY(EditAnywhere, Category = "Path Planning", meta = (EditCondition = "bUsePathPlanning"))
+	EPathPlanningAlgorithm PathPlanningAlgorithm = EPathPlanningAlgorithm::AStar;
+
+	// 是否优化轨迹
+	UPROPERTY(EditAnywhere, Category = "Path Planning", meta = (EditCondition = "bUsePathPlanning"))
+	bool bOptimizeTrajectory = true;
+
+	// 最大加速度 (cm/s²)
+	UPROPERTY(EditAnywhere, Category = "Path Planning", meta = (EditCondition = "bUsePathPlanning"))
+	float MaxAcceleration = 200.0f;
+
+	// 安全边距 (cm)
+	UPROPERTY(EditAnywhere, Category = "Path Planning", meta = (EditCondition = "bUsePathPlanning"))
+	float SafetyMargin = 50.0f;
+
+private:
+	// 缓存的轨迹
+	FTrajectory CachedTrajectory;
+
+	// 是否已初始化路径
+	bool bPathInitialized = false;
 };

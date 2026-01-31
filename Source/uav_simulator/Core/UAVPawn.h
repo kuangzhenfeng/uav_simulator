@@ -13,6 +13,9 @@ class UAttitudeController;
 class UPositionController;
 class UDebugVisualizer;
 class AUAVAIController;
+class UTrajectoryTracker;
+class UObstacleManager;
+class UPlanningVisualizer;
 
 /**
  * 无人机Pawn类
@@ -53,6 +56,46 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV")
 	bool HasReachedTarget(float Tolerance = 100.0f) const;
 
+	// 设置轨迹并开始跟踪
+	UFUNCTION(BlueprintCallable, Category = "UAV|Trajectory")
+	void SetTrajectory(const FTrajectory& InTrajectory);
+
+	// 开始轨迹跟踪
+	UFUNCTION(BlueprintCallable, Category = "UAV|Trajectory")
+	void StartTrajectoryTracking();
+
+	// 停止轨迹跟踪
+	UFUNCTION(BlueprintCallable, Category = "UAV|Trajectory")
+	void StopTrajectoryTracking();
+
+	// 获取轨迹跟踪进度
+	UFUNCTION(BlueprintCallable, Category = "UAV|Trajectory")
+	float GetTrajectoryProgress() const;
+
+	// 检查轨迹跟踪是否完成
+	UFUNCTION(BlueprintCallable, Category = "UAV|Trajectory")
+	bool IsTrajectoryComplete() const;
+
+	// 设置控制模式
+	UFUNCTION(BlueprintCallable, Category = "UAV|Control")
+	void SetControlMode(EUAVControlMode NewMode);
+
+	// 获取控制模式
+	UFUNCTION(BlueprintCallable, Category = "UAV|Control")
+	EUAVControlMode GetControlMode() const { return ControlMode; }
+
+	// 获取轨迹跟踪组件
+	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
+	UTrajectoryTracker* GetTrajectoryTracker() const { return TrajectoryTrackerComponent; }
+
+	// 获取障碍物管理器
+	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
+	UObstacleManager* GetObstacleManager() const { return ObstacleManagerComponent; }
+
+	// 获取规划可视化器
+	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
+	UPlanningVisualizer* GetPlanningVisualizer() const { return PlanningVisualizerComponent; }
+
 protected:
 	// 根组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
@@ -78,6 +121,18 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
 	TObjectPtr<UDebugVisualizer> DebugVisualizerComponent;
 
+	// 轨迹跟踪组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
+	TObjectPtr<UTrajectoryTracker> TrajectoryTrackerComponent;
+
+	// 障碍物管理组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
+	TObjectPtr<UObstacleManager> ObstacleManagerComponent;
+
+	// 规划可视化组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
+	TObjectPtr<UPlanningVisualizer> PlanningVisualizerComponent;
+
 	// 当前状态
 	UPROPERTY(BlueprintReadOnly, Category = "UAV State")
 	FUAVState CurrentState;
@@ -90,8 +145,12 @@ protected:
 	UPROPERTY(BlueprintReadWrite, Category = "UAV Control")
 	FVector TargetPosition;
 
-	// 控制模式：true=位置控制，false=姿态控制
+	// 控制模式
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Control")
+	EUAVControlMode ControlMode = EUAVControlMode::Position;
+
+	// 向后兼容：控制模式（已废弃，请使用 ControlMode）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Control", meta = (DeprecatedProperty, DeprecationMessage = "Use ControlMode instead"))
 	bool bUsePositionControl = true;
 
 protected:

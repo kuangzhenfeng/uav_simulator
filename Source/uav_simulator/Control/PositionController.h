@@ -30,6 +30,12 @@ public:
 	void ComputeControl(const FUAVState& CurrentState, const FVector& TargetPosition, const FVector& TargetVelocity,
 						FRotator& OutDesiredAttitude, float& OutThrust, float DeltaTime);
 
+	// 计算位置控制输出（带加速度前馈）
+	UFUNCTION(BlueprintCallable, Category = "Position Controller")
+	void ComputeControlWithAcceleration(const FUAVState& CurrentState, const FVector& TargetPosition,
+						const FVector& TargetVelocity, const FVector& TargetAcceleration,
+						FRotator& OutDesiredAttitude, float& OutThrust, float DeltaTime);
+
 	// 设置目标位置
 	UFUNCTION(BlueprintCallable, Category = "Position Controller")
 	void SetTargetPosition(const FVector& InTargetPosition) { TargetPosition = InTargetPosition; }

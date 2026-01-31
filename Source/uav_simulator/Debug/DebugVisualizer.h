@@ -37,6 +37,36 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Debug")
 	void ClearTrajectoryHistory();
 
+	// ===== 轨迹规划可视化 =====
+
+	// 绘制规划路径
+	UFUNCTION(BlueprintCallable, Category = "Debug|Planning")
+	void DrawPlannedPath(const TArray<FVector>& Path, FColor Color = FColor::Green, float Duration = 5.0f);
+
+	// 绘制优化轨迹
+	UFUNCTION(BlueprintCallable, Category = "Debug|Planning")
+	void DrawOptimizedTrajectory(const FTrajectory& Trajectory, FColor Color = FColor::Blue, float Duration = 5.0f);
+
+	// 绘制当前跟踪状态
+	UFUNCTION(BlueprintCallable, Category = "Debug|Planning")
+	void DrawTrackingState(const FTrajectoryPoint& DesiredState, const FVector& CurrentPosition);
+
+	// 绘制障碍物
+	UFUNCTION(BlueprintCallable, Category = "Debug|Planning")
+	void DrawObstacles(const TArray<FObstacleInfo>& Obstacles, FColor Color = FColor::Red, float Duration = -1.0f);
+
+	// 绘制航点
+	UFUNCTION(BlueprintCallable, Category = "Debug|Planning")
+	void DrawWaypoints(const TArray<FVector>& Waypoints, float Radius = 30.0f, FColor Color = FColor::Magenta, float Duration = 5.0f);
+
+	// 设置持久化轨迹显示
+	UFUNCTION(BlueprintCallable, Category = "Debug|Planning")
+	void SetPersistentTrajectory(const FTrajectory& Trajectory);
+
+	// 清除持久化轨迹
+	UFUNCTION(BlueprintCallable, Category = "Debug|Planning")
+	void ClearPersistentTrajectory();
+
 protected:
 	// 是否显示调试信息
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Settings")
@@ -45,6 +75,14 @@ protected:
 	// 是否显示轨迹历史
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Settings")
 	bool bShowTrajectory = true;
+
+	// 是否显示规划路径
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Settings")
+	bool bShowPlannedPath = true;
+
+	// 是否显示跟踪状态
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Settings")
+	bool bShowTrackingState = true;
 
 	// 轨迹历史最大长度
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Settings")
@@ -57,4 +95,10 @@ protected:
 private:
 	// 轨迹历史点
 	TArray<FVector> TrajectoryHistory;
+
+	// 持久化轨迹
+	FTrajectory PersistentTrajectory;
+
+	// 绘制持久化轨迹
+	void DrawPersistentTrajectory();
 };

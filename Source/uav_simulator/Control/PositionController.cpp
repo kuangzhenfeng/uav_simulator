@@ -129,3 +129,74 @@ void UPositionController::Reset()
 	VelocityErrorIntegral = FVector::ZeroVector;
 	PreviousVelocityError = FVector::ZeroVector;
 }
+
+void UPositionController::ComputeControlWithAcceleration(const FUAVState& CurrentState, const FVector& InTargetPosition,
+	const FVector& InTargetVelocity, const FVector& InTargetAcceleration,
+	FRotator& OutDesiredAttitude, float& OutThrust, float DeltaTime)
+{
+	// 防止除零错误
+	if (DeltaTime <= 0.0f) DeltaTime = 0.016f;
+
+	// 位置误差（世界坐标系）
+	FVector PositionError = InTargetPosition - CurrentState.Position;
+
+	// 位置PID控制 -> 期望速度
+	FVector DesiredVelocity = Kp_Position * PositionError
+							+ Ki_Position * PositionErrorIntegral
+							+ Kd_Position * (PositionError - PreviousPositionError) / DeltaTime;
+
+	// 添加前馈速度
+	DesiredVelocity += InTargetVelocity;
+
+	// 限制期望速度
+	float VelocityMag = DesiredVelocity.Size();
+	if (VelocityMag > MaxVelocity)
+	{
+		DesiredVelocity = DesiredVelocity * (MaxVelocity / VelocityMag);
+	}
+
+	// 速度误差（世界坐标系）
+	FVector VelocityError = DesiredVelocity - CurrentState.Velocity;
+
+	// 速度PID控制 -> 期望加速度（反馈部分）
+	FVector FeedbackAcceleration = Kp_Velocity * VelocityError
+								 + Ki_Velocity * VelocityErrorIntegral
+								 + Kd_Velocity * (VelocityError - PreviousVelocityError) / DeltaTime;
+
+	// 总期望加速度 = 前馈加速度 + 反馈加速度
+	FVector DesiredAcceleration = InTargetAcceleration + FeedbackAcceleration;
+
+	// 计算期望推力
+	float RequiredThrustN = UAVMass * (GravityAcceleration + DesiredAcceleration.Z) / 100.0f;
+	float MaxTotalThrust = NumMotors * SingleMotorMaxThrust;
+	float RawThrust = RequiredThrustN / MaxTotalThrust;
+	OutThrust = FMath::Clamp(RawThrust, MinThrust, MaxThrust);
+
+	// 计算期望姿态
+	FVector ThrustDirection = FVector(DesiredAcceleration.X, DesiredAcceleration.Y, GravityAcceleration + DesiredAcceleration.Z).GetSafeNormal();
+
+	float DesiredPitch = FMath::Asin(-ThrustDirection.X) * (180.0f / PI);
+	float DesiredRoll = FMath::Asin(ThrustDirection.Y / FMath::Cos(DesiredPitch * PI / 180.0f)) * (180.0f / PI);
+
+	DesiredPitch = FMath::Clamp(DesiredPitch, -MaxTiltAngle, MaxTiltAngle);
+	DesiredRoll = FMath::Clamp(DesiredRoll, -MaxTiltAngle, MaxTiltAngle);
+
+	float DesiredYaw = CurrentState.Rotation.Yaw;
+
+	OutDesiredAttitude = FRotator(DesiredPitch, DesiredYaw, DesiredRoll);
+
+	// 更新积分项
+	const float IntegralLimit = 1000.0f;
+	PositionErrorIntegral += PositionError * DeltaTime;
+	PositionErrorIntegral.X = FMath::Clamp(PositionErrorIntegral.X, -IntegralLimit, IntegralLimit);
+	PositionErrorIntegral.Y = FMath::Clamp(PositionErrorIntegral.Y, -IntegralLimit, IntegralLimit);
+	PositionErrorIntegral.Z = FMath::Clamp(PositionErrorIntegral.Z, -IntegralLimit, IntegralLimit);
+
+	VelocityErrorIntegral += VelocityError * DeltaTime;
+	VelocityErrorIntegral.X = FMath::Clamp(VelocityErrorIntegral.X, -IntegralLimit, IntegralLimit);
+	VelocityErrorIntegral.Y = FMath::Clamp(VelocityErrorIntegral.Y, -IntegralLimit, IntegralLimit);
+	VelocityErrorIntegral.Z = FMath::Clamp(VelocityErrorIntegral.Z, -IntegralLimit, IntegralLimit);
+
+	PreviousPositionError = PositionError;
+	PreviousVelocityError = VelocityError;
+}
