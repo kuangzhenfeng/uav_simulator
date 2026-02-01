@@ -4,8 +4,12 @@
 
 #include "CoreMinimal.h"
 #include "BehaviorTree/BTTaskNode.h"
+#include "BehaviorTree/BehaviorTreeTypes.h"
 #include "uav_simulator/Core/UAVTypes.h"
 #include "BTTask_UAVFollowTrajectory.generated.h"
+
+class UTrajectoryData;
+class UWaypointsData;
 
 /**
  * 行为树任务：让UAV跟踪预定义的轨迹
@@ -18,17 +22,18 @@ class UAV_SIMULATOR_API UBTTask_UAVFollowTrajectory : public UBTTaskNode
 public:
 	UBTTask_UAVFollowTrajectory();
 
+	virtual void InitializeFromAsset(UBehaviorTree& Asset) override;
 	virtual EBTNodeResult::Type ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) override;
 	virtual void TickTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds) override;
 	virtual void OnTaskFinished(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, EBTNodeResult::Type TaskResult) override;
 	virtual FString GetStaticDescription() const override;
 
 protected:
-	// 轨迹数据的黑板键
+	// 轨迹数据的黑板键（存储UTrajectoryData对象）
 	UPROPERTY(EditAnywhere, Category = "Blackboard")
 	FBlackboardKeySelector TrajectoryKey;
 
-	// 航点数组的黑板键（用于自动生成轨迹）
+	// 航点数组的黑板键（存储UWaypointsData对象，用于自动生成轨迹）
 	UPROPERTY(EditAnywhere, Category = "Blackboard")
 	FBlackboardKeySelector WaypointsKey;
 

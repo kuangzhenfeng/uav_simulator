@@ -4,12 +4,14 @@
 #include "BehaviorTree/BehaviorTree.h"
 #include "BehaviorTree/BehaviorTreeComponent.h"
 #include "BehaviorTree/BlackboardComponent.h"
+#include "uav_simulator/Planning/WaypointsData.h"
 
 // 定义黑板键名称
 const FName AUAVAIController::TargetLocationKey = TEXT("TargetLocation");
 const FName AUAVAIController::TargetActorKey = TEXT("TargetActor");
 const FName AUAVAIController::HomeLocationKey = TEXT("HomeLocation");
 const FName AUAVAIController::CurrentStateKey = TEXT("CurrentState");
+const FName AUAVAIController::WaypointsKey = TEXT("Waypoints");
 
 AUAVAIController::AUAVAIController()
 {
@@ -95,4 +97,43 @@ void AUAVAIController::SetTargetActor(AActor* Target)
 	{
 		BlackboardComp->SetValueAsObject(TargetActorKey, Target);
 	}
+}
+
+void AUAVAIController::SetWaypoints(const TArray<FVector>& Waypoints)
+{
+	if (BlackboardComp)
+	{
+		if (!CachedWaypointsData)
+		{
+			CachedWaypointsData = NewObject<UWaypointsData>(this);
+		}
+		CachedWaypointsData->SetWaypoints(Waypoints);
+		BlackboardComp->SetValueAsObject(WaypointsKey, CachedWaypointsData);
+	}
+}
+
+void AUAVAIController::AddWaypoint(const FVector& Waypoint)
+{
+	if (BlackboardComp)
+	{
+		if (!CachedWaypointsData)
+		{
+			CachedWaypointsData = NewObject<UWaypointsData>(this);
+			BlackboardComp->SetValueAsObject(WaypointsKey, CachedWaypointsData);
+		}
+		CachedWaypointsData->AddWaypoint(Waypoint);
+	}
+}
+
+void AUAVAIController::ClearWaypoints()
+{
+	if (CachedWaypointsData)
+	{
+		CachedWaypointsData->Clear();
+	}
+}
+
+UWaypointsData* AUAVAIController::GetWaypointsData() const
+{
+	return CachedWaypointsData;
 }

@@ -93,21 +93,19 @@ bool UPathPlanner::CheckLineCollision(const FVector& Start, const FVector& End, 
 
 bool UPathPlanner::IsPointInObstacle(const FVector& Point, const FObstacleInfo& Obstacle, float Radius) const
 {
-	float TotalRadius = Radius + Obstacle.SafetyMargin;
-
 	switch (Obstacle.Type)
 	{
 	case EObstacleType::Sphere:
 		{
 			float Distance = FVector::Dist(Point, Obstacle.Center);
-			return Distance < (Obstacle.Extents.X + TotalRadius);
+			return Distance < (Obstacle.Extents.X + Radius);
 		}
 
 	case EObstacleType::Box:
 		{
 			// 将点转换到障碍物局部坐标系
 			FVector LocalPoint = Obstacle.Rotation.UnrotateVector(Point - Obstacle.Center);
-			FVector ExpandedExtents = Obstacle.Extents + FVector(TotalRadius);
+			FVector ExpandedExtents = Obstacle.Extents + FVector(Radius);
 
 			return FMath::Abs(LocalPoint.X) < ExpandedExtents.X &&
 				   FMath::Abs(LocalPoint.Y) < ExpandedExtents.Y &&
@@ -120,8 +118,8 @@ bool UPathPlanner::IsPointInObstacle(const FVector& Point, const FObstacleInfo& 
 			FVector LocalPoint = Point - Obstacle.Center;
 			float HorizontalDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
 
-			return HorizontalDist < (Obstacle.Extents.X + TotalRadius) &&
-				   FMath::Abs(LocalPoint.Z) < (Obstacle.Extents.Z + TotalRadius);
+			return HorizontalDist < (Obstacle.Extents.X + Radius) &&
+				   FMath::Abs(LocalPoint.Z) < (Obstacle.Extents.Z + Radius);
 		}
 
 	default:

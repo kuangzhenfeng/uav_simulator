@@ -39,7 +39,7 @@ protected:
 
 	// 是否使用路径规划
 	UPROPERTY(EditAnywhere, Category = "Path Planning")
-	bool bUsePathPlanning = false;
+	bool bUsePathPlanning = true;
 
 	// 路径规划算法
 	UPROPERTY(EditAnywhere, Category = "Path Planning", meta = (EditCondition = "bUsePathPlanning"))

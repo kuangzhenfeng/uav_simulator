@@ -126,9 +126,9 @@ void AUAVActor::UpdateController(float DeltaTime)
 			float HoverThrust = AttitudeControllerComponent->HoverThrust;
 			
 			// 调试日志：输出姿态控制器原始输出
-			UE_LOG(LogUAVActor, Log, TEXT("AttCtrl Raw: [%.3f, %.3f, %.3f, %.3f] | Hover: %.3f | DesThrust: %.3f"),
-				MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3],
-				HoverThrust, DesiredThrust);
+			// UE_LOG(LogUAVActor, Log, TEXT("AttCtrl Raw: [%.3f, %.3f, %.3f, %.3f] | Hover: %.3f | DesThrust: %.3f"),
+			// 	MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3],
+			// 	HoverThrust, DesiredThrust);
 			
 			// 计算控制增量并应用到期望推力
 			for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
@@ -140,8 +140,8 @@ void AUAVActor::UpdateController(float DeltaTime)
 			}
 
 			// 调试日志：输出最终电机推力
-			UE_LOG(LogUAVActor, Log, TEXT("Final Motors: [%.3f, %.3f, %.3f, %.3f]"),
-				MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3]);
+			// UE_LOG(LogUAVActor, Log, TEXT("Final Motors: [%.3f, %.3f, %.3f, %.3f]"),
+			// 	MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3]);
 
 			// 将电机输出传递给物理模型
 			if (DynamicsComponent)

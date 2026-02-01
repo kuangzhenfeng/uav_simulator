@@ -12,6 +12,7 @@
 #include "../Planning/TrajectoryTracker.h"
 #include "../Planning/ObstacleManager.h"
 #include "../Planning/PlanningVisualizer.h"
+#include "../Utility/Debug.h"
 #include "GameFramework/PlayerController.h"
 
 AUAVPawn::AUAVPawn()
@@ -85,8 +86,41 @@ void AUAVPawn::Tick(float DeltaTime)
 	// 更新调试可视化
 	if (DebugVisualizerComponent)
 	{
+		// 绘制UAV状态（坐标轴、速度向量）
 		DebugVisualizerComponent->DrawUAVState(CurrentState, GetActorLocation());
+		// 绘制飞行轨迹历史
 		DebugVisualizerComponent->DrawTrajectoryHistory(GetActorLocation());
+
+		// 绘制轨迹跟踪状态
+		if (TrajectoryTrackerComponent && TrajectoryTrackerComponent->IsTracking())
+		{
+			FTrajectoryPoint DesiredState = TrajectoryTrackerComponent->GetDesiredState();
+			DebugVisualizerComponent->DrawTrackingState(DesiredState, GetActorLocation());
+		}
+	}
+
+	// 更新规划可视化
+	if (PlanningVisualizerComponent)
+	{
+		// 如果有活动轨迹，设置持久化轨迹用于绘制
+		if (TrajectoryTrackerComponent && TrajectoryTrackerComponent->IsTracking())
+		{
+			const FTrajectory& CurrentTrajectory = TrajectoryTrackerComponent->GetTrajectory();
+			if (CurrentTrajectory.bIsValid)
+			{
+				PlanningVisualizerComponent->SetPersistentTrajectory(CurrentTrajectory);
+			}
+		}
+
+		// 绘制障碍物
+		if (ObstacleManagerComponent)
+		{
+			TArray<FObstacleInfo> Obstacles = ObstacleManagerComponent->GetAllObstacles();
+			if (Obstacles.Num() > 0)
+			{
+				PlanningVisualizerComponent->DrawObstacles(Obstacles);
+			}
+		}
 	}
 
 	// 更新HUD显示
@@ -144,12 +178,30 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			{
 				FTrajectoryPoint DesiredState = TrajectoryTrackerComponent->GetDesiredState();
 
+				// 调试日志：轨迹跟踪状态
+				float Progress = TrajectoryTrackerComponent->GetProgress();
+				FVector PosError = DesiredState.Position - CurrentState.Position;
+				UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] Progress: %.2f%% | DesPos: (%.1f, %.1f, %.1f) | CurPos: (%.1f, %.1f, %.1f) | PosErr: (%.1f, %.1f, %.1f) | ErrMag: %.1f"),
+					Progress * 100.0f,
+					DesiredState.Position.X, DesiredState.Position.Y, DesiredState.Position.Z,
+					CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
+					PosError.X, PosError.Y, PosError.Z,
+					PosError.Size());
+
+				UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] DesVel: (%.1f, %.1f, %.1f) | CurVel: (%.1f, %.1f, %.1f) | DesAcc: (%.1f, %.1f, %.1f)"),
+					DesiredState.Velocity.X, DesiredState.Velocity.Y, DesiredState.Velocity.Z,
+					CurrentState.Velocity.X, CurrentState.Velocity.Y, CurrentState.Velocity.Z,
+					DesiredState.Acceleration.X, DesiredState.Acceleration.Y, DesiredState.Acceleration.Z);
+
 				FRotator DesiredAttitude;
 				float DesiredThrust;
 
 				// 使用轨迹点的速度和加速度作为前馈
 				PositionControllerComponent->ComputeControl(
 					CurrentState, DesiredState.Position, DesiredState.Velocity, DesiredAttitude, DesiredThrust, DeltaTime);
+
+				UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] DesAttitude: (P:%.2f, Y:%.2f, R:%.2f) | DesThrust: %.3f"),
+					DesiredAttitude.Pitch, DesiredAttitude.Yaw, DesiredAttitude.Roll, DesiredThrust);
 
 				if (AttitudeControllerComponent)
 				{
@@ -165,6 +217,9 @@ void AUAVPawn::UpdateController(float DeltaTime)
 						MotorOutput.Thrusts[i] = FMath::Clamp(MotorOutput.Thrusts[i], 0.0f, 1.0f);
 					}
 
+					UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] Motors: [%.3f, %.3f, %.3f, %.3f] | HoverThrust: %.3f"),
+						MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3], HoverThrust);
+
 					if (DynamicsComponent)
 					{
 						DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
@@ -174,6 +229,10 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			else
 			{
 				// 轨迹跟踪完成或未激活，切换到位置保持
+				UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] Holding position - Tracker: %s, IsTracking: %s"),
+					TrajectoryTrackerComponent ? TEXT("Valid") : TEXT("Null"),
+					(TrajectoryTrackerComponent && TrajectoryTrackerComponent->IsTracking()) ? TEXT("Yes") : TEXT("No"));
+
 				if (PositionControllerComponent && AttitudeControllerComponent)
 				{
 					FRotator DesiredAttitude;
@@ -181,6 +240,11 @@ void AUAVPawn::UpdateController(float DeltaTime)
 
 					PositionControllerComponent->ComputeControl(
 						CurrentState, TargetPosition, FVector::ZeroVector, DesiredAttitude, DesiredThrust, DeltaTime);
+
+					UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] HoldPos: (%.1f, %.1f, %.1f) | CurPos: (%.1f, %.1f, %.1f) | Err: %.1f"),
+						TargetPosition.X, TargetPosition.Y, TargetPosition.Z,
+						CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
+						FVector::Dist(TargetPosition, CurrentState.Position));
 
 					FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
 						CurrentState, DesiredAttitude, DeltaTime);
@@ -221,9 +285,9 @@ void AUAVPawn::UpdateController(float DeltaTime)
 
 					float HoverThrust = AttitudeControllerComponent->HoverThrust;
 
-					UE_LOG(LogUAVActor, Log, TEXT("AttCtrl Raw: [%.3f, %.3f, %.3f, %.3f] | Hover: %.3f | DesThrust: %.3f"),
-						MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3],
-						HoverThrust, DesiredThrust);
+					// UE_LOG(LogUAVActor, Log, TEXT("AttCtrl Raw: [%.3f, %.3f, %.3f, %.3f] | Hover: %.3f | DesThrust: %.3f"),
+					// 	MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3],
+					// 	HoverThrust, DesiredThrust);
 
 					for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
 					{
@@ -232,8 +296,8 @@ void AUAVPawn::UpdateController(float DeltaTime)
 						MotorOutput.Thrusts[i] = FMath::Clamp(MotorOutput.Thrusts[i], 0.0f, 1.0f);
 					}
 
-					UE_LOG(LogUAVActor, Log, TEXT("Final Motors: [%.3f, %.3f, %.3f, %.3f]"),
-						MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3]);
+					// UE_LOG(LogUAVActor, Log, TEXT("Final Motors: [%.3f, %.3f, %.3f, %.3f]"),
+					// 	MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3]);
 
 					if (DynamicsComponent)
 					{
@@ -289,6 +353,7 @@ void AUAVPawn::StartTrajectoryTracking()
 {
 	if (TrajectoryTrackerComponent)
 	{
+		UE_LOG(LogUAVActor, Log, TEXT("Starting trajectory tracking."));
 		ControlMode = EUAVControlMode::Trajectory;
 		TrajectoryTrackerComponent->StartTracking();
 	}
@@ -298,6 +363,8 @@ void AUAVPawn::StopTrajectoryTracking()
 {
 	if (TrajectoryTrackerComponent)
 	{
+		UE_LOG(LogUAVActor, Log, TEXT("Stopping trajectory tracking."));
+		// UDebug::PrintCallStack();
 		TrajectoryTrackerComponent->StopTracking();
 		ControlMode = EUAVControlMode::Position;
 	}

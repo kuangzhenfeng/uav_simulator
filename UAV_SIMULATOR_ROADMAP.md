@@ -202,7 +202,8 @@
 ```
 Source/uav_simulator/
 ├── Core/
-│   ├── UAVActor.h/cpp              # 无人机基类
+│   ├── UAVActor.h/cpp              # 无人机Actor基类
+│   ├── UAVPawn.h/cpp               # 无人机Pawn类（支持AI控制）
 │   ├── UAVTypes.h                  # 数据类型定义
 │   └── UAVMath.h/cpp               # 数学工具
 ├── Physics/
@@ -220,8 +221,13 @@ Source/uav_simulator/
 │   ├── PositionController.h/cpp    # 位置控制
 │   └── StateEstimator.h/cpp        # 状态估计
 ├── Planning/
-│   ├── PathPlanner.h/cpp           # 路径规划
+│   ├── PathPlanner.h/cpp           # 路径规划基类
+│   ├── AStarPathPlanner.h/cpp      # A*路径规划
+│   ├── RRTPathPlanner.h/cpp        # RRT路径规划
 │   ├── TrajectoryOptimizer.h/cpp   # 轨迹优化
+│   ├── TrajectoryTracker.h/cpp     # 轨迹跟踪
+│   ├── ObstacleManager.h/cpp       # 障碍物管理
+│   ├── PlanningVisualizer.h/cpp    # 规划可视化
 │   └── ObstacleAvoidance.h/cpp     # 避障
 ├── MultiAgent/
 │   ├── FormationController.h/cpp   # 编队控制
@@ -234,17 +240,24 @@ Source/uav_simulator/
 ├── AI/
 │   ├── UAVAIController.h/cpp       # AI控制器
 │   ├── Tasks/
-│   │   ├── BTTask_UAVFlyToLocation.h/cpp  # 飞往位置任务
-│   │   ├── BTTask_UAVHover.h/cpp          # 悬停任务
-│   │   └── BTTask_UAVPatrol.h/cpp         # 巡逻任务
+│   │   ├── BTTask_UAVFlyToLocation.h/cpp    # 飞往位置任务
+│   │   ├── BTTask_UAVFollowTrajectory.h/cpp # 轨迹跟踪任务
+│   │   ├── BTTask_UAVHover.h/cpp            # 悬停任务
+│   │   └── BTTask_UAVPatrol.h/cpp           # 巡逻任务
 │   ├── Services/
-│   │   └── BTService_UAVUpdateState.h/cpp # 状态更新服务
+│   │   ├── BTService_UAVUpdateState.h/cpp   # 状态更新服务
+│   │   └── BTService_UAVPathPlanning.h/cpp  # 路径规划服务
 │   ├── Decorators/
-│   │   └── BTDecorator_UAVAtLocation.h/cpp # 位置检查装饰器
+│   │   └── BTDecorator_UAVAtLocation.h/cpp  # 位置检查装饰器
 │   └── README_BehaviorTree.md      # 行为树使用文档
-└── Debug/
-    ├── DebugVisualizer.h/cpp       # 调试可视化
-    └── DataLogger.h/cpp            # 数据记录
+├── Debug/
+│   ├── DebugVisualizer.h/cpp       # 调试可视化
+│   ├── DataLogger.h/cpp            # 数据记录
+│   ├── ControlParameterTuner.h/cpp # 控制参数调试
+│   ├── UAVHUD.h/cpp                # HUD显示
+│   └── UAVLogConfig.h/cpp          # 日志配置
+└── Utility/
+    └── Debug.h/cpp                 # 调试工具（堆栈输出、性能计时等）
 ```
 
 ## 关键技术点
