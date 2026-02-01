@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TrajectoryOptimizer.h"
+#include "uav_simulator/Debug/UAVLogConfig.h"
 
 UTrajectoryOptimizer::UTrajectoryOptimizer()
 {
@@ -24,7 +25,7 @@ FTrajectory UTrajectoryOptimizer::OptimizeTrajectory(const TArray<FVector>& Wayp
 
 	if (Waypoints.Num() < 2)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("TrajectoryOptimizer: Need at least 2 waypoints"));
+		UE_LOG(LogUAVPlanning, Warning, TEXT("TrajectoryOptimizer: Need at least 2 waypoints"));
 		return Result;
 	}
 
@@ -40,7 +41,7 @@ FTrajectory UTrajectoryOptimizer::OptimizeTrajectoryWithTiming(const TArray<FVec
 
 	if (Waypoints.Num() < 2 || SegmentTimes.Num() != Waypoints.Num() - 1)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("TrajectoryOptimizer: Invalid input"));
+		UE_LOG(LogUAVPlanning, Warning, TEXT("TrajectoryOptimizer: Invalid input"));
 		return Result;
 	}
 
@@ -56,7 +57,7 @@ FTrajectory UTrajectoryOptimizer::OptimizeTrajectoryWithTiming(const TArray<FVec
 
 	if (!FMath::IsFinite(TotalDuration) || TotalDuration <= 0.0f)
 	{
-		UE_LOG(LogTemp, Error, TEXT("TrajectoryOptimizer: Invalid total duration, %.3f"), TotalDuration);
+		UE_LOG(LogUAVPlanning, Error, TEXT("TrajectoryOptimizer: Invalid total duration: %.3f"), TotalDuration);
 		return Result;
 	}
 
@@ -203,7 +204,7 @@ TArray<float> UTrajectoryOptimizer::ComputeTimeAllocation(const TArray<FVector>&
 	for (int32 i = 0; i < Waypoints.Num() - 1; ++i)
 	{
 		float Distance = FVector::Dist(Waypoints[i], Waypoints[i + 1]);
-		UE_LOG(LogTemp, Log, TEXT("TrajectoryOptimizer: Segment %d distance: %.3f"), i, Distance);
+		UE_LOG(LogUAVPlanning, Verbose, TEXT("TrajectoryOptimizer: Segment %d distance: %.3f"), i, Distance);
 
 		// 使用梯形速度规划计算时间
 		// 加速阶段时间
@@ -224,7 +225,7 @@ TArray<float> UTrajectoryOptimizer::ComputeTimeAllocation(const TArray<FVector>&
 			float CruiseTime = CruiseDist / MaxVelocity;
 			SegmentTime = 2.0f * AccelTime + CruiseTime;
 		}
-		UE_LOG(LogTemp, Log, TEXT("TrajectoryOptimizer: Segment %d time: %.3f"), i, SegmentTime);
+		UE_LOG(LogUAVPlanning, Verbose, TEXT("TrajectoryOptimizer: Segment %d time: %.3f"), i, SegmentTime);
 
 		// 添加安全余量
 		SegmentTime *= 1.2f;

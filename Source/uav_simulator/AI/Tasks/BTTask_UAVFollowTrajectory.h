@@ -9,7 +9,7 @@
 #include "BTTask_UAVFollowTrajectory.generated.h"
 
 class UTrajectoryData;
-class UWaypointsData;
+class UMissionComponent;
 
 /**
  * 行为树任务：让UAV跟踪预定义的轨迹
@@ -30,16 +30,16 @@ public:
 
 protected:
 	// 轨迹数据的黑板键（存储UTrajectoryData对象）
-	UPROPERTY(EditAnywhere, Category = "Blackboard")
+	UPROPERTY(EditAnywhere, Category = "Blackboard", meta = (EditCondition = "bUseTrajectoryFromBlackboard"))
 	FBlackboardKeySelector TrajectoryKey;
 
-	// 航点数组的黑板键（存储UWaypointsData对象，用于自动生成轨迹）
-	UPROPERTY(EditAnywhere, Category = "Blackboard")
-	FBlackboardKeySelector WaypointsKey;
-
-	// 是否使用黑板中的轨迹，否则使用航点生成
+	// 是否使用黑板中的轨迹，否则使用MissionComponent中的航点生成
 	UPROPERTY(EditAnywhere, Category = "Trajectory")
 	bool bUseTrajectoryFromBlackboard = false;
+
+	// 是否使用MissionComponent获取航点（默认true，推荐）
+	UPROPERTY(EditAnywhere, Category = "Trajectory", meta = (EditCondition = "!bUseTrajectoryFromBlackboard"))
+	bool bUseMissionComponent = true;
 
 	// 最大飞行速度 (cm/s)
 	UPROPERTY(EditAnywhere, Category = "Trajectory")

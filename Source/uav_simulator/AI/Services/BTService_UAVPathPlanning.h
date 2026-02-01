@@ -22,12 +22,16 @@ public:
 	virtual FString GetStaticDescription() const override;
 
 protected:
-	// 目标位置的黑板键
-	UPROPERTY(EditAnywhere, Category = "Blackboard")
+	// 是否使用预定义航点模式（从UAVPawn获取航点，跳过路径规划）
+	UPROPERTY(EditAnywhere, Category = "Path Planning")
+	bool bUsePresetWaypoints = true;
+
+	// 目标位置的黑板键（仅在非预定义航点模式下使用）
+	UPROPERTY(EditAnywhere, Category = "Blackboard", meta = (EditCondition = "!bUsePresetWaypoints"))
 	FBlackboardKeySelector TargetLocationKey;
 
-	// 路径规划算法
-	UPROPERTY(EditAnywhere, Category = "Path Planning")
+	// 路径规划算法（仅在非预定义航点模式下使用）
+	UPROPERTY(EditAnywhere, Category = "Path Planning", meta = (EditCondition = "!bUsePresetWaypoints"))
 	EPathPlanningAlgorithm PathPlanningAlgorithm = EPathPlanningAlgorithm::AStar;
 
 	// 重规划距离阈值 (cm) - 目标移动超过此距离时触发重规划
@@ -59,17 +63,23 @@ protected:
 	float MaxAcceleration = 200.0f;
 
 private:
-	// 上次目标位置
+	// 上次目标位置（仅在非预定义航点模式下使用）
 	FVector LastTargetLocation;
 
 	// 上次规划时间
 	float LastPlanningTime;
 
+	// 是否已处理过预定义航点
+	bool bWaypointsProcessed = false;
+
 	// 检查是否需要重规划
 	bool ShouldReplan(const FVector& CurrentTarget) const;
 
-	// 执行路径规划
+	// 执行路径规划（使用算法规划）
 	void PerformPathPlanning(class AUAVPawn* UAVPawn, const FVector& TargetLocation);
+
+	// 执行预定义航点的轨迹生成
+	void ProcessPresetWaypoints(class AUAVPawn* UAVPawn);
 
 	// 检查碰撞并执行避障
 	void CheckCollisionAndAvoid(class AUAVPawn* UAVPawn, float DeltaSeconds);

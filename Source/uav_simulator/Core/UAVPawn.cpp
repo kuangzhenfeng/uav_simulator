@@ -12,6 +12,7 @@
 #include "../Planning/TrajectoryTracker.h"
 #include "../Planning/ObstacleManager.h"
 #include "../Planning/PlanningVisualizer.h"
+#include "../Mission/MissionComponent.h"
 #include "../Utility/Debug.h"
 #include "GameFramework/PlayerController.h"
 
@@ -43,6 +44,9 @@ AUAVPawn::AUAVPawn()
 
 	// 创建规划可视化组件
 	PlanningVisualizerComponent = CreateDefaultSubobject<UPlanningVisualizer>(TEXT("PlanningVisualizer"));
+
+	// 创建任务管理组件
+	MissionComponent = CreateDefaultSubobject<UMissionComponent>(TEXT("MissionComponent"));
 
 	// 初始化状态
 	CurrentState = FUAVState();
@@ -400,4 +404,47 @@ void AUAVPawn::SetControlMode(EUAVControlMode NewMode)
 	{
 		TrajectoryTrackerComponent->StopTracking();
 	}
+}
+
+void AUAVPawn::SetWaypoints(const TArray<FVector>& InWaypoints)
+{
+	// 转发到 MissionComponent
+	if (MissionComponent)
+	{
+		MissionComponent->SetWaypoints(InWaypoints);
+	}
+
+	// 保持向后兼容
+	Waypoints = InWaypoints;
+	UE_LOG(LogUAVActor, Log, TEXT("SetWaypoints: %d waypoints set (deprecated, use MissionComponent)"), Waypoints.Num());
+}
+
+TArray<FVector> AUAVPawn::GetWaypoints() const
+{
+	// 优先从 MissionComponent 获取
+	if (MissionComponent)
+	{
+		return MissionComponent->GetWaypointPositions();
+	}
+	return Waypoints;
+}
+
+bool AUAVPawn::HasWaypoints() const
+{
+	// 优先从 MissionComponent 获取
+	if (MissionComponent)
+	{
+		return MissionComponent->HasWaypoints();
+	}
+	return Waypoints.Num() > 0;
+}
+
+void AUAVPawn::ClearWaypoints()
+{
+	// 转发到 MissionComponent
+	if (MissionComponent)
+	{
+		MissionComponent->ClearWaypoints();
+	}
+	Waypoints.Empty();
 }

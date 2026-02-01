@@ -5,10 +5,11 @@
 #include "BehaviorTree/BlackboardComponent.h"
 #include "BehaviorTree/BehaviorTree.h"
 #include "uav_simulator/Core/UAVPawn.h"
+#include "uav_simulator/Mission/MissionComponent.h"
 #include "uav_simulator/Planning/TrajectoryTracker.h"
 #include "uav_simulator/Planning/TrajectoryOptimizer.h"
 #include "uav_simulator/Planning/TrajectoryData.h"
-#include "uav_simulator/Planning/WaypointsData.h"
+#include "uav_simulator/Debug/UAVLogConfig.h"
 
 UBTTask_UAVFollowTrajectory::UBTTask_UAVFollowTrajectory()
 {
@@ -18,7 +19,6 @@ UBTTask_UAVFollowTrajectory::UBTTask_UAVFollowTrajectory()
 
 	// 设置黑板键过滤器，只允许选择Object类型的键
 	TrajectoryKey.AddObjectFilter(this, GET_MEMBER_NAME_CHECKED(UBTTask_UAVFollowTrajectory, TrajectoryKey), UTrajectoryData::StaticClass());
-	WaypointsKey.AddObjectFilter(this, GET_MEMBER_NAME_CHECKED(UBTTask_UAVFollowTrajectory, WaypointsKey), UWaypointsData::StaticClass());
 }
 
 void UBTTask_UAVFollowTrajectory::InitializeFromAsset(UBehaviorTree& Asset)
@@ -28,7 +28,6 @@ void UBTTask_UAVFollowTrajectory::InitializeFromAsset(UBehaviorTree& Asset)
 	if (UBlackboardData* BBAsset = GetBlackboardAsset())
 	{
 		TrajectoryKey.ResolveSelectedKey(*BBAsset);
-		WaypointsKey.ResolveSelectedKey(*BBAsset);
 	}
 }
 
@@ -59,7 +58,7 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 		UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
 		if (!BlackboardComp)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("BTTask_UAVFollowTrajectory: No blackboard component"));
+			UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: No blackboard component"));
 			return EBTNodeResult::Failed;
 		}
 
@@ -68,7 +67,7 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 
 		if (!TrajectoryData || !TrajectoryData->IsValid())
 		{
-			UE_LOG(LogTemp, Warning, TEXT("BTTask_UAVFollowTrajectory: No valid trajectory in blackboard"));
+			UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: No valid trajectory in blackboard"));
 			return EBTNodeResult::Failed;
 		}
 
@@ -76,26 +75,45 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 	}
 	else
 	{
-		// 使用航点生成轨迹
-		UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
-		if (!BlackboardComp)
+		// 从 MissionComponent 或 UAVPawn 获取航点生成轨迹
+		TArray<FVector> Waypoints;
+
+		if (bUseMissionComponent)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("BTTask_UAVFollowTrajectory: No blackboard component"));
+			// 优先从 MissionComponent 获取航点
+			UMissionComponent* MissionComp = UAVPawn->GetMissionComponent();
+			if (MissionComp && MissionComp->HasWaypoints())
+			{
+				Waypoints = MissionComp->GetWaypointPositions();
+				UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Using waypoints from MissionComponent"));
+			}
+			else
+			{
+				UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: MissionComponent has no waypoints"));
+				return EBTNodeResult::Failed;
+			}
+		}
+		else
+		{
+			// 向后兼容：从 UAVPawn 获取航点
+			if (UAVPawn->HasWaypoints())
+			{
+				Waypoints = UAVPawn->GetWaypoints();
+				UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Using waypoints from UAVPawn (deprecated)"));
+			}
+			else
+			{
+				UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: UAVPawn has no waypoints"));
+				return EBTNodeResult::Failed;
+			}
+		}
+
+		if (Waypoints.Num() < 2)
+		{
+			UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: Need at least 2 waypoints, got %d"), Waypoints.Num());
 			return EBTNodeResult::Failed;
 		}
 
-		// 从黑板获取航点数据对象
-		UObject* WaypointsObject = BlackboardComp->GetValueAsObject(WaypointsKey.SelectedKeyName);
-		UWaypointsData* WaypointsData = Cast<UWaypointsData>(WaypointsObject);
-
-		if (!WaypointsData || !WaypointsData->IsValid())
-		{
-			UE_LOG(LogTemp, Warning, TEXT("BTTask_UAVFollowTrajectory: No valid waypoints in blackboard (need at least 2 waypoints)"));
-			return EBTNodeResult::Failed;
-		}
-
-		// 获取航点数组
-		TArray<FVector> Waypoints = WaypointsData->GetWaypoints();
 		FVector CurrentLocation = UAVPawn->GetActorLocation();
 
 		// 如果第一个航点距离当前位置较远，则将当前位置插入到航点数组开头
@@ -103,13 +121,13 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 		if (Waypoints.Num() > 0 && FVector::Dist(CurrentLocation, Waypoints[0]) > InsertThreshold)
 		{
 			Waypoints.Insert(CurrentLocation, 0);
-			UE_LOG(LogTemp, Log, TEXT("BTTask_UAVFollowTrajectory: Inserted current location as first waypoint"));
+			UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Inserted current location as first waypoint"));
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("BTTask_UAVFollowTrajectory: Generating trajectory with %d waypoints"), Waypoints.Num());
+		UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Generating trajectory with %d waypoints"), Waypoints.Num());
 		for (int32 i = 0; i < Waypoints.Num(); ++i)
 		{
-			UE_LOG(LogTemp, Log, TEXT("  Waypoint[%d]: (%.1f, %.1f, %.1f)"),
+			UE_LOG(LogUAVAI, Verbose, TEXT("  Waypoint[%d]: (%.1f, %.1f, %.1f)"),
 				i, Waypoints[i].X, Waypoints[i].Y, Waypoints[i].Z);
 		}
 
@@ -122,12 +140,22 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 
 		if (!CachedTrajectory.bIsValid)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("BTTask_UAVFollowTrajectory: Failed to generate trajectory from %d waypoints"), Waypoints.Num());
+			UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: Failed to generate trajectory from %d waypoints"), Waypoints.Num());
 			return EBTNodeResult::Failed;
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("BTTask_UAVFollowTrajectory: Generated trajectory with %d points, duration: %.2f seconds"),
+		UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Generated trajectory with %d points, duration: %.2f seconds"),
 			CachedTrajectory.Points.Num(), CachedTrajectory.TotalDuration);
+
+		// 如果使用 MissionComponent，启动任务
+		if (bUseMissionComponent)
+		{
+			UMissionComponent* MissionComp = UAVPawn->GetMissionComponent();
+			if (MissionComp)
+			{
+				MissionComp->StartMission();
+			}
+		}
 	}
 
 	// 设置轨迹并开始跟踪
@@ -142,7 +170,7 @@ void UBTTask_UAVFollowTrajectory::TickTask(UBehaviorTreeComponent& OwnerComp, ui
 	AAIController* AIController = OwnerComp.GetAIOwner();
 	if (!AIController)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("BTTask_UAVFollowTrajectory: No AIController"));
+		UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: No AIController"));
 		FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
 		return;
 	}
@@ -150,7 +178,7 @@ void UBTTask_UAVFollowTrajectory::TickTask(UBehaviorTreeComponent& OwnerComp, ui
 	AUAVPawn* UAVPawn = Cast<AUAVPawn>(AIController->GetPawn());
 	if (!UAVPawn)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("BTTask_UAVFollowTrajectory: No UAVPawn"));
+		UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: No UAVPawn"));
 		FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
 		return;
 	}
@@ -164,7 +192,18 @@ void UBTTask_UAVFollowTrajectory::TickTask(UBehaviorTreeComponent& OwnerComp, ui
 			UAVPawn->SetControlMode(EUAVControlMode::Position);
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("BTTask_UAVFollowTrajectory: Trajectory completed"));
+		// 如果使用 MissionComponent，通知任务完成
+		if (bUseMissionComponent && !bUseTrajectoryFromBlackboard)
+		{
+			UMissionComponent* MissionComp = UAVPawn->GetMissionComponent();
+			if (MissionComp && MissionComp->IsMissionRunning())
+			{
+				// 任务完成由 MissionComponent 内部处理
+				// 这里只是通知轨迹跟踪完成
+			}
+		}
+
+		UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Trajectory completed"));
 		FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
 		return;
 	}
@@ -189,6 +228,20 @@ void UBTTask_UAVFollowTrajectory::OnTaskFinished(UBehaviorTreeComponent& OwnerCo
 
 FString UBTTask_UAVFollowTrajectory::GetStaticDescription() const
 {
-	return FString::Printf(TEXT("Follow Trajectory\nMax Velocity: %.1f cm/s\nMax Acceleration: %.1f cm/s²"),
-		MaxVelocity, MaxAcceleration);
+	FString SourceDesc;
+	if (bUseTrajectoryFromBlackboard)
+	{
+		SourceDesc = TEXT("Source: Blackboard Trajectory");
+	}
+	else if (bUseMissionComponent)
+	{
+		SourceDesc = TEXT("Source: MissionComponent");
+	}
+	else
+	{
+		SourceDesc = TEXT("Source: UAVPawn (deprecated)");
+	}
+
+	return FString::Printf(TEXT("Follow Trajectory\n%s\nMax Velocity: %.1f cm/s\nMax Acceleration: %.1f cm/s²"),
+		*SourceDesc, MaxVelocity, MaxAcceleration);
 }

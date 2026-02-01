@@ -156,21 +156,90 @@
   - 更新文件：`Core/UAVPawn.h/cpp`
   - 更新文件：`Core/UAVTypes.h`（添加轨迹相关数据结构）
 
-### Phase 5: 多机协同 (3-4周)
+### Phase 5: 任务管理 ✅ (已完成)
+- [x] 创建 MissionComponent 任务管理组件
+  - 统一管理航点数据、任务状态和任务配置
+  - 替代分散的 WaypointsData 类
+  - 新增文件：`Mission/MissionTypes.h`（任务数据结构）
+  - 新增文件：`Mission/MissionComponent.h/cpp`
+- [x] 任务数据结构
+  - **EMissionState**: 任务状态枚举（Idle/Ready/Running/Paused/Completed/Failed）
+  - **EMissionMode**: 任务模式枚举（Once/Loop/PingPong）
+  - **FMissionWaypoint**: 航点数据结构（位置、悬停时间、期望速度、偏航角、标签）
+  - **FMissionConfig**: 任务配置（模式、速度、加速度、阈值、循环次数等）
+- [x] 航点管理接口
+  - `SetWaypoints()` / `SetMissionWaypoints()`: 设置航点
+  - `AddWaypoint()` / `RemoveWaypoint()` / `ClearWaypoints()`: 航点增删
+  - `GetWaypointPositions()` / `GetCurrentWaypoint()`: 航点查询
+- [x] 任务控制接口
+  - `StartMission()` / `StopMission()`: 启动/停止任务
+  - `PauseMission()` / `ResumeMission()`: 暂停/恢复任务
+  - `AdvanceToNextWaypoint()` / `GoToWaypoint()`: 航点导航
+- [x] 事件委托
+  - `OnMissionStarted` / `OnMissionCompleted` / `OnMissionFailed`
+  - `OnWaypointReached` / `OnMissionStateChanged`
+  - `OnMissionPaused` / `OnMissionResumed`
+- [x] UAVPawn 集成
+  - 添加 MissionComponent 成员
+  - 废弃旧的 Waypoints 属性（转发到 MissionComponent）
+  - 更新文件：`Core/UAVPawn.h/cpp`
+- [x] 行为树节点更新
+  - BTService_UAVPathPlanning: 从 MissionComponent 获取航点
+  - BTTask_UAVFollowTrajectory: 添加 bUseMissionComponent 选项
+  - 更新文件：`AI/Services/BTService_UAVPathPlanning.h/cpp`
+  - 更新文件：`AI/Tasks/BTTask_UAVFollowTrajectory.h/cpp`
+- [x] 清理冗余代码
+  - 删除 `Planning/WaypointsData.h/cpp`
+  - 新增日志类别：`LogUAVMission`
+
+### Phase 6: 单元测试 ✅ (已完成)
+- [x] 配置测试框架
+  - 更新 `uav_simulator.Build.cs` 添加测试模块依赖
+  - 创建测试目录结构 `Source/uav_simulator/Tests/`
+- [x] 创建测试通用工具
+  - 新增文件：`Tests/UAVTestCommon.h`（测试分类常量、浮点数/向量近似相等宏、辅助函数）
+- [x] Planning 模块测试（优先级 1）
+  - 新增文件：`Tests/Planning/ObstacleManagerTest.cpp`（碰撞检测、距离计算、范围查询）
+  - 新增文件：`Tests/Planning/AStarPathPlannerTest.cpp`（坐标转换、启发式计算、邻居生成）
+  - 新增文件：`Tests/Planning/RRTPathPlannerTest.cpp`（Steer、最近节点、邻域查找）
+  - 新增文件：`Tests/Planning/TrajectoryOptimizerTest.cpp`（时间分配、多项式评估、轨迹采样）
+  - 新增文件：`Tests/Planning/TrajectoryTrackerTest.cpp`（状态机、进度计算、轨迹插值）
+- [x] Mission 模块测试（优先级 2）
+  - 新增文件：`Tests/Mission/MissionComponentTest.cpp`（航点管理、任务状态机、循环逻辑）
+- [x] Core 模块测试（优先级 3）
+  - 新增文件：`Tests/Core/UAVTypesTest.cpp`（FTrajectory、FObstacleInfo、枚举验证）
+- [x] Control 模块测试（优先级 4）
+  - 新增文件：`Tests/Control/AttitudeControllerTest.cpp`（PID 计算、输出限制）
+  - 新增文件：`Tests/Control/PositionControllerTest.cpp`（级联控制、速度限制）
+- [x] Physics 模块测试（优先级 5）
+  - 新增文件：`Tests/Physics/UAVDynamicsTest.cpp`（RK4 积分、推力计算）
+- [x] 自动化测试脚本
+  - 新增文件：`Script/test.bat`（自动运行测试并统计结果）
+  - 支持 UTF-8 中文输出
+  - 使用 PowerShell 进行结果统计
+- [x] 测试覆盖统计
+  - 总计 **98 个测试用例**，全部通过
+  - Control 模块：21 个测试
+  - Core 模块：9 个测试
+  - Mission 模块：15 个测试
+  - Physics 模块：11 个测试
+  - Planning 模块：42 个测试
+
+### Phase 7: 多机协同
 - [ ] 实现多无人机管理系统
 - [ ] 添加编队控制算法
 - [ ] 实现通信模拟
 - [ ] 添加碰撞避免
 - [ ] 实现任务分配算法
 
-### Phase 6: 任务规划 (2-3周)
+### Phase 8: 任务规划
 - [ ] 设计任务描述语言
 - [ ] 实现任务解析器
 - [ ] 添加任务调度器
 - [ ] 实现任务监控系统
 - [ ] 添加重规划功能
 
-### Phase 7: 环境与优化 (2-3周)
+### Phase 9: 环境与优化
 - [ ] 完善环境系统（风场、天气）
 - [ ] 添加复杂场景（城市、森林）
 - [ ] 性能优化
@@ -186,6 +255,7 @@
 - **Planning**: 规划算法
 - **Sensors**: 传感器模拟
 - **Communication**: 多机通信
+- **Tests**: 单元测试（UE5 Automation Test Framework）
 
 ### Blueprint 集成
 - UI界面
@@ -229,6 +299,9 @@ Source/uav_simulator/
 │   ├── ObstacleManager.h/cpp       # 障碍物管理
 │   ├── PlanningVisualizer.h/cpp    # 规划可视化
 │   └── ObstacleAvoidance.h/cpp     # 避障
+├── Mission/
+│   ├── MissionTypes.h              # 任务数据结构
+│   └── MissionComponent.h/cpp      # 任务管理组件
 ├── MultiAgent/
 │   ├── FormationController.h/cpp   # 编队控制
 │   ├── TaskAllocator.h/cpp         # 任务分配
@@ -256,6 +329,25 @@ Source/uav_simulator/
 │   ├── ControlParameterTuner.h/cpp # 控制参数调试
 │   ├── UAVHUD.h/cpp                # HUD显示
 │   └── UAVLogConfig.h/cpp          # 日志配置
+├── Tests/
+│   ├── UAVTestCommon.h             # 测试通用工具
+│   ├── Planning/
+│   │   ├── ObstacleManagerTest.cpp
+│   │   ├── AStarPathPlannerTest.cpp
+│   │   ├── RRTPathPlannerTest.cpp
+│   │   ├── TrajectoryOptimizerTest.cpp
+│   │   └── TrajectoryTrackerTest.cpp
+│   ├── Control/
+│   │   ├── AttitudeControllerTest.cpp
+│   │   └── PositionControllerTest.cpp
+│   ├── Physics/
+│   │   └── UAVDynamicsTest.cpp
+│   ├── Mission/
+│   │   └── MissionComponentTest.cpp
+│   └── Core/
+│       └── UAVTypesTest.cpp
+├── Script/
+│   └── test.bat                 # 自动化测试脚本
 └── Utility/
     └── Debug.h/cpp                 # 调试工具（堆栈输出、性能计时等）
 ```

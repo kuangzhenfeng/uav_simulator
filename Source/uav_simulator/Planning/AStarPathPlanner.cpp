@@ -2,6 +2,7 @@
 
 #include "AStarPathPlanner.h"
 #include "DrawDebugHelpers.h"
+#include "uav_simulator/Debug/UAVLogConfig.h"
 
 UAStarPathPlanner::UAStarPathPlanner()
 {
@@ -15,6 +16,10 @@ bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArr
 	OutPath.Empty();
 	LastPath.Empty();
 
+	UE_LOG(LogUAVPlanning, Warning, TEXT("===== A* Path Planning Started ====="));
+	UE_LOG(LogUAVPlanning, Warning, TEXT("Start: %s, Goal: %s"), *Start.ToString(), *Goal.ToString());
+	UE_LOG(LogUAVPlanning, Warning, TEXT("Obstacle count: %d, Grid resolution: %.1f"), Obstacles.Num(), GridResolution);
+
 	// 自动计算搜索边界
 	AutoComputeSearchBounds(Start, Goal, 500.0f);
 
@@ -22,16 +27,23 @@ bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArr
 	FIntVector StartGrid = WorldToGrid(Start);
 	FIntVector GoalGrid = WorldToGrid(Goal);
 
+	UE_LOG(LogUAVPlanning, Log, TEXT("Start grid: (%d,%d,%d), Goal grid: (%d,%d,%d)"),
+		StartGrid.X, StartGrid.Y, StartGrid.Z, GoalGrid.X, GoalGrid.Y, GoalGrid.Z);
+
 	// 检查起点和终点是否有效
 	if (!IsValidGridCoord(StartGrid) || IsGridBlocked(StartGrid))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("A* PathPlanner: Start position is invalid or blocked"));
+		UE_LOG(LogUAVPlanning, Error, TEXT("Start position invalid or blocked! IsValid=%s, IsBlocked=%s"),
+			IsValidGridCoord(StartGrid) ? TEXT("true") : TEXT("false"),
+			IsGridBlocked(StartGrid) ? TEXT("true") : TEXT("false"));
 		return false;
 	}
 
 	if (!IsValidGridCoord(GoalGrid) || IsGridBlocked(GoalGrid))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("A* PathPlanner: Goal position is invalid or blocked"));
+		UE_LOG(LogUAVPlanning, Error, TEXT("Goal position invalid or blocked! IsValid=%s, IsBlocked=%s"),
+			IsValidGridCoord(GoalGrid) ? TEXT("true") : TEXT("false"),
+			IsGridBlocked(GoalGrid) ? TEXT("true") : TEXT("false"));
 		return false;
 	}
 
@@ -148,9 +160,15 @@ bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArr
 		}
 
 		// 简化路径
+		int32 PathLengthBeforeSimplify = OutPath.Num();
 		SimplifyPath(OutPath);
+		UE_LOG(LogUAVPlanning, Log, TEXT("Path simplified: %d -> %d points"), PathLengthBeforeSimplify, OutPath.Num());
 
 		LastPath = OutPath;
+	}
+	else
+	{
+		UE_LOG(LogUAVPlanning, Error, TEXT("A* path planning failed! NodesExplored: %d, MaxNodes: %d"), NodesExplored, MaxSearchNodes);
 	}
 
 	// 清理内存
@@ -163,14 +181,11 @@ bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArr
 	double EndTime = FPlatformTime::Seconds();
 	LastPlanningTimeMs = (EndTime - StartTime) * 1000.0;
 
-	if (bShowDebug)
-	{
-		UE_LOG(LogTemp, Log, TEXT("A* PathPlanner: %s, Nodes explored: %d, Path length: %d, Time: %.2f ms"),
-			bSuccess ? TEXT("Success") : TEXT("Failed"),
-			NodesExplored,
-			OutPath.Num(),
-			LastPlanningTimeMs);
-	}
+	UE_LOG(LogUAVPlanning, Warning, TEXT("A* result: %s, NodesExplored: %d, PathPoints: %d, Time: %.2fms"),
+		bSuccess ? TEXT("SUCCESS") : TEXT("FAILED"),
+		NodesExplored,
+		OutPath.Num(),
+		LastPlanningTimeMs);
 
 	return bSuccess;
 }

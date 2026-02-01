@@ -2,6 +2,7 @@
 
 #include "RRTPathPlanner.h"
 #include "DrawDebugHelpers.h"
+#include "uav_simulator/Debug/UAVLogConfig.h"
 
 URRTPathPlanner::URRTPathPlanner()
 {
@@ -23,19 +24,24 @@ bool URRTPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArray
 
 	GoalPosition = Goal;
 
+	UE_LOG(LogUAVPlanning, Warning, TEXT("===== RRT Path Planning Started ====="));
+	UE_LOG(LogUAVPlanning, Warning, TEXT("Start: %s, Goal: %s"), *Start.ToString(), *Goal.ToString());
+	UE_LOG(LogUAVPlanning, Warning, TEXT("Obstacle count: %d, StepSize: %.1f, MaxIterations: %d"),
+		Obstacles.Num(), StepSize, MaxIterations);
+
 	// 自动计算搜索边界
 	AutoComputeSearchBounds(Start, Goal, 500.0f);
 
 	// 检查起点和终点是否有效
 	if (CheckCollision(Start, 0.0f))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("RRT PathPlanner: Start position is blocked"));
+		UE_LOG(LogUAVPlanning, Error, TEXT("Start position is blocked!"));
 		return false;
 	}
 
 	if (CheckCollision(Goal, 0.0f))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("RRT PathPlanner: Goal position is blocked"));
+		UE_LOG(LogUAVPlanning, Error, TEXT("Goal position is blocked!"));
 		return false;
 	}
 
@@ -118,22 +124,25 @@ bool URRTPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArray
 		ReconstructPath(GoalNodeIndex, OutPath);
 
 		// 简化路径
+		int32 PathLengthBeforeSimplify = OutPath.Num();
 		SimplifyPath(OutPath);
+		UE_LOG(LogUAVPlanning, Log, TEXT("Path simplified: %d -> %d points"), PathLengthBeforeSimplify, OutPath.Num());
 
 		LastPath = OutPath;
+	}
+	else
+	{
+		UE_LOG(LogUAVPlanning, Error, TEXT("RRT path planning failed! TreeNodes: %d, MaxIterations: %d"), Tree.Num(), MaxIterations);
 	}
 
 	double EndTime = FPlatformTime::Seconds();
 	LastPlanningTimeMs = (EndTime - StartTime) * 1000.0;
 
-	if (bShowDebug)
-	{
-		UE_LOG(LogTemp, Log, TEXT("RRT PathPlanner: %s, Tree size: %d, Path length: %d, Time: %.2f ms"),
-			bSuccess ? TEXT("Success") : TEXT("Failed"),
-			Tree.Num(),
-			OutPath.Num(),
-			LastPlanningTimeMs);
-	}
+	UE_LOG(LogUAVPlanning, Warning, TEXT("RRT result: %s, TreeNodes: %d, PathPoints: %d, Time: %.2fms"),
+		bSuccess ? TEXT("SUCCESS") : TEXT("FAILED"),
+		Tree.Num(),
+		OutPath.Num(),
+		LastPlanningTimeMs);
 
 	return bSuccess;
 }

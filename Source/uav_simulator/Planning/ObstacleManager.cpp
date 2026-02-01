@@ -3,6 +3,7 @@
 #include "ObstacleManager.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
+#include "uav_simulator/Debug/UAVLogConfig.h"
 
 UObstacleManager::UObstacleManager()
 {
@@ -41,6 +42,12 @@ int32 UObstacleManager::RegisterObstacle(const FObstacleInfo& Obstacle)
 
 	Obstacles.Add(NewObstacle);
 	OnObstacleDetected.Broadcast(NewObstacle);
+
+	UE_LOG(LogUAVPlanning, Log, TEXT("Obstacle registered: ID=%d, Type=%d, Center=%s, Extents=%s"),
+		NewObstacle.ObstacleID,
+		(int32)NewObstacle.Type,
+		*NewObstacle.Center.ToString(),
+		*NewObstacle.Extents.ToString());
 
 	return NewObstacle.ObstacleID;
 }
@@ -122,6 +129,8 @@ bool UObstacleManager::CheckCollision(const FVector& Point, float Radius) const
 	{
 		if (IsPointInObstacle(Point, Obstacle, Radius))
 		{
+			UE_LOG(LogUAVPlanning, Verbose, TEXT("Collision detected: Point %s collides with Obstacle %d"),
+				*Point.ToString(), Obstacle.ObstacleID);
 			return true;
 		}
 	}

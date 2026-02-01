@@ -16,6 +16,7 @@ class AUAVAIController;
 class UTrajectoryTracker;
 class UObstacleManager;
 class UPlanningVisualizer;
+class UMissionComponent;
 
 /**
  * 无人机Pawn类
@@ -76,6 +77,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Trajectory")
 	bool IsTrajectoryComplete() const;
 
+	// 设置预定义航点
+	UFUNCTION(BlueprintCallable, Category = "UAV|Waypoints", meta = (DeprecatedFunction, DeprecationMessage = "Use MissionComponent->SetWaypoints instead"))
+	void SetWaypoints(const TArray<FVector>& InWaypoints);
+
+	// 获取预定义航点
+	UFUNCTION(BlueprintCallable, Category = "UAV|Waypoints", meta = (DeprecatedFunction, DeprecationMessage = "Use MissionComponent->GetWaypointPositions instead"))
+	TArray<FVector> GetWaypoints() const;
+
+	// 检查是否有航点
+	UFUNCTION(BlueprintCallable, Category = "UAV|Waypoints", meta = (DeprecatedFunction, DeprecationMessage = "Use MissionComponent->HasWaypoints instead"))
+	bool HasWaypoints() const;
+
+	// 清除航点
+	UFUNCTION(BlueprintCallable, Category = "UAV|Waypoints", meta = (DeprecatedFunction, DeprecationMessage = "Use MissionComponent->ClearWaypoints instead"))
+	void ClearWaypoints();
+
 	// 设置控制模式
 	UFUNCTION(BlueprintCallable, Category = "UAV|Control")
 	void SetControlMode(EUAVControlMode NewMode);
@@ -95,6 +112,10 @@ public:
 	// 获取规划可视化器
 	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
 	UPlanningVisualizer* GetPlanningVisualizer() const { return PlanningVisualizerComponent; }
+
+	// 获取任务管理组件
+	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
+	UMissionComponent* GetMissionComponent() const { return MissionComponent; }
 
 protected:
 	// 根组件
@@ -133,6 +154,10 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
 	TObjectPtr<UPlanningVisualizer> PlanningVisualizerComponent;
 
+	// 任务管理组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
+	TObjectPtr<UMissionComponent> MissionComponent;
+
 	// 当前状态
 	UPROPERTY(BlueprintReadOnly, Category = "UAV State")
 	FUAVState CurrentState;
@@ -148,6 +173,10 @@ protected:
 	// 控制模式
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Control")
 	EUAVControlMode ControlMode = EUAVControlMode::Position;
+
+	// 预定义航点数组（已废弃，请使用 MissionComponent）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Waypoints", meta = (DeprecatedProperty, DeprecationMessage = "Use MissionComponent instead"))
+	TArray<FVector> Waypoints;
 
 	// 向后兼容：控制模式（已废弃，请使用 ControlMode）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Control", meta = (DeprecatedProperty, DeprecationMessage = "Use ControlMode instead"))

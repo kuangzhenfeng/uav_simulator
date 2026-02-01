@@ -9,7 +9,6 @@
 class UBehaviorTreeComponent;
 class UBlackboardComponent;
 class UBehaviorTree;
-class UWaypointsData;
 
 /**
  * UAV的AI控制器
@@ -47,22 +46,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV AI")
 	UBlackboardComponent* GetBlackboardComp() const { return BlackboardComp; }
 
-	// 设置航点数组到黑板
-	UFUNCTION(BlueprintCallable, Category = "UAV AI")
-	void SetWaypoints(const TArray<FVector>& Waypoints);
-
-	// 添加单个航点
-	UFUNCTION(BlueprintCallable, Category = "UAV AI")
-	void AddWaypoint(const FVector& Waypoint);
-
-	// 清空航点
-	UFUNCTION(BlueprintCallable, Category = "UAV AI")
-	void ClearWaypoints();
-
-	// 获取当前航点数据
-	UFUNCTION(BlueprintCallable, Category = "UAV AI")
-	UWaypointsData* GetWaypointsData() const;
-
 protected:
 	virtual void OnPossess(APawn* InPawn) override;
 	virtual void OnUnPossess() override;
@@ -90,10 +73,4 @@ public:
 	static const FName TargetActorKey;
 	static const FName HomeLocationKey;
 	static const FName CurrentStateKey;
-	static const FName WaypointsKey;
-
-private:
-	// 缓存的航点数据对象
-	UPROPERTY()
-	TObjectPtr<UWaypointsData> CachedWaypointsData;
 };

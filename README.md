@@ -49,12 +49,15 @@ uav_simulator/
 │   ├── Sensors/        # 传感器模拟
 │   ├── Control/        # 飞行控制器
 │   ├── Planning/       # 路径规划与轨迹优化
+│   ├── Mission/        # 任务管理（MissionComponent）
 │   ├── AI/             # AI 控制器与行为树节点
 │   ├── Debug/          # 调试与可视化工具
+│   ├── Tests/          # 单元测试
 │   └── Utility/        # 工具函数
 ├── Content/
 │   ├── UAV/            # UAV 蓝图与 AI 资产
 │   └── Environment/    # 关卡与环境
+├── Script/             # 自动化脚本
 ├── Config/             # 项目配置
 └── Docs/               # 文档
 ```
@@ -62,7 +65,7 @@ uav_simulator/
 ## 快速开始
 
 ### 环境要求
-- Unreal Engine 5.3+
+- Unreal Engine 5.7+
 - Visual Studio 2022
 - Windows 10/11
 
@@ -92,6 +95,7 @@ uav_simulator/
 - `StateEstimator`: 状态估计器
 - `PathPlanner`: 路径规划器
 - `TrajectoryOptimizer`: 轨迹优化器
+- `MissionComponent`: 任务管理组件
 
 ### 控制接口
 ```cpp
@@ -117,6 +121,34 @@ FTrajectory Trajectory = TrajectoryOptimizer->OptimizePath(Path);
 TrajectoryTracker->StartTracking(Trajectory);
 ```
 
+## 单元测试
+
+项目使用 UE5 Automation Test Framework 进行单元测试，覆盖以下模块：
+
+| 模块 | 测试数量 | 说明 |
+|------|---------|------|
+| Control.AttitudeController | 9 | 姿态控制器 PID、角度归一化、抗饱和 |
+| Control.PositionController | 12 | 位置控制器、级联控制、推力限制 |
+| Core.UAVTypes | 9 | 数据类型、枚举、结构体 |
+| Mission.MissionComponent | 15 | 任务状态机、航点管理、循环模式 |
+| Physics.UAVDynamics | 11 | 动力学模型、RK4 积分、推力计算 |
+| Planning.AStar | 7 | A* 路径规划、启发式、避障 |
+| Planning.ObstacleManager | 8 | 障碍物管理、碰撞检测 |
+| Planning.RRT | 9 | RRT/RRT* 算法、随机采样 |
+| Planning.TrajectoryOptimizer | 9 | 轨迹优化、多项式求值、约束 |
+| Planning.TrajectoryTracker | 10 | 轨迹跟踪、插值、进度管理 |
+
+### 运行测试
+
+```bash
+# 使用测试脚本
+Script/test.bat
+
+# 或在 UE5 编辑器中
+# Window -> Developer Tools -> Session Frontend -> Automation
+# 筛选 "UAVSimulator" 并运行
+```
+
 ## 开发路线图
 
 | 阶段 | 内容 | 状态 |
@@ -125,9 +157,11 @@ TrajectoryTracker->StartTracking(Trajectory);
 | Phase 2 | 飞行控制（级联控制、EKF、调试工具） | 已完成 |
 | Phase 3 | AI 行为树（控制器、任务节点、服务） | 已完成 |
 | Phase 4 | 轨迹规划（A*、RRT、轨迹优化、避障） | 已完成 |
-| Phase 5 | 多机协同（编队、任务分配、通信） | 计划中 |
-| Phase 6 | 任务规划（任务定义、调度、监控） | 计划中 |
-| Phase 7 | 环境优化（风场、天气、性能优化） | 计划中 |
+| Phase 5 | 任务管理（MissionComponent、航点管理、任务状态） | 已完成 |
+| Phase 6 | 单元测试（UE5 Automation Test Framework） | 已完成 |
+| Phase 7 | 多机协同（编队、任务分配、通信） | 计划中 |
+| Phase 8 | 任务规划（任务定义、调度、监控） | 计划中 |
+| Phase 9 | 环境优化（风场、天气、性能优化） | 计划中 |
 
 ## 文档
 
