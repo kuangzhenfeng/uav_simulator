@@ -18,7 +18,16 @@ bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArr
 
 	UE_LOG(LogUAVPlanning, Warning, TEXT("===== A* Path Planning Started ====="));
 	UE_LOG(LogUAVPlanning, Warning, TEXT("Start: %s, Goal: %s"), *Start.ToString(), *Goal.ToString());
-	UE_LOG(LogUAVPlanning, Warning, TEXT("Obstacle count: %d, Grid resolution: %.1f"), Obstacles.Num(), GridResolution);
+	UE_LOG(LogUAVPlanning, Warning, TEXT("Obstacle count: %d, Grid resolution: %.1f, UAVCollisionRadius: %.1f, SafetyMargin: %.1f"),
+		Obstacles.Num(), GridResolution, UAVCollisionRadius, PlanningConfig.SafetyMargin);
+
+	// 打印所有障碍物详细信息
+	for (int32 i = 0; i < Obstacles.Num(); ++i)
+	{
+		const FObstacleInfo& Obs = Obstacles[i];
+		UE_LOG(LogUAVPlanning, Warning, TEXT("  Obstacle[%d]: ID=%d, Type=%d, Center=%s, Extents=%s, SafetyMargin=%.1f"),
+			i, Obs.ObstacleID, (int32)Obs.Type, *Obs.Center.ToString(), *Obs.Extents.ToString(), Obs.SafetyMargin);
+	}
 
 	// 自动计算搜索边界
 	AutoComputeSearchBounds(Start, Goal, 500.0f);
@@ -208,6 +217,9 @@ void UAStarPathPlanner::AutoComputeSearchBounds(const FVector& Start, const FVec
 	Max.Y = FMath::Max(Start.Y, Goal.Y) + Padding;
 	Max.Z = FMath::Max(Start.Z, Goal.Z) + Padding;
 
+	UE_LOG(LogUAVPlanning, Log, TEXT("[A*::AutoComputeSearchBounds] MinBounds=%s, MaxBounds=%s, Padding=%.1f"),
+		*Min.ToString(), *Max.ToString(), Padding);
+
 	SetSearchBounds(Min, Max);
 }
 
@@ -311,7 +323,13 @@ bool UAStarPathPlanner::IsValidGridCoord(const FIntVector& GridCoord) const
 bool UAStarPathPlanner::IsGridBlocked(const FIntVector& GridCoord) const
 {
 	FVector WorldPos = GridToWorld(GridCoord);
-	return CheckCollision(WorldPos, 0.0f);
+	bool bBlocked = CheckCollision(WorldPos, 0.0f);
+	if (bBlocked)
+	{
+		UE_LOG(LogUAVPlanning, Log, TEXT("[A*::IsGridBlocked] Grid(%d,%d,%d) -> World=%s is BLOCKED"),
+			GridCoord.X, GridCoord.Y, GridCoord.Z, *WorldPos.ToString());
+	}
+	return bBlocked;
 }
 
 void UAStarPathPlanner::ReconstructPath(FAStarNode* EndNode, TArray<FVector>& OutPath) const

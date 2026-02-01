@@ -129,8 +129,8 @@ bool UObstacleManager::CheckCollision(const FVector& Point, float Radius) const
 	{
 		if (IsPointInObstacle(Point, Obstacle, Radius))
 		{
-			UE_LOG(LogUAVPlanning, Verbose, TEXT("Collision detected: Point %s collides with Obstacle %d"),
-				*Point.ToString(), Obstacle.ObstacleID);
+			UE_LOG(LogUAVPlanning, Warning, TEXT("[ObstacleManager] Collision detected: Point=%s, Radius=%.1f, ObstacleID=%d, ObstacleCenter=%s"),
+				*Point.ToString(), Radius, Obstacle.ObstacleID, *Obstacle.Center.ToString());
 			return true;
 		}
 	}
@@ -316,7 +316,14 @@ bool UObstacleManager::IsPointInObstacle(const FVector& Point, const FObstacleIn
 	switch (Obstacle.Type)
 	{
 	case EObstacleType::Sphere:
-		return FVector::Dist(Point, Obstacle.Center) < (Obstacle.Extents.X + TotalRadius);
+		{
+			float Distance = FVector::Dist(Point, Obstacle.Center);
+			float Threshold = Obstacle.Extents.X + TotalRadius;
+			bool bInside = Distance < Threshold;
+			UE_LOG(LogUAVPlanning, Log, TEXT("[ObstacleManager::IsPointInObstacle] Sphere: Point=%s, Center=%s, Distance=%.1f, Threshold=%.1f (Extents.X=%.1f + TotalRadius=%.1f), Inside=%s"),
+				*Point.ToString(), *Obstacle.Center.ToString(), Distance, Threshold, Obstacle.Extents.X, TotalRadius, bInside ? TEXT("YES") : TEXT("NO"));
+			return bInside;
+		}
 
 	case EObstacleType::Box:
 		{

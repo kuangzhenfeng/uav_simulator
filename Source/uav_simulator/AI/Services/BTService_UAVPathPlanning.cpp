@@ -75,7 +75,12 @@ void UBTService_UAVPathPlanning::TickNode(UBehaviorTreeComponent& OwnerComp, uin
 	// 动态避障检测
 	if (bEnableDynamicAvoidance)
 	{
+		UE_LOG(LogUAVPlanning, Verbose, TEXT("[TickNode] Dynamic avoidance enabled, checking collision..."));
 		CheckCollisionAndAvoid(UAVPawn, DeltaSeconds);
+	}
+	else
+	{
+		UE_LOG(LogUAVPlanning, Verbose, TEXT("[TickNode] Dynamic avoidance is DISABLED"));
 	}
 }
 
@@ -268,11 +273,15 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 	UObstacleManager* ObstacleManager = UAVPawn->GetObstacleManager();
 	if (!ObstacleManager)
 	{
+		UE_LOG(LogUAVPlanning, Warning, TEXT("[CheckCollisionAndAvoid] ObstacleManager is NULL!"));
 		return;
 	}
 
 	FVector CurrentPosition = UAVPawn->GetActorLocation();
 	FVector CurrentVelocity = UAVPawn->GetUAVState().Velocity;
+
+	UE_LOG(LogUAVPlanning, Log, TEXT("[CheckCollisionAndAvoid] UAV Position=%s, Velocity=%s (Speed=%.1f), ObstacleCount=%d"),
+		*CurrentPosition.ToString(), *CurrentVelocity.ToString(), CurrentVelocity.Size(), ObstacleManager->GetAllObstacles().Num());
 
 	// 检查前方是否有障碍物
 	if (!CurrentVelocity.IsNearlyZero())
@@ -282,8 +291,8 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 		FObstacleInfo NearestObstacle;
 		float Distance = ObstacleManager->GetDistanceToNearestObstacle(CheckPoint, NearestObstacle);
 
-		UE_LOG(LogUAVPlanning, Verbose, TEXT("Collision check: Point=%s, NearestDist=%.1fcm, WarningDist=%.1fcm"),
-			*CheckPoint.ToString(), Distance, CollisionWarningDistance);
+		UE_LOG(LogUAVPlanning, Log, TEXT("[CheckCollisionAndAvoid] CheckPoint=%s, NearestObstacle: ID=%d, Center=%s, Distance=%.1fcm, WarningThreshold=%.1fcm"),
+			*CheckPoint.ToString(), NearestObstacle.ObstacleID, *NearestObstacle.Center.ToString(), Distance, CollisionWarningDistance);
 
 		if (Distance < CollisionWarningDistance)
 		{
@@ -299,6 +308,10 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 			UE_LOG(LogUAVPlanning, Warning, TEXT("Triggering replan, Target: %s"), *TargetLocation.ToString());
 			PerformPathPlanning(UAVPawn, TargetLocation);
 		}
+	}
+	else
+	{
+		UE_LOG(LogUAVPlanning, Log, TEXT("[CheckCollisionAndAvoid] UAV velocity is nearly zero, skipping collision check"));
 	}
 }
 
