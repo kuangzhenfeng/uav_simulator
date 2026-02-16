@@ -49,15 +49,10 @@ bool UPathPlanner::CheckCollision(const FVector& Point, float Radius) const
 {
 	float TotalRadius = Radius + UAVCollisionRadius + PlanningConfig.SafetyMargin;
 
-	UE_LOG(LogUAVPlanning, Log, TEXT("[PathPlanner::CheckCollision] Point=%s, InputRadius=%.1f, UAVCollisionRadius=%.1f, SafetyMargin=%.1f, TotalRadius=%.1f, ObstacleCount=%d"),
-		*Point.ToString(), Radius, UAVCollisionRadius, PlanningConfig.SafetyMargin, TotalRadius, Obstacles.Num());
-
 	for (const FObstacleInfo& Obstacle : Obstacles)
 	{
 		if (IsPointInObstacle(Point, Obstacle, TotalRadius))
 		{
-			UE_LOG(LogUAVPlanning, Warning, TEXT("[PathPlanner::CheckCollision] COLLISION! Point=%s collides with Obstacle Center=%s, Type=%d"),
-				*Point.ToString(), *Obstacle.Center.ToString(), (int32)Obstacle.Type);
 			return true;
 		}
 	}
@@ -106,8 +101,6 @@ bool UPathPlanner::IsPointInObstacle(const FVector& Point, const FObstacleInfo& 
 			float Distance = FVector::Dist(Point, Obstacle.Center);
 			float Threshold = Obstacle.Extents.X + Radius;
 			bool bInside = Distance < Threshold;
-			UE_LOG(LogUAVPlanning, Log, TEXT("[PathPlanner::IsPointInObstacle] Sphere: Point=%s, Center=%s, Distance=%.1f, Threshold=%.1f (Extents.X=%.1f + Radius=%.1f), Inside=%s"),
-				*Point.ToString(), *Obstacle.Center.ToString(), Distance, Threshold, Obstacle.Extents.X, Radius, bInside ? TEXT("YES") : TEXT("NO"));
 			return bInside;
 		}
 
@@ -121,11 +114,6 @@ bool UPathPlanner::IsPointInObstacle(const FVector& Point, const FObstacleInfo& 
 			bool bInsideY = FMath::Abs(LocalPoint.Y) < ExpandedExtents.Y;
 			bool bInsideZ = FMath::Abs(LocalPoint.Z) < ExpandedExtents.Z;
 			bool bInside = bInsideX && bInsideY && bInsideZ;
-
-			UE_LOG(LogUAVPlanning, Log, TEXT("[PathPlanner::IsPointInObstacle] Box: Point=%s, Center=%s, LocalPoint=%s, ExpandedExtents=%s, Inside=(%s,%s,%s)->%s"),
-				*Point.ToString(), *Obstacle.Center.ToString(), *LocalPoint.ToString(), *ExpandedExtents.ToString(),
-				bInsideX ? TEXT("Y") : TEXT("N"), bInsideY ? TEXT("Y") : TEXT("N"), bInsideZ ? TEXT("Y") : TEXT("N"),
-				bInside ? TEXT("YES") : TEXT("NO"));
 
 			return bInside;
 		}
@@ -142,16 +130,11 @@ bool UPathPlanner::IsPointInObstacle(const FVector& Point, const FObstacleInfo& 
 			bool bInsideVertical = FMath::Abs(LocalPoint.Z) < VerticalThreshold;
 			bool bInside = bInsideHorizontal && bInsideVertical;
 
-			UE_LOG(LogUAVPlanning, Log, TEXT("[PathPlanner::IsPointInObstacle] Cylinder: Point=%s, Center=%s, HorizDist=%.1f (Threshold=%.1f), VertDist=%.1f (Threshold=%.1f), Inside=(%s,%s)->%s"),
-				*Point.ToString(), *Obstacle.Center.ToString(), HorizontalDist, HorizontalThreshold, FMath::Abs(LocalPoint.Z), VerticalThreshold,
-				bInsideHorizontal ? TEXT("Y") : TEXT("N"), bInsideVertical ? TEXT("Y") : TEXT("N"),
-				bInside ? TEXT("YES") : TEXT("NO"));
-
 			return bInside;
 		}
 
 	default:
-		UE_LOG(LogUAVPlanning, Warning, TEXT("[PathPlanner::IsPointInObstacle] Unknown obstacle type: %d"), (int32)Obstacle.Type);
+		// UE_LOG(LogUAVPlanning, Warning, TEXT("[PathPlanner::IsPointInObstacle] Unknown obstacle type: %d"), (int32)Obstacle.Type);
 		return false;
 	}
 }

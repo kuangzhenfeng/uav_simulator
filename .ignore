@@ -1,8 +1,11 @@
+/.cache
+/.claude
 /.git
+/.lingma
 /.vscode
 /Content
 /DerivedDataCache
 /Docs
 /Intermediate
-/plans
 /Saved
+/Script

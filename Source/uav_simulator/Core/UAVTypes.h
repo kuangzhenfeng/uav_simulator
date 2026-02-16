@@ -213,6 +213,14 @@ struct FObstacleInfo
 	UPROPERTY(BlueprintReadWrite, Category = "Obstacle")
 	float SafetyMargin;
 
+	// 是否为感知检测到的障碍物（区别于预注册障碍物）
+	UPROPERTY(BlueprintReadWrite, Category = "Obstacle")
+	bool bIsPerceived;
+
+	// 最后一次被感知确认的时间戳
+	UPROPERTY(BlueprintReadWrite, Category = "Obstacle")
+	float LastPerceivedTime;
+
 	// 关联的Actor
 	UPROPERTY(BlueprintReadWrite, Category = "Obstacle")
 	TWeakObjectPtr<AActor> LinkedActor;
@@ -226,6 +234,8 @@ struct FObstacleInfo
 		, bIsDynamic(false)
 		, Velocity(FVector::ZeroVector)
 		, SafetyMargin(50.0f)
+		, bIsPerceived(false)
+		, LastPerceivedTime(0.0f)
 	{}
 
 	FObstacleInfo(int32 InID, EObstacleType InType, const FVector& InCenter, const FVector& InExtents)
@@ -237,6 +247,8 @@ struct FObstacleInfo
 		, bIsDynamic(false)
 		, Velocity(FVector::ZeroVector)
 		, SafetyMargin(50.0f)
+		, bIsPerceived(false)
+		, LastPerceivedTime(0.0f)
 	{}
 };
 

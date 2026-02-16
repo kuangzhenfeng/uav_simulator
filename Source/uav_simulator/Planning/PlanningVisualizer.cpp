@@ -223,6 +223,61 @@ void UPlanningVisualizer::ClearPersistentData()
 {
 	PersistentPath.Empty();
 	PersistentTrajectory.Clear();
+	bHasPersistentAvoidance = false;
+}
+
+void UPlanningVisualizer::DrawLocalAvoidance(const FVector& Position, const FLocalAvoidanceResult& Result, float ForceScale)
+{
+	if (!bEnableVisualization || !bShowLocalAvoidance || !GetWorld())
+	{
+		return;
+	}
+
+	// 绘制引力向量（绿色）
+	if (!Result.AttractiveForce.IsNearlyZero())
+	{
+		FVector AttEnd = Position + Result.AttractiveForce * ForceScale;
+		DrawDebugDirectionalArrow(GetWorld(), Position, AttEnd, 20.0f, FColor::Green, false, -1.0f, 0, 2.0f);
+	}
+
+	// 绘制斥力向量（红色）
+	if (!Result.RepulsiveForce.IsNearlyZero())
+	{
+		FVector RepEnd = Position + Result.RepulsiveForce * ForceScale;
+		DrawDebugDirectionalArrow(GetWorld(), Position, RepEnd, 20.0f, FColor::Red, false, -1.0f, 0, 2.0f);
+	}
+
+	// 绘制合力向量（黄色，加粗）
+	if (!Result.TotalForce.IsNearlyZero())
+	{
+		FVector TotalEnd = Position + Result.TotalForce * ForceScale;
+		DrawDebugDirectionalArrow(GetWorld(), Position, TotalEnd, 25.0f, FColor::Yellow, false, -1.0f, 0, 3.0f);
+	}
+
+	// 绘制修正方向（青色，较长箭头表示实际飞行方向）
+	if (Result.bNeedsCorrection && !Result.CorrectedDirection.IsNearlyZero())
+	{
+		FVector CorrEnd = Position + Result.CorrectedDirection * 200.0f;
+		DrawDebugDirectionalArrow(GetWorld(), Position, CorrEnd, 30.0f, FColor::Cyan, false, -1.0f, 0, 2.5f);
+	}
+
+	// Stuck 状态标记（紫色闪烁球）
+	if (Result.bStuck)
+	{
+		DrawDebugSphere(GetWorld(), Position, 50.0f, 8, FColor::Purple, false, -1.0f, 0, 3.0f);
+	}
+}
+
+void UPlanningVisualizer::SetPersistentLocalAvoidance(const FVector& Position, const FLocalAvoidanceResult& Result)
+{
+	PersistentAvoidancePosition = Position;
+	PersistentAvoidanceResult = Result;
+	bHasPersistentAvoidance = true;
+}
+
+void UPlanningVisualizer::ClearPersistentLocalAvoidance()
+{
+	bHasPersistentAvoidance = false;
 }
 
 void UPlanningVisualizer::DrawPersistentData()
@@ -235,5 +290,10 @@ void UPlanningVisualizer::DrawPersistentData()
 	if (PersistentTrajectory.bIsValid && PersistentTrajectory.Points.Num() >= 2)
 	{
 		DrawTrajectory(PersistentTrajectory, TrajectoryColor, -1.0f, false);
+	}
+
+	if (bHasPersistentAvoidance)
+	{
+		DrawLocalAvoidance(PersistentAvoidancePosition, PersistentAvoidanceResult);
 	}
 }

@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "../Core/UAVTypes.h"
+#include "../Planning/LocalAvoidance.h"
 #include "PlanningVisualizer.generated.h"
 
 /**
@@ -116,6 +117,27 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Planning Visualization")
 	void ClearPersistentData();
 
+	/**
+	 * 绘制局部避障力场向量（引力、斥力、合力）
+	 * @param Position 当前位置
+	 * @param Result APF 计算结果
+	 * @param ForceScale 力向量缩放系数
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Planning Visualization")
+	void DrawLocalAvoidance(const FVector& Position, const FLocalAvoidanceResult& Result, float ForceScale = 0.5f);
+
+	/**
+	 * 设置持久化局部避障数据（每帧绘制）
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Planning Visualization")
+	void SetPersistentLocalAvoidance(const FVector& Position, const FLocalAvoidanceResult& Result);
+
+	/**
+	 * 清除持久化局部避障数据
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Planning Visualization")
+	void ClearPersistentLocalAvoidance();
+
 protected:
 	// 是否启用可视化
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization Settings")
@@ -136,6 +158,10 @@ protected:
 	// 是否显示航点
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization Settings")
 	bool bShowWaypoints = true;
+
+	// 是否显示局部避障力场
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization Settings")
+	bool bShowLocalAvoidance = true;
 
 	// 路径颜色
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization Settings")
@@ -163,6 +189,11 @@ private:
 
 	// 持久化轨迹
 	FTrajectory PersistentTrajectory;
+
+	// 持久化局部避障数据
+	FVector PersistentAvoidancePosition;
+	FLocalAvoidanceResult PersistentAvoidanceResult;
+	bool bHasPersistentAvoidance = false;
 
 	// 绘制持久化数据
 	void DrawPersistentData();

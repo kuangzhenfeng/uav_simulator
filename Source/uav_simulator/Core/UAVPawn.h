@@ -17,6 +17,7 @@ class UTrajectoryTracker;
 class UObstacleManager;
 class UPlanningVisualizer;
 class UMissionComponent;
+class UObstacleDetector;
 
 /**
  * 无人机Pawn类
@@ -117,6 +118,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
 	UMissionComponent* GetMissionComponent() const { return MissionComponent; }
 
+	// 获取障碍物感知传感器
+	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
+	UObstacleDetector* GetObstacleDetector() const { return ObstacleDetectorComponent; }
+
 protected:
 	// 根组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
@@ -157,6 +162,10 @@ protected:
 	// 任务管理组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
 	TObjectPtr<UMissionComponent> MissionComponent;
+
+	// 障碍物感知传感器组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
+	TObjectPtr<UObstacleDetector> ObstacleDetectorComponent;
 
 	// 当前状态
 	UPROPERTY(BlueprintReadOnly, Category = "UAV State")

@@ -323,13 +323,7 @@ bool UAStarPathPlanner::IsValidGridCoord(const FIntVector& GridCoord) const
 bool UAStarPathPlanner::IsGridBlocked(const FIntVector& GridCoord) const
 {
 	FVector WorldPos = GridToWorld(GridCoord);
-	bool bBlocked = CheckCollision(WorldPos, 0.0f);
-	if (bBlocked)
-	{
-		UE_LOG(LogUAVPlanning, Log, TEXT("[A*::IsGridBlocked] Grid(%d,%d,%d) -> World=%s is BLOCKED"),
-			GridCoord.X, GridCoord.Y, GridCoord.Z, *WorldPos.ToString());
-	}
-	return bBlocked;
+	return CheckCollision(WorldPos, 0.0f);
 }
 
 void UAStarPathPlanner::ReconstructPath(FAStarNode* EndNode, TArray<FVector>& OutPath) const

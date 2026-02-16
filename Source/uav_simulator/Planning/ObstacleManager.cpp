@@ -3,6 +3,7 @@
 #include "ObstacleManager.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
+#include "Logging/LogVerbosity.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 
 UObstacleManager::UObstacleManager()
@@ -27,6 +28,12 @@ void UObstacleManager::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 	if (bAutoUpdateDynamicObstacles)
 	{
 		UpdateDynamicObstacles();
+	}
+
+	// 自动清理过期的感知障碍物
+	if (bAutoRemoveStalePerceived)
+	{
+		RemoveStalePerceivedObstacles(PerceivedObstacleMaxAge);
 	}
 
 	if (bShowDebug)
@@ -59,16 +66,16 @@ int32 UObstacleManager::RegisterObstacleFromActor(AActor* Actor, EObstacleType T
 		return -1;
 	}
 
-	FObstacleInfo Obstacle;
-	Obstacle.Type = Type;
-	Obstacle.Center = Actor->GetActorLocation();
-	Obstacle.Rotation = Actor->GetActorRotation();
-	Obstacle.SafetyMargin = SafetyMargin;
-	Obstacle.LinkedActor = Actor;
-
 	// 获取Actor的边界
 	FVector Origin, BoxExtent;
 	Actor->GetActorBounds(false, Origin, BoxExtent);
+
+	FObstacleInfo Obstacle;
+	Obstacle.Type = Type;
+	Obstacle.Center = Origin;
+	Obstacle.Rotation = Actor->GetActorRotation();
+	Obstacle.SafetyMargin = SafetyMargin;
+	Obstacle.LinkedActor = Actor;
 
 	switch (Type)
 	{
@@ -255,6 +262,127 @@ void UObstacleManager::UpdateDynamicObstacles()
 			Obstacle.Rotation = Actor->GetActorRotation();
 		}
 	}
+}
+
+// ========== 感知障碍物管理 ==========
+
+int32 UObstacleManager::RegisterPerceivedObstacle(const FObstacleInfo& Obstacle)
+{
+	FObstacleInfo NewObstacle = Obstacle;
+	NewObstacle.bIsPerceived = true;
+	NewObstacle.LastPerceivedTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+	return RegisterObstacle(NewObstacle);
+}
+
+int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObstacleType Type, float SafetyMargin)
+{
+	UE_LOG(LogUAVPlanning, Warning, TEXT("[ObstacleManager] Registering perceived obstacle from actor: %s"), *Actor->GetName());
+	if (!Actor)
+	{
+		return -1;
+	}
+
+	// 检查是否已注册
+	for (FObstacleInfo& Obstacle : Obstacles)
+	{
+		if (Obstacle.LinkedActor.Get() == Actor)
+		{
+			// 已存在，刷新时间戳
+			Obstacle.LastPerceivedTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+			return Obstacle.ObstacleID;
+		}
+	}
+
+	// 获取 Actor 的边界
+	FVector Origin, BoxExtent;
+	Actor->GetActorBounds(false, Origin, BoxExtent);
+
+	FObstacleInfo Obstacle;
+	Obstacle.Type = Type;
+	Obstacle.Center = Origin;
+	Obstacle.Rotation = Actor->GetActorRotation();
+	Obstacle.SafetyMargin = SafetyMargin;
+	Obstacle.LinkedActor = Actor;
+	Obstacle.bIsPerceived = true;
+
+	// 输出调试日志：Actor边界信息
+	UE_LOG(LogUAVPlanning, Warning, TEXT("[ObstacleManager] Actor Bounds: Origin=%s, Extent=%s"),
+		*Origin.ToString(), *BoxExtent.ToString());
+
+	switch (Type)
+	{
+	case EObstacleType::Sphere:
+		Obstacle.Extents = FVector(BoxExtent.GetMax());
+		break;
+	case EObstacleType::Box:
+		Obstacle.Extents = BoxExtent;
+		break;
+	case EObstacleType::Cylinder:
+		Obstacle.Extents = FVector(FMath::Max(BoxExtent.X, BoxExtent.Y), 0.0f, BoxExtent.Z);
+		break;
+	default:
+		Obstacle.Extents = BoxExtent;
+		break;
+	}
+
+	return RegisterPerceivedObstacle(Obstacle);
+}
+
+void UObstacleManager::RefreshPerceivedObstacle(int32 ObstacleID)
+{
+	for (FObstacleInfo& Obstacle : Obstacles)
+	{
+		if (Obstacle.ObstacleID == ObstacleID && Obstacle.bIsPerceived)
+		{
+			Obstacle.LastPerceivedTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+			return;
+		}
+	}
+}
+
+int32 UObstacleManager::RemoveStalePerceivedObstacles(float MaxAge)
+{
+	float CurrentTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+	int32 RemovedCount = 0;
+
+	for (int32 i = Obstacles.Num() - 1; i >= 0; --i)
+	{
+		if (Obstacles[i].bIsPerceived && (CurrentTime - Obstacles[i].LastPerceivedTime) > MaxAge)
+		{
+			UE_LOG(LogUAVPlanning, Log, TEXT("[ObstacleManager] Removing stale perceived obstacle: ID=%d, Age=%.1fs"),
+				Obstacles[i].ObstacleID, CurrentTime - Obstacles[i].LastPerceivedTime);
+			Obstacles.RemoveAt(i);
+			RemovedCount++;
+		}
+	}
+
+	return RemovedCount;
+}
+
+TArray<FObstacleInfo> UObstacleManager::GetPerceivedObstacles() const
+{
+	TArray<FObstacleInfo> Result;
+	for (const FObstacleInfo& Obstacle : Obstacles)
+	{
+		if (Obstacle.bIsPerceived)
+		{
+			Result.Add(Obstacle);
+		}
+	}
+	return Result;
+}
+
+TArray<FObstacleInfo> UObstacleManager::GetPreregisteredObstacles() const
+{
+	TArray<FObstacleInfo> Result;
+	for (const FObstacleInfo& Obstacle : Obstacles)
+	{
+		if (!Obstacle.bIsPerceived)
+		{
+			Result.Add(Obstacle);
+		}
+	}
+	return Result;
 }
 
 float UObstacleManager::CalculateDistanceToObstacle(const FVector& Point, const FObstacleInfo& Obstacle) const

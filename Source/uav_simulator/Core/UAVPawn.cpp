@@ -13,6 +13,7 @@
 #include "../Planning/ObstacleManager.h"
 #include "../Planning/PlanningVisualizer.h"
 #include "../Mission/MissionComponent.h"
+#include "../Sensors/ObstacleDetector.h"
 #include "../Utility/Debug.h"
 #include "GameFramework/PlayerController.h"
 
@@ -47,6 +48,9 @@ AUAVPawn::AUAVPawn()
 
 	// 创建任务管理组件
 	MissionComponent = CreateDefaultSubobject<UMissionComponent>(TEXT("MissionComponent"));
+
+	// 创建障碍物感知传感器组件
+	ObstacleDetectorComponent = CreateDefaultSubobject<UObstacleDetector>(TEXT("ObstacleDetector"));
 
 	// 初始化状态
 	CurrentState = FUAVState();

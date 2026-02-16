@@ -23,9 +23,3 @@
 ```shell
 .\Script\generate_clang_database.bat
 ```
-
-## 4.创建软链
-```shell
-mklink compile_commands.json .vscode\compileCommands_uav_simulator.json
-```
-

@@ -121,6 +121,51 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Obstacle Management")
 	void ScanForObstacles(const FVector& ScanCenter, float ScanRadius, const TArray<TSubclassOf<AActor>>& ActorClasses);
 
+	/**
+	 * 注册感知检测到的障碍物（标记为 bIsPerceived）
+	 * @param Obstacle 障碍物信息
+	 * @return 障碍物ID
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Perceived Obstacles")
+	int32 RegisterPerceivedObstacle(const FObstacleInfo& Obstacle);
+
+	/**
+	 * 从 Actor 注册感知障碍物
+	 * @param Actor 障碍物Actor
+	 * @param Type 障碍物类型
+	 * @param SafetyMargin 安全边距
+	 * @return 障碍物ID
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Perceived Obstacles")
+	int32 RegisterPerceivedObstacleFromActor(AActor* Actor, EObstacleType Type = EObstacleType::Sphere, float SafetyMargin = 50.0f);
+
+	/**
+	 * 刷新感知障碍物的时间戳（表示仍然被检测到）
+	 * @param ObstacleID 障碍物ID
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Perceived Obstacles")
+	void RefreshPerceivedObstacle(int32 ObstacleID);
+
+	/**
+	 * 移除超时未被重新感知的障碍物
+	 * @param MaxAge 最大存活时间（秒），超过此时间未刷新的感知障碍物将被移除
+	 * @return 移除的障碍物数量
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Perceived Obstacles")
+	int32 RemoveStalePerceivedObstacles(float MaxAge = 5.0f);
+
+	/**
+	 * 获取所有感知障碍物
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Perceived Obstacles")
+	TArray<FObstacleInfo> GetPerceivedObstacles() const;
+
+	/**
+	 * 获取所有预注册障碍物（非感知）
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Perceived Obstacles")
+	TArray<FObstacleInfo> GetPreregisteredObstacles() const;
+
 	// 碰撞警告事件
 	UPROPERTY(BlueprintAssignable, Category = "Obstacle Management")
 	FOnCollisionWarning OnCollisionWarning;
@@ -141,6 +186,14 @@ protected:
 	// 是否自动更新动态障碍物
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Obstacle Settings")
 	bool bAutoUpdateDynamicObstacles = true;
+
+	// 是否自动清理过期的感知障碍物
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Obstacle Settings")
+	bool bAutoRemoveStalePerceived = true;
+
+	// 感知障碍物最大存活时间 (秒)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Obstacle Settings", meta = (EditCondition = "bAutoRemoveStalePerceived"))
+	float PerceivedObstacleMaxAge = 5.0f;
 
 	// 碰撞警告距离 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Obstacle Settings")

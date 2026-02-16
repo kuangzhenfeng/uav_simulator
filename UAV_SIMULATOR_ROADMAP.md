@@ -225,21 +225,52 @@
   - Physics 模块：11 个测试
   - Planning 模块：42 个测试
 
-### Phase 7: 多机协同
+### Phase 7: 路径规划与实时避障 ✅ (已完成)
+- [x] Global Planner（全局路径规划）
+  - 改写 `ProcessPresetWaypoints`：逐段 A* 避障 + 全局路径精简 + 轨迹优化
+  - 新增 `PlanMultiSegmentPath()` 方法：多航段规划、拼接、全局 line-of-sight 精简
+  - 新增 `CreatePathPlanner()` 方法：提取规划器创建逻辑，消除重复代码
+  - 更新文件：`AI/Services/BTService_UAVPathPlanning.h/cpp`
+- [x] Local Planner（局部实时避障）
+  - 实现人工势场法（APF）局部避障器
+  - 目标引力 + 障碍物斥力 → 合力修正速度方向
+  - 替换 `CheckCollisionAndAvoid` 中的完整 A* 重规划
+  - 仅当 Local Planner 连续失败时触发 Global Replan
+  - 新增文件：`Planning/LocalAvoidance.h/cpp`
+  - 更新文件：`AI/Services/BTService_UAVPathPlanning.h/cpp`
+- [x] 感知模拟
+  - 基于 UE5 射线检测（Raycast）模拟雷达/激光雷达扫描
+  - 区分已知障碍物（ObstacleManager 预注册）和未知障碍物（实时感知）
+  - 可配置扫描参数：扫描范围、角度分辨率、更新频率
+  - 新增文件：`Sensors/ObstacleDetector.h/cpp`
+  - 更新文件：`Planning/ObstacleManager.h/cpp`（支持动态添加感知障碍物）
+- [x] 可视化与调试
+  - 可视化 Global Path（全局规划路径）和 Local Avoidance（局部避障向量）
+  - 可视化感知范围和检测到的障碍物
+  - 更新文件：`Planning/PlanningVisualizer.h/cpp`
+- [x] 单元测试
+  - LocalAvoidance 测试：势场计算、合力方向、边界情况（6 个测试）
+  - PlanMultiSegmentPath 测试：多段规划、失败回退、路径精简（5 个测试）
+  - ObstacleDetector 测试：射线检测、障碍物分类（5 个测试）
+  - 新增文件：`Tests/Planning/LocalAvoidanceTest.cpp`
+  - 新增文件：`Tests/Planning/MultiSegmentPlanningTest.cpp`
+  - 新增文件：`Tests/Sensors/ObstacleDetectorTest.cpp`
+
+### Phase 8: 多机协同
 - [ ] 实现多无人机管理系统
 - [ ] 添加编队控制算法
 - [ ] 实现通信模拟
 - [ ] 添加碰撞避免
 - [ ] 实现任务分配算法
 
-### Phase 8: 任务规划
+### Phase 9: 任务规划
 - [ ] 设计任务描述语言
 - [ ] 实现任务解析器
 - [ ] 添加任务调度器
 - [ ] 实现任务监控系统
 - [ ] 添加重规划功能
 
-### Phase 9: 环境与优化
+### Phase 10: 环境与优化
 - [ ] 完善环境系统（风场、天气）
 - [ ] 添加复杂场景（城市、森林）
 - [ ] 性能优化
