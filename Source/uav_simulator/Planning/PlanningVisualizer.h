@@ -5,7 +5,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "../Core/UAVTypes.h"
-#include "../Planning/LocalAvoidance.h"
+#include "../Planning/NMPCAvoidance.h"
 #include "PlanningVisualizer.generated.h"
 
 /**
@@ -118,25 +118,24 @@ public:
 	void ClearPersistentData();
 
 	/**
-	 * 绘制局部避障力场向量（引力、斥力、合力）
+	 * 绘制 NMPC 预测轨迹和避障信息
 	 * @param Position 当前位置
-	 * @param Result APF 计算结果
-	 * @param ForceScale 力向量缩放系数
+	 * @param Result NMPC 计算结果
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Planning Visualization")
-	void DrawLocalAvoidance(const FVector& Position, const FLocalAvoidanceResult& Result, float ForceScale = 0.5f);
+	void DrawNMPCPrediction(const FVector& Position, const FNMPCAvoidanceResult& Result);
 
 	/**
-	 * 设置持久化局部避障数据（每帧绘制）
+	 * 设置持久化 NMPC 预测数据（每帧绘制）
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Planning Visualization")
-	void SetPersistentLocalAvoidance(const FVector& Position, const FLocalAvoidanceResult& Result);
+	void SetPersistentNMPCPrediction(const FVector& Position, const FNMPCAvoidanceResult& Result);
 
 	/**
-	 * 清除持久化局部避障数据
+	 * 清除持久化 NMPC 预测数据
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Planning Visualization")
-	void ClearPersistentLocalAvoidance();
+	void ClearPersistentNMPCPrediction();
 
 protected:
 	// 是否启用可视化
@@ -159,9 +158,9 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization Settings")
 	bool bShowWaypoints = true;
 
-	// 是否显示局部避障力场
+	// 是否显示 NMPC 预测轨迹
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization Settings")
-	bool bShowLocalAvoidance = true;
+	bool bShowNMPCPrediction = true;
 
 	// 路径颜色
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization Settings")
@@ -190,9 +189,9 @@ private:
 	// 持久化轨迹
 	FTrajectory PersistentTrajectory;
 
-	// 持久化局部避障数据
+	// 持久化 NMPC 预测数据
 	FVector PersistentAvoidancePosition;
-	FLocalAvoidanceResult PersistentAvoidanceResult;
+	FNMPCAvoidanceResult PersistentAvoidanceResult;
 	bool bHasPersistentAvoidance = false;
 
 	// 绘制持久化数据

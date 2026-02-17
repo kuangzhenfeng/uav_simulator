@@ -15,7 +15,6 @@ UObstacleManager::UObstacleManager()
 	CollisionWarningDistance = 200.0f;
 	bShowDebug = false;
 }
-
 void UObstacleManager::BeginPlay()
 {
 	Super::BeginPlay();
@@ -27,7 +26,7 @@ void UObstacleManager::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 
 	if (bAutoUpdateDynamicObstacles)
 	{
-		UpdateDynamicObstacles();
+		UpdateDynamicObstacles(DeltaTime);
 	}
 
 	// 自动清理过期的感知障碍物
@@ -41,7 +40,6 @@ void UObstacleManager::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 		DrawDebugObstacles();
 	}
 }
-
 int32 UObstacleManager::RegisterObstacle(const FObstacleInfo& Obstacle)
 {
 	FObstacleInfo NewObstacle = Obstacle;
@@ -65,8 +63,12 @@ int32 UObstacleManager::RegisterObstacleFromActor(AActor* Actor, EObstacleType T
 	{
 		return -1;
 	}
+	if (Actor == GetOwner())
+	{
+		return -1;
+	}
 
-	// 获取Actor的边界
+	// 获取 Actor 的边界
 	FVector Origin, BoxExtent;
 	Actor->GetActorBounds(false, Origin, BoxExtent);
 
@@ -76,27 +78,24 @@ int32 UObstacleManager::RegisterObstacleFromActor(AActor* Actor, EObstacleType T
 	Obstacle.Rotation = Actor->GetActorRotation();
 	Obstacle.SafetyMargin = SafetyMargin;
 	Obstacle.LinkedActor = Actor;
+	Obstacle.Extents = ComputeObstacleExtentsFromBounds(Type, BoxExtent);
 
+	return RegisterObstacle(Obstacle);
+}
+
+FVector UObstacleManager::ComputeObstacleExtentsFromBounds(EObstacleType Type, const FVector& BoxExtent) const
+{
 	switch (Type)
 	{
 	case EObstacleType::Sphere:
-		Obstacle.Extents = FVector(BoxExtent.GetMax());
-		break;
-
+		return FVector(BoxExtent.GetMax());
 	case EObstacleType::Box:
-		Obstacle.Extents = BoxExtent;
-		break;
-
+		return BoxExtent;
 	case EObstacleType::Cylinder:
-		Obstacle.Extents = FVector(FMath::Max(BoxExtent.X, BoxExtent.Y), 0.0f, BoxExtent.Z);
-		break;
-
+		return FVector(FMath::Max(BoxExtent.X, BoxExtent.Y), 0.0f, BoxExtent.Z);
 	default:
-		Obstacle.Extents = BoxExtent;
-		break;
+		return BoxExtent;
 	}
-
-	return RegisterObstacle(Obstacle);
 }
 
 bool UObstacleManager::RemoveObstacle(int32 ObstacleID)
@@ -251,15 +250,29 @@ void UObstacleManager::ScanForObstacles(const FVector& ScanCenter, float ScanRad
 	}
 }
 
-void UObstacleManager::UpdateDynamicObstacles()
+void UObstacleManager::UpdateDynamicObstacles(float DeltaTime)
 {
 	for (FObstacleInfo& Obstacle : Obstacles)
 	{
 		if (Obstacle.bIsDynamic && Obstacle.LinkedActor.IsValid())
 		{
 			AActor* Actor = Obstacle.LinkedActor.Get();
-			Obstacle.Center = Actor->GetActorLocation();
+			FVector Origin, BoxExtent;
+			Actor->GetActorBounds(false, Origin, BoxExtent);
+
+			const FVector PreviousCenter = Obstacle.Center;
+			Obstacle.Center = Origin;
 			Obstacle.Rotation = Actor->GetActorRotation();
+			Obstacle.Extents = ComputeObstacleExtentsFromBounds(Obstacle.Type, BoxExtent);
+
+			if (DeltaTime > KINDA_SMALL_NUMBER)
+			{
+				Obstacle.Velocity = (Obstacle.Center - PreviousCenter) / DeltaTime;
+			}
+			else
+			{
+				Obstacle.Velocity = Actor->GetVelocity();
+			}
 		}
 	}
 }
@@ -276,26 +289,52 @@ int32 UObstacleManager::RegisterPerceivedObstacle(const FObstacleInfo& Obstacle)
 
 int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObstacleType Type, float SafetyMargin)
 {
-	UE_LOG(LogUAVPlanning, Warning, TEXT("[ObstacleManager] Registering perceived obstacle from actor: %s"), *Actor->GetName());
 	if (!Actor)
 	{
 		return -1;
 	}
+	if (Actor == GetOwner())
+	{
+		return -1;
+	}
+	UE_LOG(LogUAVPlanning, Warning, TEXT("[ObstacleManager] Registering perceived obstacle from actor: %s"), *Actor->GetName());
+
+	FVector Origin, BoxExtent;
+	Actor->GetActorBounds(false, Origin, BoxExtent);
+	const float CurrentTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 
 	// 检查是否已注册
 	for (FObstacleInfo& Obstacle : Obstacles)
 	{
 		if (Obstacle.LinkedActor.Get() == Actor)
 		{
-			// 已存在，刷新时间戳
-			Obstacle.LastPerceivedTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+			const FVector PrevCenter = Obstacle.Center;
+			const float PrevTime = Obstacle.LastPerceivedTime;
+			const float DeltaTime = CurrentTime - PrevTime;
+
+			Obstacle.Type = Type;
+			Obstacle.Center = Origin;
+			Obstacle.Rotation = Actor->GetActorRotation();
+			Obstacle.Extents = ComputeObstacleExtentsFromBounds(Type, BoxExtent);
+			Obstacle.SafetyMargin = SafetyMargin;
+			Obstacle.bIsPerceived = true;
+			Obstacle.bIsDynamic = true;
+			Obstacle.LastPerceivedTime = CurrentTime;
+
+			if (DeltaTime > KINDA_SMALL_NUMBER)
+			{
+				Obstacle.Velocity = (Obstacle.Center - PrevCenter) / DeltaTime;
+			}
+			else
+			{
+				Obstacle.Velocity = Actor->GetVelocity();
+			}
+
+			UE_LOG(LogUAVPlanning, Log, TEXT("[ObstacleManager] Refreshed perceived obstacle: ID=%d, Center=%s, Extents=%s, Velocity=%s"),
+				Obstacle.ObstacleID, *Obstacle.Center.ToString(), *Obstacle.Extents.ToString(), *Obstacle.Velocity.ToString());
 			return Obstacle.ObstacleID;
 		}
 	}
-
-	// 获取 Actor 的边界
-	FVector Origin, BoxExtent;
-	Actor->GetActorBounds(false, Origin, BoxExtent);
 
 	FObstacleInfo Obstacle;
 	Obstacle.Type = Type;
@@ -304,26 +343,13 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 	Obstacle.SafetyMargin = SafetyMargin;
 	Obstacle.LinkedActor = Actor;
 	Obstacle.bIsPerceived = true;
+	Obstacle.bIsDynamic = true;
+	Obstacle.Velocity = Actor->GetVelocity();
+	Obstacle.Extents = ComputeObstacleExtentsFromBounds(Type, BoxExtent);
 
 	// 输出调试日志：Actor边界信息
 	UE_LOG(LogUAVPlanning, Warning, TEXT("[ObstacleManager] Actor Bounds: Origin=%s, Extent=%s"),
 		*Origin.ToString(), *BoxExtent.ToString());
-
-	switch (Type)
-	{
-	case EObstacleType::Sphere:
-		Obstacle.Extents = FVector(BoxExtent.GetMax());
-		break;
-	case EObstacleType::Box:
-		Obstacle.Extents = BoxExtent;
-		break;
-	case EObstacleType::Cylinder:
-		Obstacle.Extents = FVector(FMath::Max(BoxExtent.X, BoxExtent.Y), 0.0f, BoxExtent.Z);
-		break;
-	default:
-		Obstacle.Extents = BoxExtent;
-		break;
-	}
 
 	return RegisterPerceivedObstacle(Obstacle);
 }

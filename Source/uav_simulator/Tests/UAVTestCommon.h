@@ -31,6 +31,7 @@ namespace UAVTestCategories
 	static const TCHAR* TrajectoryOptimizer = TEXT("UAVSimulator.Planning.TrajectoryOptimizer");
 	static const TCHAR* TrajectoryTracker = TEXT("UAVSimulator.Planning.TrajectoryTracker");
 	static const TCHAR* ObstacleManager = TEXT("UAVSimulator.Planning.ObstacleManager");
+	static const TCHAR* NMPCAvoidance = TEXT("UAVSimulator.Planning.NMPCAvoidance");
 
 	// Control 子分类
 	static const TCHAR* AttitudeController = TEXT("UAVSimulator.Control.AttitudeController");

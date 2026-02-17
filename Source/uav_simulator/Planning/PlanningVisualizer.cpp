@@ -226,56 +226,66 @@ void UPlanningVisualizer::ClearPersistentData()
 	bHasPersistentAvoidance = false;
 }
 
-void UPlanningVisualizer::DrawLocalAvoidance(const FVector& Position, const FLocalAvoidanceResult& Result, float ForceScale)
+void UPlanningVisualizer::DrawNMPCPrediction(const FVector& Position, const FNMPCAvoidanceResult& Result)
 {
-	if (!bEnableVisualization || !bShowLocalAvoidance || !GetWorld())
+	if (!bEnableVisualization || !bShowNMPCPrediction || !GetWorld())
 	{
 		return;
 	}
 
-	// 绘制引力向量（绿色）
-	if (!Result.AttractiveForce.IsNearlyZero())
+	// 绘制预测轨迹线（橙色）
+	if (Result.PredictedTrajectory.Num() >= 2)
 	{
-		FVector AttEnd = Position + Result.AttractiveForce * ForceScale;
-		DrawDebugDirectionalArrow(GetWorld(), Position, AttEnd, 20.0f, FColor::Green, false, -1.0f, 0, 2.0f);
+		for (int32 i = 1; i < Result.PredictedTrajectory.Num(); ++i)
+		{
+			const FNMPCPredictionStep& Prev = Result.PredictedTrajectory[i - 1];
+			const FNMPCPredictionStep& Curr = Result.PredictedTrajectory[i];
+			DrawDebugLine(GetWorld(), Prev.Position, Curr.Position, FColor::Orange, false, -1.0f, 0, 2.5f);
+
+			// 障碍物代价越高，球体越红越大
+			float CostRatio = FMath::Clamp(Curr.ObstacleCost / 10.0f, 0.0f, 1.0f);
+			uint8 R = FMath::Lerp(255, 255, CostRatio);
+			uint8 G = FMath::Lerp(165, 0, CostRatio);
+			uint8 B = 0;
+			float Radius = FMath::Lerp(5.0f, 20.0f, CostRatio);
+			DrawDebugPoint(GetWorld(), Curr.Position, Radius, FColor(R, G, B), false, -1.0f);
+		}
+
+		// 绘制控制输入箭头（青色，每隔几步显示一次）
+		int32 Step = FMath::Max(1, Result.PredictedTrajectory.Num() / 5);
+		for (int32 i = 0; i < Result.PredictedTrajectory.Num(); i += Step)
+		{
+			const FNMPCPredictionStep& PredStep = Result.PredictedTrajectory[i];
+			if (!PredStep.ControlInput.IsNearlyZero())
+			{
+				FVector ArrowEnd = PredStep.Position + PredStep.ControlInput * 0.5f;
+				DrawDebugDirectionalArrow(GetWorld(), PredStep.Position, ArrowEnd, 15.0f, FColor::Cyan, false, -1.0f, 0, 1.5f);
+			}
+		}
 	}
 
-	// 绘制斥力向量（红色）
-	if (!Result.RepulsiveForce.IsNearlyZero())
+	// 绘制修正目标（黄色球）
+	if (Result.bNeedsCorrection)
 	{
-		FVector RepEnd = Position + Result.RepulsiveForce * ForceScale;
-		DrawDebugDirectionalArrow(GetWorld(), Position, RepEnd, 20.0f, FColor::Red, false, -1.0f, 0, 2.0f);
+		DrawDebugSphere(GetWorld(), Result.CorrectedTarget, 25.0f, 8, FColor::Yellow, false, -1.0f, 0, 2.0f);
+		DrawDebugDirectionalArrow(GetWorld(), Position, Result.CorrectedTarget, 25.0f, FColor::Yellow, false, -1.0f, 0, 2.5f);
 	}
 
-	// 绘制合力向量（黄色，加粗）
-	if (!Result.TotalForce.IsNearlyZero())
-	{
-		FVector TotalEnd = Position + Result.TotalForce * ForceScale;
-		DrawDebugDirectionalArrow(GetWorld(), Position, TotalEnd, 25.0f, FColor::Yellow, false, -1.0f, 0, 3.0f);
-	}
-
-	// 绘制修正方向（青色，较长箭头表示实际飞行方向）
-	if (Result.bNeedsCorrection && !Result.CorrectedDirection.IsNearlyZero())
-	{
-		FVector CorrEnd = Position + Result.CorrectedDirection * 200.0f;
-		DrawDebugDirectionalArrow(GetWorld(), Position, CorrEnd, 30.0f, FColor::Cyan, false, -1.0f, 0, 2.5f);
-	}
-
-	// Stuck 状态标记（紫色闪烁球）
+	// Stuck 状态标记（紫色球）
 	if (Result.bStuck)
 	{
 		DrawDebugSphere(GetWorld(), Position, 50.0f, 8, FColor::Purple, false, -1.0f, 0, 3.0f);
 	}
 }
 
-void UPlanningVisualizer::SetPersistentLocalAvoidance(const FVector& Position, const FLocalAvoidanceResult& Result)
+void UPlanningVisualizer::SetPersistentNMPCPrediction(const FVector& Position, const FNMPCAvoidanceResult& Result)
 {
 	PersistentAvoidancePosition = Position;
 	PersistentAvoidanceResult = Result;
 	bHasPersistentAvoidance = true;
 }
 
-void UPlanningVisualizer::ClearPersistentLocalAvoidance()
+void UPlanningVisualizer::ClearPersistentNMPCPrediction()
 {
 	bHasPersistentAvoidance = false;
 }
@@ -294,6 +304,6 @@ void UPlanningVisualizer::DrawPersistentData()
 
 	if (bHasPersistentAvoidance)
 	{
-		DrawLocalAvoidance(PersistentAvoidancePosition, PersistentAvoidanceResult);
+		DrawNMPCPrediction(PersistentAvoidancePosition, PersistentAvoidanceResult);
 	}
 }

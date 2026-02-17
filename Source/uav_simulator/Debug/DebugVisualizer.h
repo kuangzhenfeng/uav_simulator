@@ -99,6 +99,9 @@ private:
 	// 持久化轨迹
 	FTrajectory PersistentTrajectory;
 
+	// 跟踪误差文字绘制计时器
+	float TrackingTextTimer = 0.f;
+
 	// 绘制持久化轨迹
 	void DrawPersistentTrajectory();
 };

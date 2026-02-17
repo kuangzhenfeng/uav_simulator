@@ -6,7 +6,7 @@
 
 UAStarPathPlanner::UAStarPathPlanner()
 {
-	GridResolution = 50.0f;
+
 }
 
 bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArray<FVector>& OutPath)

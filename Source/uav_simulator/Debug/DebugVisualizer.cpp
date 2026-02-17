@@ -141,11 +141,17 @@ void UDebugVisualizer::DrawTrackingState(const FTrajectoryPoint& DesiredState, c
 			FColor::Cyan, false, -1.0f, 0, 2.0f);
 	}
 
-	// 显示跟踪误差
-	float TrackingError = FVector::Dist(CurrentPosition, DesiredState.Position);
-	FString ErrorText = FString::Printf(TEXT("Error: %.1f cm"), TrackingError);
-	DrawDebugString(GetWorld(), DesiredState.Position + FVector(0, 0, 30), ErrorText, nullptr,
-		TrackingError > 50.0f ? FColor::Red : FColor::Green, -1.0f, true);
+	// 显示跟踪误差（降低文字绘制频率）
+	constexpr float TextDrawInterval = 0.5f;
+	TrackingTextTimer += GetWorld()->GetDeltaSeconds();
+	if (TrackingTextTimer >= TextDrawInterval)
+	{
+		TrackingTextTimer = 0.f;
+		float TrackingError = FVector::Dist(CurrentPosition, DesiredState.Position);
+		FString ErrorText = FString::Printf(TEXT("Error: %.1f cm"), TrackingError);
+		DrawDebugString(GetWorld(), DesiredState.Position + FVector(0, 0, 30), ErrorText, nullptr,
+			TrackingError > 50.0f ? FColor::Red : FColor::Green, TextDrawInterval, true);
+	}
 }
 
 void UDebugVisualizer::DrawObstacles(const TArray<FObstacleInfo>& Obstacles, FColor Color, float Duration)

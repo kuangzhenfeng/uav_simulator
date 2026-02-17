@@ -208,7 +208,10 @@ private:
 	int32 NextObstacleID;
 
 	// 更新动态障碍物位置
-	void UpdateDynamicObstacles();
+	void UpdateDynamicObstacles(float DeltaTime);
+
+	// 根据障碍物类型将 Actor 包围盒尺寸转换为障碍物尺寸。
+	FVector ComputeObstacleExtentsFromBounds(EObstacleType Type, const FVector& BoxExtent) const;
 
 	// 计算点到障碍物的距离
 	float CalculateDistanceToObstacle(const FVector& Point, const FObstacleInfo& Obstacle) const;

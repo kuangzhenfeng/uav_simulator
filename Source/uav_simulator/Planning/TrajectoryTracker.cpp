@@ -114,8 +114,14 @@ void UTrajectoryTracker::Reset()
 
 FTrajectoryPoint UTrajectoryTracker::GetDesiredState(float CurrentTime) const
 {
+	// Override 仅在使用内部计时时生效（UAVPawn::UpdateController 的调用路径）
+	// 显式传入时间时返回原始轨迹插值（NMPC 参考点采样路径）
 	if (CurrentTime < 0.0f)
 	{
+		if (bHasDesiredStateOverride)
+		{
+			return OverrideDesiredState;
+		}
 		CurrentTime = TrackingTime;
 	}
 
@@ -202,4 +208,15 @@ FTrajectoryPoint UTrajectoryTracker::InterpolateTrajectory(float Time) const
 	Result.Yaw = FMath::Lerp(P0.Yaw, P1.Yaw, Alpha);
 
 	return Result;
+}
+
+void UTrajectoryTracker::SetDesiredStateOverride(const FTrajectoryPoint& InOverrideState)
+{
+	OverrideDesiredState = InOverrideState;
+	bHasDesiredStateOverride = true;
+}
+
+void UTrajectoryTracker::ClearDesiredStateOverride()
+{
+	bHasDesiredStateOverride = false;
 }

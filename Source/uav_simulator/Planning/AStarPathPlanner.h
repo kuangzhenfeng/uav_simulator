@@ -75,7 +75,7 @@ public:
 protected:
 	// 网格分辨率 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "A* Settings")
-	float GridResolution = 50.0f;
+	float GridResolution = 100.0f;
 
 	// 是否允许对角线移动
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "A* Settings")

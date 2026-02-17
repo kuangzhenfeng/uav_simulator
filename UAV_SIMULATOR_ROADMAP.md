@@ -232,11 +232,13 @@
   - 新增 `CreatePathPlanner()` 方法：提取规划器创建逻辑，消除重复代码
   - 更新文件：`AI/Services/BTService_UAVPathPlanning.h/cpp`
 - [x] Local Planner（局部实时避障）
-  - 实现人工势场法（APF）局部避障器
-  - 目标引力 + 障碍物斥力 → 合力修正速度方向
-  - 替换 `CheckCollisionAndAvoid` 中的完整 A* 重规划
+  - 实现 NMPC（非线性模型预测控制）局部避障器
+  - 6-状态点质量模型: `x = [px, py, pz, vx, vy, vz]`，控制向量: `u = [ax, ay, az]`
+  - 代价函数: 参考跟踪 + 速度跟踪 + 控制代价 + 指数势垒障碍物代价 + 终端代价
+  - 投影梯度下降求解器 + 有限差分梯度 + 回溯线搜索 + 温启动
+  - 从 TrajectoryTracker 采样参考轨迹点，支持动态障碍物预测
   - 仅当 Local Planner 连续失败时触发 Global Replan
-  - 新增文件：`Planning/LocalAvoidance.h/cpp`
+  - 新增文件：`Planning/NMPCAvoidance.h/cpp`
   - 更新文件：`AI/Services/BTService_UAVPathPlanning.h/cpp`
 - [x] 感知模拟
   - 基于 UE5 射线检测（Raycast）模拟雷达/激光雷达扫描
@@ -245,30 +247,49 @@
   - 新增文件：`Sensors/ObstacleDetector.h/cpp`
   - 更新文件：`Planning/ObstacleManager.h/cpp`（支持动态添加感知障碍物）
 - [x] 可视化与调试
-  - 可视化 Global Path（全局规划路径）和 Local Avoidance（局部避障向量）
+  - 可视化 Global Path（全局规划路径）和 NMPC 预测轨迹（局部避障）
   - 可视化感知范围和检测到的障碍物
   - 更新文件：`Planning/PlanningVisualizer.h/cpp`
 - [x] 单元测试
-  - LocalAvoidance 测试：势场计算、合力方向、边界情况（6 个测试）
+  - NMPCAvoidance 测试：前向仿真、代价计算、梯度下降、障碍物避障、温启动、Stuck检测（13 个测试）
   - PlanMultiSegmentPath 测试：多段规划、失败回退、路径精简（5 个测试）
   - ObstacleDetector 测试：射线检测、障碍物分类（5 个测试）
-  - 新增文件：`Tests/Planning/LocalAvoidanceTest.cpp`
+  - 新增文件：`Tests/Planning/NMPCAvoidanceTest.cpp`
   - 新增文件：`Tests/Planning/MultiSegmentPlanningTest.cpp`
   - 新增文件：`Tests/Sensors/ObstacleDetectorTest.cpp`
 
-### Phase 8: 多机协同
-- [ ] 实现多无人机管理系统
-- [ ] 添加编队控制算法
-- [ ] 实现通信模拟
-- [ ] 添加碰撞避免
-- [ ] 实现任务分配算法
+### Phase 8: 多机协同与安全滤波
+- [ ] 集中式联合轨迹优化
+  - 多机 NMPC：将单机 NMPC 扩展为联合状态空间，同时优化所有 UAV 的控制序列
+  - 硬约束：机间最小安全距离、通信范围、动力学可行性
+  - 联合代价函数：任务目标 + 编队保持 + 能耗均衡
+- [ ] CBF-QP 安全滤波
+  - Control Barrier Function (CBF) 定义机间安全集
+  - QP (Quadratic Programming) 实时滤波：在 NMPC 输出上叠加安全约束
+  - 保证前向不变性：任意时刻满足安全距离约束
+- [ ] 通信模拟
+  - 实现多机状态广播与邻居发现
+  - 模拟通信延迟、丢包、带宽限制
+  - 支持集中式（地面站）和分布式（机间）通信拓扑
+- [ ] 编队控制
+  - 基于联合 NMPC 的编队保持与队形变换
+  - 支持预定义队形：线形、V 形、环形
+  - 动态队形切换与障碍物穿越
 
-### Phase 9: 任务规划
-- [ ] 设计任务描述语言
-- [ ] 实现任务解析器
-- [ ] 添加任务调度器
-- [ ] 实现任务监控系统
-- [ ] 添加重规划功能
+### Phase 9: 任务分配与联合优化
+- [ ] 任务分配（MILP/MIQP/MINLP）
+  - Mixed-Integer 优化：将任务分配建模为 MILP/MIQP/MINLP 问题
+  - 决策变量：任务-UAV 分配矩阵、任务执行顺序
+  - 约束：UAV 能力、载荷、续航、时间窗口
+  - 目标：最小化总任务完成时间 / 最大化覆盖率 / 能耗均衡
+- [ ] 联合轨迹优化与任务分配
+  - 将任务分配与轨迹优化耦合为统一优化问题
+  - 分层求解：上层 MILP 分配 → 下层联合 NMPC 轨迹优化
+  - 迭代反馈：轨迹代价反馈给任务分配层进行重优化
+- [ ] 任务监控与重规划
+  - 实时任务进度监控与异常检测
+  - 动态重分配：UAV 故障、新任务插入、环境变化时触发重规划
+  - 支持优先级调度和抢占式任务切换
 
 ### Phase 10: 环境与优化
 - [ ] 完善环境系统（风场、天气）
@@ -329,7 +350,7 @@ Source/uav_simulator/
 │   ├── TrajectoryTracker.h/cpp     # 轨迹跟踪
 │   ├── ObstacleManager.h/cpp       # 障碍物管理
 │   ├── PlanningVisualizer.h/cpp    # 规划可视化
-│   └── ObstacleAvoidance.h/cpp     # 避障
+│   └── NMPCAvoidance.h/cpp         # NMPC 局部避障
 ├── Mission/
 │   ├── MissionTypes.h              # 任务数据结构
 │   └── MissionComponent.h/cpp      # 任务管理组件

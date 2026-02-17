@@ -44,7 +44,7 @@ void UObstacleDetector::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		PerformScan();
 	}
 
-	if (bShowDebugTraces || bShowDetectedObstacles)
+	if (bShowDebugTraces || bShowDetectedObstacles || bShowPointCloud)
 	{
 		DrawDebugInfo();
 	}
@@ -58,12 +58,13 @@ void UObstacleDetector::UpdateSensor(const FUAVState& TrueState, float DeltaTime
 TArray<FDetectedObstacle> UObstacleDetector::PerformScan()
 {
 	// 执行射线扫描
-	TArray<FHitResult> HitResults = PerformRaycastScan();
+	CachedHitResults = PerformRaycastScan();
+	TArray<FHitResult>& HitResults = CachedHitResults;
 
 	// 将命中点聚类为障碍物
 	DetectedObstacles = ClusterHitResults(HitResults);
 
-	// 自动注册未知障碍物
+	// 自动注册未知障碍物，并刷新已注册障碍物的时间戳
 	if (bAutoRegisterObstacles && ObstacleManagerRef)
 	{
 		for (FDetectedObstacle& Obstacle : DetectedObstacles)
@@ -72,7 +73,24 @@ TArray<FDetectedObstacle> UObstacleDetector::PerformScan()
 			{
 				RegisterDetectedObstacle(Obstacle);
 			}
+			else if (Obstacle.RegisteredObstacleID > 0)
+			{
+				ObstacleManagerRef->RefreshPerceivedObstacle(Obstacle.RegisteredObstacleID);
+			}
 		}
+	}
+
+	// 累积点云缓存
+	if (bShowPointCloud)
+	{
+		const float CurrentTime = GetWorld()->GetTimeSeconds();
+		for (const FHitResult& Hit : CachedHitResults)
+		{
+			PointCloudCache.Emplace(Hit.ImpactPoint, CurrentTime);
+		}
+		PointCloudCache.RemoveAll([CurrentTime, this](const TPair<FVector, float>& P) {
+			return (CurrentTime - P.Value) > PointCloudLifetime;
+		});
 	}
 
 	return DetectedObstacles;
@@ -156,6 +174,23 @@ TArray<FDetectedObstacle> UObstacleDetector::ClusterHitResults(const TArray<FHit
 
 		if (!bFoundCluster)
 		{
+			// 地面过滤
+			if (bFilterGroundActors)
+			{
+				FVector Origin, BoxExtent;
+				HitActor->GetActorBounds(false, Origin, BoxExtent);
+				float ActorTop = Origin.Z + BoxExtent.Z;
+				FVector ScanOrigin = GetOwner()->GetActorLocation();
+				if (ActorTop < ScanOrigin.Z)
+				{
+					continue;
+				}
+				if (HitActor->Tags.Contains(FName("Floor")) || HitActor->Tags.Contains(FName("Ground")))
+				{
+					continue;
+				}
+			}
+
 			// 新障碍物
 			FDetectedObstacle NewObstacle;
 			NewObstacle.DetectedActor = HitActor;
@@ -184,11 +219,17 @@ TArray<FDetectedObstacle> UObstacleDetector::ClusterHitResults(const TArray<FHit
 				NewObstacle.EstimatedType = EObstacleType::Box;
 			}
 
-			// 检查是否已在 ObstacleManager 中注册
-			if (IsActorAlreadyRegistered(HitActor))
+			// 检查是否已在 ObstacleManager 中注册，记录真实 ID
+			if (ObstacleManagerRef)
 			{
-				// 已知障碍物，标记已注册（不需要再注册）
-				NewObstacle.RegisteredObstacleID = 0; // 非 -1 表示已知
+				for (const FObstacleInfo& Obs : ObstacleManagerRef->GetAllObstacles())
+				{
+					if (Obs.LinkedActor.Get() == HitActor)
+					{
+						NewObstacle.RegisteredObstacleID = Obs.ObstacleID;
+						break;
+					}
+				}
 			}
 
 			Clusters.Add(NewObstacle);
@@ -264,8 +305,25 @@ void UObstacleDetector::DrawDebugInfo() const
 
 	if (bShowDebugTraces)
 	{
-		// 绘制扫描范围球
-		DrawDebugSphere(World, ScanOrigin, ScanRange, 24, FColor::Cyan, false, -1.0f, 0, 1.0f);
+		for (const FHitResult& Hit : CachedHitResults)
+		{
+			DrawDebugLine(World, ScanOrigin, Hit.ImpactPoint, FColor::Red, false, -1.0f, 0, 1.0f);
+			DrawDebugPoint(World, Hit.ImpactPoint, 5.0f, FColor::Red, false, -1.0f);
+		}
+	}
+
+	if (bShowPointCloud)
+	{
+		for (const TPair<FVector, float>& Point : PointCloudCache)
+		{
+			float t = FMath::Clamp(FVector::Dist(ScanOrigin, Point.Key) / ScanRange, 0.0f, 1.0f);
+			// Jet colormap: 近=蓝 → 青 → 绿 → 黄 → 远=红
+			float R = FMath::Clamp(1.5f - FMath::Abs(4.0f * t - 3.0f), 0.0f, 1.0f);
+			float G = FMath::Clamp(1.5f - FMath::Abs(4.0f * t - 2.0f), 0.0f, 1.0f);
+			float B = FMath::Clamp(1.5f - FMath::Abs(4.0f * t - 1.0f), 0.0f, 1.0f);
+			FColor Color((uint8)(R * 255), (uint8)(G * 255), (uint8)(B * 255));
+			DrawDebugPoint(World, Point.Key, 4.0f, Color, false, -1.0f);
+		}
 	}
 
 	if (bShowDetectedObstacles)

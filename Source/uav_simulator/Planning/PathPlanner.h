@@ -124,7 +124,7 @@ protected:
 
 	// UAV碰撞半径 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Path Planning")
-	float UAVCollisionRadius = 50.0f;
+	float UAVCollisionRadius = 300.0f;
 
 	// 是否显示调试信息
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")

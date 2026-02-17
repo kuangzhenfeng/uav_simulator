@@ -21,11 +21,16 @@
 - 积分抗饱和与重力补偿
 - 运行时参数调整
 
-### 路径规划
+### 路径规划与避障
 - A* 算法（3D 网格搜索）
 - RRT/RRT* 算法（快速随机探索树）
 - 5 阶多项式轨迹优化
-- 动态避障与重规划
+- 多航段路径规划（逐段 A* + line-of-sight 精简）
+- NMPC 局部避障（非线性模型预测控制）
+  - 6-状态点质量模型，投影梯度下降求解器
+  - 指数势垒障碍物代价 + 温启动
+  - 支持 Sphere/Box/Cylinder 障碍物及动态障碍物预测
+- 基于射线检测的障碍物感知（ObstacleDetector）
 
 ### AI 行为树
 - 任务节点：飞往位置、轨迹跟踪、悬停、巡逻
@@ -36,7 +41,7 @@
 ### 调试工具
 - 实时 PID 参数调整
 - 飞行数据记录（CSV 导出）
-- 轨迹与障碍物可视化
+- 轨迹、障碍物与 NMPC 预测轨迹可视化
 - HUD 状态显示
 
 ## 项目结构
@@ -48,7 +53,7 @@ uav_simulator/
 │   ├── Physics/        # 动力学模型
 │   ├── Sensors/        # 传感器模拟
 │   ├── Control/        # 飞行控制器
-│   ├── Planning/       # 路径规划与轨迹优化
+│   ├── Planning/       # 路径规划、轨迹优化与 NMPC 避障
 │   ├── Mission/        # 任务管理（MissionComponent）
 │   ├── AI/             # AI 控制器与行为树节点
 │   ├── Debug/          # 调试与可视化工具
@@ -95,6 +100,10 @@ uav_simulator/
 - `StateEstimator`: 状态估计器
 - `PathPlanner`: 路径规划器
 - `TrajectoryOptimizer`: 轨迹优化器
+- `TrajectoryTracker`: 轨迹跟踪器
+- `ObstacleManager`: 障碍物管理器
+- `ObstacleDetector`: 障碍物感知组件
+- `PlanningVisualizer`: 规划可视化组件
 - `MissionComponent`: 任务管理组件
 
 ### 控制接口
@@ -119,6 +128,10 @@ FTrajectory Trajectory = TrajectoryOptimizer->OptimizePath(Path);
 
 // 轨迹跟踪
 TrajectoryTracker->StartTracking(Trajectory);
+
+// NMPC 局部避障
+FNMPCAvoidanceResult Result = NMPCAvoidance->ComputeAvoidance(
+    CurrentPosition, CurrentVelocity, ReferencePoints, Obstacles);
 ```
 
 ## 单元测试
@@ -137,6 +150,9 @@ TrajectoryTracker->StartTracking(Trajectory);
 | Planning.RRT | 9 | RRT/RRT* 算法、随机采样 |
 | Planning.TrajectoryOptimizer | 9 | 轨迹优化、多项式求值、约束 |
 | Planning.TrajectoryTracker | 10 | 轨迹跟踪、插值、进度管理 |
+| Planning.NMPCAvoidance | 13 | NMPC 求解、障碍物避障、温启动、Stuck 检测 |
+| Planning.MultiSegmentPlanning | 5 | 多段路径规划、失败回退、路径精简 |
+| Sensors.ObstacleDetector | 5 | 射线检测、障碍物分类 |
 
 ### 运行测试
 
@@ -159,9 +175,31 @@ Script/test.bat
 | Phase 4 | 轨迹规划（A*、RRT、轨迹优化、避障） | 已完成 |
 | Phase 5 | 任务管理（MissionComponent、航点管理、任务状态） | 已完成 |
 | Phase 6 | 单元测试（UE5 Automation Test Framework） | 已完成 |
-| Phase 7 | 多机协同（编队、任务分配、通信） | 计划中 |
-| Phase 8 | 任务规划（任务定义、调度、监控） | 计划中 |
-| Phase 9 | 环境优化（风场、天气、性能优化） | 计划中 |
+| Phase 7 | 路径规划与实时避障（多航段 A*、NMPC 局部避障、障碍物感知） | 已完成 |
+| Phase 8 | 多机协同与安全滤波（联合 NMPC、CBF-QP、编队控制） | 计划中 |
+| Phase 9 | 任务分配与联合优化（MILP/MIQP/MINLP、联合轨迹优化） | 计划中 |
+| Phase 10 | 环境优化（风场、天气、性能优化） | 计划中 |
+
+### 目标架构
+
+集中式联合最优化：任务分配（MILP/MIQP/MINLP）+ 联合轨迹优化/NMPC（带硬约束）+ 多机 CBF-QP 安全滤波
+
+```
+┌─────────────────────────────────────────────────┐
+│         任务分配层 (MILP/MIQP/MINLP)            │
+│  决策变量: 任务-UAV 分配矩阵、执行顺序           │
+│  约束: 能力、载荷、续航、时间窗口                 │
+├─────────────────────────────────────────────────┤
+│      联合轨迹优化 / 多机 NMPC（带硬约束）         │
+│  联合状态空间、机间安全距离、编队保持              │
+├─────────────────────────────────────────────────┤
+│          多机 CBF-QP 安全滤波                    │
+│  Control Barrier Function 定义安全集              │
+│  QP 实时滤波保证前向不变性                        │
+├─────────────────────────────────────────────────┤
+│          单机 NMPC 局部避障                       │
+└─────────────────────────────────────────────────┘
+```
 
 ## 文档
 

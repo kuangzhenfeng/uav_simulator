@@ -105,7 +105,7 @@ protected:
 
 	// 最大扫描距离 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters")
-	float ScanRange = 2000.0f;
+	float ScanRange = 20000.0f;
 
 	// 水平扫描角度 (度，以前方为中心的总角度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "10.0", ClampMax = "360.0"))
@@ -113,15 +113,15 @@ protected:
 
 	// 垂直扫描角度 (度，以水平面为中心的总角度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "10.0", ClampMax = "180.0"))
-	float VerticalFOV = 60.0f;
+	float VerticalFOV = 180.0f;
 
 	// 水平角度分辨率 (度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "1.0", ClampMax = "45.0"))
-	float HorizontalResolution = 15.0f;
+	float HorizontalResolution = 5.0f;
 
 	// 垂直角度分辨率 (度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "1.0", ClampMax = "45.0"))
-	float VerticalResolution = 15.0f;
+	float VerticalResolution = 5.0f;
 
 	// 扫描更新频率 (Hz)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "1.0", ClampMax = "30.0"))
@@ -131,7 +131,7 @@ protected:
 
 	// 射线检测通道
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Detection Parameters")
-	TEnumAsByte<ECollisionChannel> TraceChannel = ECC_WorldStatic;
+	TEnumAsByte<ECollisionChannel> TraceChannel = ECC_Visibility;
 
 	// 同一障碍物的聚类距离阈值 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Detection Parameters")
@@ -145,6 +145,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Detection Parameters")
 	float DetectionSafetyMargin = 50.0f;
 
+	// 是否过滤地面 Actor（顶部低于 UAV 或带有 Floor/Ground Tag）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Detection Parameters")
+	bool bFilterGroundActors = true;
+
 	// ---- 调试 ----
 
 	// 是否显示调试射线
@@ -155,6 +159,14 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bShowDetectedObstacles = false;
 
+	// 是否显示扫描点云
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
+	bool bShowPointCloud = false;
+
+	// 点云有效时间 (秒)，与障碍物有效时间一致
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug", meta = (EditCondition = "bShowPointCloud", ClampMin = "0.1"))
+	float PointCloudLifetime = 5.0f;
+
 private:
 	// 关联的 ObstacleManager
 	UPROPERTY()
@@ -162,6 +174,12 @@ private:
 
 	// 当前检测到的障碍物列表
 	TArray<FDetectedObstacle> DetectedObstacles;
+
+	// 缓存的射线命中结果（用于调试射线）
+	TArray<FHitResult> CachedHitResults;
+
+	// 累积的点云缓存（位置 + 时间戳）
+	TArray<TPair<FVector, float>> PointCloudCache;
 
 	// 扫描计时器
 	float ScanAccumulatedTime;

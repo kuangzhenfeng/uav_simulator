@@ -3,8 +3,74 @@
 #include "Misc/AutomationTest.h"
 #include "../UAVTestCommon.h"
 #include "../../Planning/ObstacleManager.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "GameFramework/Actor.h"
+#include "Components/BoxComponent.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+
+namespace
+{
+	UWorld* CreateObstacleManagerTestWorld(const TCHAR* WorldName)
+	{
+		if (!GEngine)
+		{
+			return nullptr;
+		}
+
+		UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(WorldName));
+		if (!World)
+		{
+			return nullptr;
+		}
+
+		FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+		WorldContext.SetCurrentWorld(World);
+
+		World->InitializeNewWorld(UWorld::InitializationValues());
+		World->BeginPlay();
+
+		return World;
+	}
+
+	void DestroyObstacleManagerTestWorld(UWorld* World)
+	{
+		if (!World || !GEngine)
+		{
+			return;
+		}
+
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+	}
+
+	AActor* SpawnBoxActor(UWorld* World, const FVector& Location, const FRotator& Rotation, const FVector& BoxExtent)
+	{
+		if (!World)
+		{
+			return nullptr;
+		}
+
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+		AActor* Actor = World->SpawnActor<AActor>(AActor::StaticClass(), Location, Rotation, SpawnParams);
+		if (!Actor)
+		{
+			return nullptr;
+		}
+
+		UBoxComponent* BoxComponent = NewObject<UBoxComponent>(Actor);
+		BoxComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		BoxComponent->InitBoxExtent(BoxExtent);
+		Actor->SetRootComponent(BoxComponent);
+		BoxComponent->RegisterComponent();
+		Actor->SetActorLocationAndRotation(Location, Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+
+		return Actor;
+	}
+}
 
 // ==================== 球体碰撞检测测试 ====================
 
@@ -247,6 +313,170 @@ bool FObstacleManagerGetObstacleTest::RunTest(const FString& Parameters)
 	// 尝试获取不存在的障碍物
 	TestFalse(TEXT("Should fail to get non-existent obstacle"), Manager->GetObstacle(999, RetrievedObstacle));
 
+	return true;
+}
+
+// ==================== 感知障碍物重复注册刷新测试 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FObstacleManagerPerceivedObstacleReRegisterUpdatesPoseAndExtentsTest,
+	"UAVSimulator.Planning.ObstacleManager.PerceivedObstacleReRegisterUpdatesPoseAndExtents",
+	UAV_TEST_FLAGS)
+
+bool FObstacleManagerPerceivedObstacleReRegisterUpdatesPoseAndExtentsTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CreateObstacleManagerTestWorld(TEXT("ObstacleManager_PerceivedReRegister"));
+	TestNotNull(TEXT("Test world should be created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AActor* OwnerActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+	TestNotNull(TEXT("Owner actor should be created"), OwnerActor);
+	if (!OwnerActor)
+	{
+		DestroyObstacleManagerTestWorld(World);
+		return false;
+	}
+
+	UObstacleManager* Manager = NewObject<UObstacleManager>(OwnerActor);
+	Manager->RegisterComponent();
+
+	const FVector InitialLocation(100.0f, -50.0f, 300.0f);
+	const FRotator InitialRotation(0.0f, 10.0f, 0.0f);
+	const FVector InitialExtent(80.0f, 60.0f, 25.0f);
+	AActor* TargetActor = SpawnBoxActor(World, InitialLocation, InitialRotation, InitialExtent);
+	TestNotNull(TEXT("Target actor should be created"), TargetActor);
+	if (!TargetActor)
+	{
+		Manager->UnregisterComponent();
+		DestroyObstacleManagerTestWorld(World);
+		return false;
+	}
+
+	const int32 FirstID = Manager->RegisterPerceivedObstacleFromActor(TargetActor, EObstacleType::Box, 20.0f);
+	TestTrue(TEXT("First perceived registration should succeed"), FirstID > 0);
+
+	const FVector UpdatedLocation(450.0f, 120.0f, 520.0f);
+	const FRotator UpdatedRotation(0.0f, 55.0f, 0.0f);
+	const FVector UpdatedExtent(140.0f, 90.0f, 40.0f);
+	if (UBoxComponent* BoxComponent = Cast<UBoxComponent>(TargetActor->GetRootComponent()))
+	{
+		BoxComponent->SetBoxExtent(UpdatedExtent);
+	}
+	TargetActor->SetActorLocationAndRotation(UpdatedLocation, UpdatedRotation, false, nullptr, ETeleportType::TeleportPhysics);
+
+	const int32 SecondID = Manager->RegisterPerceivedObstacleFromActor(TargetActor, EObstacleType::Box, 75.0f);
+	TestEqual(TEXT("Re-registering same actor should reuse obstacle ID"), SecondID, FirstID);
+
+	FObstacleInfo UpdatedObstacle;
+	TestTrue(TEXT("Updated obstacle should be retrievable"), Manager->GetObstacle(FirstID, UpdatedObstacle));
+	UAV_TEST_VECTOR_EQUAL(UpdatedObstacle.Center, UpdatedLocation, 1.0f);
+	UAV_TEST_VECTOR_EQUAL(UpdatedObstacle.Extents, UpdatedExtent, 1.0f);
+	UAV_TEST_ROTATOR_EQUAL(UpdatedObstacle.Rotation, UpdatedRotation, 1.0f);
+	UAV_TEST_FLOAT_EQUAL(UpdatedObstacle.SafetyMargin, 75.0f, 0.1f);
+	TestTrue(TEXT("Perceived obstacle should remain dynamic"), UpdatedObstacle.bIsDynamic);
+
+	Manager->UnregisterComponent();
+	DestroyObstacleManagerTestWorld(World);
+	return true;
+}
+
+// ==================== 感知障碍物默认动态更新测试 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FObstacleManagerPerceivedObstacleDefaultDynamicUpdatesWithActorTest,
+	"UAVSimulator.Planning.ObstacleManager.PerceivedObstacleDefaultDynamicUpdatesWithActor",
+	UAV_TEST_FLAGS)
+
+bool FObstacleManagerPerceivedObstacleDefaultDynamicUpdatesWithActorTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CreateObstacleManagerTestWorld(TEXT("ObstacleManager_PerceivedDynamicUpdate"));
+	TestNotNull(TEXT("Test world should be created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AActor* OwnerActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+	TestNotNull(TEXT("Owner actor should be created"), OwnerActor);
+	if (!OwnerActor)
+	{
+		DestroyObstacleManagerTestWorld(World);
+		return false;
+	}
+
+	UObstacleManager* Manager = NewObject<UObstacleManager>(OwnerActor);
+	Manager->RegisterComponent();
+
+	AActor* TargetActor = SpawnBoxActor(
+		World,
+		FVector(0.0f, 0.0f, 300.0f),
+		FRotator::ZeroRotator,
+		FVector(90.0f, 70.0f, 30.0f));
+	TestNotNull(TEXT("Target actor should be created"), TargetActor);
+	if (!TargetActor)
+	{
+		Manager->UnregisterComponent();
+		DestroyObstacleManagerTestWorld(World);
+		return false;
+	}
+
+	const int32 ObstacleID = Manager->RegisterPerceivedObstacleFromActor(TargetActor, EObstacleType::Box, 30.0f);
+	TestTrue(TEXT("Perceived obstacle registration should succeed"), ObstacleID > 0);
+
+	const FVector MovedLocation(220.0f, -180.0f, 420.0f);
+	TargetActor->SetActorLocation(MovedLocation);
+	Manager->TickComponent(0.2f, LEVELTICK_All, nullptr);
+
+	FObstacleInfo UpdatedObstacle;
+	TestTrue(TEXT("Updated obstacle should be retrievable"), Manager->GetObstacle(ObstacleID, UpdatedObstacle));
+	TestTrue(TEXT("Perceived obstacle should be dynamic by default"), UpdatedObstacle.bIsDynamic);
+	UAV_TEST_VECTOR_EQUAL(UpdatedObstacle.Center, MovedLocation, 1.0f);
+	TestTrue(TEXT("Velocity should be updated after movement"), UpdatedObstacle.Velocity.Size() > KINDA_SMALL_NUMBER);
+
+	Manager->UnregisterComponent();
+	DestroyObstacleManagerTestWorld(World);
+	return true;
+}
+
+// ==================== 感知障碍物忽略 Owner 测试 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FObstacleManagerPerceivedObstacleIgnoresOwnerTest,
+	"UAVSimulator.Planning.ObstacleManager.PerceivedObstacleIgnoresOwner",
+	UAV_TEST_FLAGS)
+
+bool FObstacleManagerPerceivedObstacleIgnoresOwnerTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CreateObstacleManagerTestWorld(TEXT("ObstacleManager_PerceivedIgnoreOwner"));
+	TestNotNull(TEXT("Test world should be created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AActor* OwnerActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+	TestNotNull(TEXT("Owner actor should be created"), OwnerActor);
+	if (!OwnerActor)
+	{
+		DestroyObstacleManagerTestWorld(World);
+		return false;
+	}
+
+	UObstacleManager* Manager = NewObject<UObstacleManager>(OwnerActor);
+	Manager->RegisterComponent();
+
+	const int32 ObstacleID = Manager->RegisterPerceivedObstacleFromActor(OwnerActor, EObstacleType::Box, 10.0f);
+	TestEqual(TEXT("Owner actor should not be registered as perceived obstacle"), ObstacleID, -1);
+	TestEqual(TEXT("No obstacle should be registered"), Manager->GetAllObstacles().Num(), 0);
+
+	Manager->UnregisterComponent();
+	DestroyObstacleManagerTestWorld(World);
 	return true;
 }
 
