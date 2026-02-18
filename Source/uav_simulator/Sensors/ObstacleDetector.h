@@ -113,15 +113,15 @@ protected:
 
 	// 垂直扫描角度 (度，以水平面为中心的总角度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "10.0", ClampMax = "180.0"))
-	float VerticalFOV = 180.0f;
+	float VerticalFOV = 120.0f;
 
 	// 水平角度分辨率 (度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "1.0", ClampMax = "45.0"))
-	float HorizontalResolution = 5.0f;
+	float HorizontalResolution = 3.0f;
 
 	// 垂直角度分辨率 (度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "1.0", ClampMax = "45.0"))
-	float VerticalResolution = 5.0f;
+	float VerticalResolution = 3.0f;
 
 	// 扫描更新频率 (Hz)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "1.0", ClampMax = "30.0"))
@@ -193,8 +193,8 @@ private:
 	// 将命中点聚类为障碍物
 	TArray<FDetectedObstacle> ClusterHitResults(const TArray<FHitResult>& HitResults) const;
 
-	// 检查 Actor 是否已在 ObstacleManager 中注册
-	bool IsActorAlreadyRegistered(AActor* Actor) const;
+	// 检查 Actor 是否已在 ObstacleManager 中注册（若已过期则自动清理本地记录）
+	bool IsActorAlreadyRegistered(AActor* Actor);
 
 	// 将检测到的障碍物注册到 ObstacleManager
 	void RegisterDetectedObstacle(FDetectedObstacle& Obstacle);

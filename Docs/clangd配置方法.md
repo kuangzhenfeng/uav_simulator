@@ -13,11 +13,8 @@
             "-j=1",
             "--background-index=false",
             "--clang-tidy=false",
-            "--completion-style=bundled",
             "--header-insertion=never",
             "--pch-storage=disk",
-            "--limit-results=30",
-            "--log=error",
             "--query-driver=D:\\mySoftware\\Microsoft Visual Studio\\*\\Professional\\VC\\Tools\\MSVC\\*\\bin\\Hostx64\\x64\\cl.exe;D:\\mySoftware\\Microsoft Visual Studio\\2022\\Professional\\VC\\Tools\\Llvm\\x64\\bin\\clang-cl.exe"
         ],
         "clangd.path": "D:\\mySoftware\\Microsoft Visual Studio\\2022\\Professional\\VC\\Tools\\Llvm\\x64\\bin\\clangd.exe"

@@ -239,7 +239,7 @@ TArray<FDetectedObstacle> UObstacleDetector::ClusterHitResults(const TArray<FHit
 	return Clusters;
 }
 
-bool UObstacleDetector::IsActorAlreadyRegistered(AActor* Actor) const
+bool UObstacleDetector::IsActorAlreadyRegistered(AActor* Actor)
 {
 	if (!Actor || !ObstacleManagerRef)
 	{
@@ -256,8 +256,9 @@ bool UObstacleDetector::IsActorAlreadyRegistered(AActor* Actor) const
 		}
 	}
 
-	// 检查本地已注册集合
-	return RegisteredActors.Contains(TWeakObjectPtr<AActor>(Actor));
+	// ObstacleManager 中已不存在，清除本地记录以允许重新注册
+	RegisteredActors.Remove(TWeakObjectPtr<AActor>(Actor));
+	return false;
 }
 
 void UObstacleDetector::RegisterDetectedObstacle(FDetectedObstacle& Obstacle)
