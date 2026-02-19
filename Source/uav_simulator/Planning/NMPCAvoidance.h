@@ -25,7 +25,7 @@ struct FNMPCConfig
 
 	// 最大加速度 (cm/s²)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float MaxAcceleration = 200.0f;
+	float MaxAcceleration = 500.0f;
 
 	// 最大速度 (cm/s)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
@@ -33,27 +33,27 @@ struct FNMPCConfig
 
 	// 参考跟踪权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightReference = 1.0f;
+	float WeightReference = 0.3f;
 
 	// 速度跟踪权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightVelocity = 0.1f;
+	float WeightVelocity = 0.3f;
 
 	// 控制输入权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightControl = 0.01f;
+	float WeightControl = 0.05f;
 
 	// 障碍物代价权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightObstacle = 100.0f;
+	float WeightObstacle = 5.0f;
 
 	// 终端代价权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightTerminal = 5.0f;
+	float WeightTerminal = 1.0f;
 
 	// 障碍物势垒衰减系数 α
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float ObstacleAlpha = 0.1f;
+	float ObstacleAlpha = 0.5f;
 
 	// 障碍物安全距离 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
@@ -61,11 +61,11 @@ struct FNMPCConfig
 
 	// 障碍物影响距离 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float ObstacleInfluenceDistance = 3000.0f;
+	float ObstacleInfluenceDistance = 800.0f;
 
 	// 求解器最大迭代次数
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	int32 MaxIterations = 5;
+	int32 MaxIterations = 15;
 
 	// 收敛容差
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -77,7 +77,7 @@ struct FNMPCConfig
 
 	// 初始学习率
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	float InitialStepSize = 10.0f;
+	float InitialStepSize = 2.0f;
 
 	// 回溯线搜索缩减因子
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -85,11 +85,11 @@ struct FNMPCConfig
 
 	// 回溯线搜索最大次数
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	int32 MaxBacktrackSteps = 5;
+	int32 MaxBacktrackSteps = 8;
 
 	// Stuck 检测: 合力阈值
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float StuckForceThreshold = 10.0f;
+	float StuckForceThreshold = 2.0f;
 
 	// 到达目标距离阈值 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
@@ -97,15 +97,15 @@ struct FNMPCConfig
 
 	// 单步障碍物代价上限 (防止 exp 数值爆炸)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float MaxObstacleCostPerStep = 50.0f;
+	float MaxObstacleCostPerStep = 200.0f;
 
 	// 横向扰动幅度 (cm/s^2, 用于跳出局部最优)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	float LateralPerturbationMagnitude = 80.0f;
+	float LateralPerturbationMagnitude = 150.0f;
 
 	// 连续代价上升次数阈值，超过后重置温启动
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	int32 WarmStartResetThreshold = 2;
+	int32 WarmStartResetThreshold = 5;
 
 	// 代价连续上升判定为卡死的阈值
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -121,7 +121,7 @@ struct FNMPCConfig
 
 	// 障碍物代价死区: 小于该值视为无障碍影响
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float ObstacleCostDeadband = 1e-3f;
+	float ObstacleCostDeadband = 0.3f;
 
 	// 纠偏目标最小位移阈值 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")

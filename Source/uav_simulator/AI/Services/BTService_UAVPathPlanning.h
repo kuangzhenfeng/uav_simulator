@@ -119,7 +119,7 @@ private:
 	class UPathPlanner* CreatePathPlanner(class AUAVPawn* UAVPawn, const TArray<FObstacleInfo>& Obstacles);
 
 	// 全局路径精简：line-of-sight 去除冗余中间点
-	void SimplifyGlobalPath(TArray<FVector>& Path, const class UPathPlanner* Planner, float CollisionRadius) const;
+	void SimplifyGlobalPath(TArray<FVector>& Path, const class UPathPlanner* Planner, float CollisionRadius, const TSet<int32>& WaypointIndices) const;
 
 	// ---- Local Planner 方法 ----
 

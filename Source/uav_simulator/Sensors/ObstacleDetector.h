@@ -117,11 +117,11 @@ protected:
 
 	// 水平角度分辨率 (度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "1.0", ClampMax = "45.0"))
-	float HorizontalResolution = 3.0f;
+	float HorizontalResolution = 5.0f;
 
 	// 垂直角度分辨率 (度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "1.0", ClampMax = "45.0"))
-	float VerticalResolution = 3.0f;
+	float VerticalResolution = 5.0f;
 
 	// 扫描更新频率 (Hz)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scan Parameters", meta = (ClampMin = "1.0", ClampMax = "30.0"))

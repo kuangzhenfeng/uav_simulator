@@ -39,13 +39,17 @@ bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArr
 	UE_LOG(LogUAVPlanning, Log, TEXT("Start grid: (%d,%d,%d), Goal grid: (%d,%d,%d)"),
 		StartGrid.X, StartGrid.Y, StartGrid.Z, GoalGrid.X, GoalGrid.Y, GoalGrid.Z);
 
-	// 检查起点和终点是否有效
-	if (!IsValidGridCoord(StartGrid) || IsGridBlocked(StartGrid))
+	// 检查起点是否有效
+	if (!IsValidGridCoord(StartGrid))
 	{
-		UE_LOG(LogUAVPlanning, Error, TEXT("Start position invalid or blocked! IsValid=%s, IsBlocked=%s"),
-			IsValidGridCoord(StartGrid) ? TEXT("true") : TEXT("false"),
-			IsGridBlocked(StartGrid) ? TEXT("true") : TEXT("false"));
+		UE_LOG(LogUAVPlanning, Error, TEXT("Start position out of bounds!"));
 		return false;
+	}
+
+	// 起点在障碍物膨胀区内时仍允许规划（UAV已在此位置，需要规划逃离路径）
+	if (IsGridBlocked(StartGrid))
+	{
+		UE_LOG(LogUAVPlanning, Warning, TEXT("Start position is inside obstacle zone, attempting escape planning"));
 	}
 
 	if (!IsValidGridCoord(GoalGrid) || IsGridBlocked(GoalGrid))

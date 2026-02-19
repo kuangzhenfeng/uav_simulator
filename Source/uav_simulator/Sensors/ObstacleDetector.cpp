@@ -174,18 +174,12 @@ TArray<FDetectedObstacle> UObstacleDetector::ClusterHitResults(const TArray<FHit
 
 		if (!bFoundCluster)
 		{
-			// 地面过滤
+			// 地面过滤（Tag 或 Actor 名称）
 			if (bFilterGroundActors)
 			{
-				FVector Origin, BoxExtent;
-				HitActor->GetActorBounds(false, Origin, BoxExtent);
-				float ActorTop = Origin.Z + BoxExtent.Z;
-				FVector ScanOrigin = GetOwner()->GetActorLocation();
-				if (ActorTop < ScanOrigin.Z)
-				{
-					continue;
-				}
-				if (HitActor->Tags.Contains(FName("Floor")) || HitActor->Tags.Contains(FName("Ground")))
+				const FString ActorName = HitActor->GetName();
+				if (HitActor->Tags.Contains(FName("Floor")) || HitActor->Tags.Contains(FName("Ground"))
+					|| ActorName.Contains(TEXT("Floor")) || ActorName.Contains(TEXT("Ground")))
 				{
 					continue;
 				}

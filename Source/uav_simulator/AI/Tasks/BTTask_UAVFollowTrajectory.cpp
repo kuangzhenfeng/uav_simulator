@@ -184,7 +184,7 @@ void UBTTask_UAVFollowTrajectory::TickTask(UBehaviorTreeComponent& OwnerComp, ui
 	}
 
 	// 检查轨迹跟踪是否完成
-	if (UAVPawn->IsTrajectoryComplete() || UAVPawn->GetTrajectoryProgress() >= CompletionThreshold)
+	if (UAVPawn->IsTrajectoryComplete())
 	{
 		if (bHoldPositionOnComplete)
 		{

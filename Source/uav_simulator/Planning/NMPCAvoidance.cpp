@@ -134,7 +134,7 @@ float UNMPCAvoidance::ComputeCost(
 		if (k + 1 < ReferencePoints.Num() && k < ReferencePoints.Num())
 		{
 			FVector DesiredVel = (ReferencePoints[k + 1] - ReferencePoints[k]) / FMath::Max(dt, KINDA_SMALL_NUMBER);
-			float VelDist = FVector::DistSquared(Velocities[k], DesiredVel);
+			float VelDist = FVector::Dist(Velocities[k], DesiredVel);
 			Cost += Config.WeightVelocity * VelDist;
 		}
 

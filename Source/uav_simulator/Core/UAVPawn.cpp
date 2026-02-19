@@ -205,8 +205,8 @@ void AUAVPawn::UpdateController(float DeltaTime)
 				float DesiredThrust;
 
 				// 使用轨迹点的速度和加速度作为前馈
-				PositionControllerComponent->ComputeControl(
-					CurrentState, DesiredState.Position, DesiredState.Velocity, DesiredAttitude, DesiredThrust, DeltaTime);
+				PositionControllerComponent->ComputeControlWithAcceleration(
+					CurrentState, DesiredState.Position, DesiredState.Velocity, DesiredState.Acceleration, DesiredAttitude, DesiredThrust, DeltaTime);
 
 				UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] DesAttitude: (P:%.2f, Y:%.2f, R:%.2f) | DesThrust: %.3f"),
 					DesiredAttitude.Pitch, DesiredAttitude.Yaw, DesiredAttitude.Roll, DesiredThrust);

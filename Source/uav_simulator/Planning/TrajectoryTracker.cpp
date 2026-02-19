@@ -31,20 +31,54 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		return;
 	}
 
-	// 更新跟踪时间
-	TrackingTime += DeltaTime * TimeScale;
+	// 自适应时间缩放：UAV落后时减速/暂停TrackingTime推进
+	// 用前向投影误差（沿轨迹方向的落后量），忽略避障造成的横向偏移
+	float EffectiveTimeScale = TimeScale;
+	if (bEnableAdaptiveTimeScale && !bHasDesiredStateOverride)
+	{
+		FVector CurrentPos = GetOwner()->GetActorLocation();
+		FTrajectoryPoint DesiredState = InterpolateTrajectory(TrackingTime);
+		FVector ErrorVec = DesiredState.Position - CurrentPos;
+
+		FVector Forward = DesiredState.Velocity.GetSafeNormal();
+		float Error = Forward.IsNearlyZero()
+			? ErrorVec.Size()
+			: FMath::Max(0.0f, FVector::DotProduct(ErrorVec, Forward));
+
+		if (Error > ErrorPauseThreshold)
+		{
+			EffectiveTimeScale = 0.0f;
+		}
+		else if (Error > ErrorSlowdownStart)
+		{
+			float Alpha = (Error - ErrorSlowdownStart) / (ErrorPauseThreshold - ErrorSlowdownStart);
+			EffectiveTimeScale = TimeScale * (1.0f - Alpha);
+		}
+	}
+
+	// 更新跟踪时间（bTimeIsFrozen 时暂停推进，防止 NMPC stuck 期间轨迹提前到期）
+	if (!bTimeIsFrozen)
+	{
+		TrackingTime += DeltaTime * EffectiveTimeScale;
+	}
 
 	// 检查是否完成
 	if (TrackingTime >= CurrentTrajectory.TotalDuration)
 	{
-		if (bHoldFinalState)
-		{
-			TrackingTime = CurrentTrajectory.TotalDuration;
-		}
+		TrackingTime = CurrentTrajectory.TotalDuration;
 
-		bIsComplete = true;
-		bIsTracking = false;
-		OnTrajectoryCompleted.Broadcast();
+		if (CurrentTrajectory.Points.Num() > 0 && GetOwner())
+		{
+			FVector CurrentPos = GetOwner()->GetActorLocation();
+			FVector FinalPos = CurrentTrajectory.Points.Last().Position;
+
+			if (FVector::Dist(CurrentPos, FinalPos) <= CompletionRadius)
+			{
+				bIsComplete = true;
+				bIsTracking = false;
+				OnTrajectoryCompleted.Broadcast();
+			}
+		}
 	}
 
 	// 更新进度
@@ -108,6 +142,7 @@ void UTrajectoryTracker::Reset()
 	bIsTracking = false;
 	bIsPaused = false;
 	bIsComplete = false;
+	bTimeIsFrozen = false;
 	LastProgressUpdateTime = 0.0f;
 	LastProgress = 0.0f;
 }

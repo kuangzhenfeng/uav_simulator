@@ -134,7 +134,7 @@ UPathPlanner* UBTService_UAVPathPlanning::CreatePathPlanner(AUAVPawn* UAVPawn, c
 }
 
 // ========== 全局路径精简：line-of-sight 去除冗余中间点 ==========
-void UBTService_UAVPathPlanning::SimplifyGlobalPath(TArray<FVector>& Path, const UPathPlanner* Planner, float CollisionRadius) const
+void UBTService_UAVPathPlanning::SimplifyGlobalPath(TArray<FVector>& Path, const UPathPlanner* Planner, float CollisionRadius, const TSet<int32>& WaypointIndices) const
 {
 	if (!Planner || Path.Num() < 3)
 	{
@@ -147,9 +147,20 @@ void UBTService_UAVPathPlanning::SimplifyGlobalPath(TArray<FVector>& Path, const
 	int32 Current = 0;
 	while (Current < Path.Num() - 1)
 	{
-		// 从当前点尝试直连尽可能远的点
+		// 找到当前点之后的下一个必须保留的航点索引，作为跳跃上限
+		int32 Limit = Path.Num() - 1;
+		for (int32 k = Current + 1; k <= Path.Num() - 1; ++k)
+		{
+			if (WaypointIndices.Contains(k))
+			{
+				Limit = k;
+				break;
+			}
+		}
+
+		// 从当前点尝试直连尽可能远的点（不超过 Limit）
 		int32 Farthest = Current + 1;
-		for (int32 j = Path.Num() - 1; j > Current + 1; --j)
+		for (int32 j = Limit; j > Current + 1; --j)
 		{
 			if (!Planner->CheckLineCollision(Path[Current], Path[j], CollisionRadius))
 			{
@@ -205,6 +216,8 @@ bool UBTService_UAVPathPlanning::PlanMultiSegmentPath(AUAVPawn* UAVPawn, const T
 	// 逐段规划并拼接
 	OutPath.Empty();
 	OutPath.Add(Waypoints[0]);
+	TSet<int32> WaypointIndices;
+	WaypointIndices.Add(0);
 
 	bool bAllSegmentsOK = true;
 	for (int32 i = 0; i < Waypoints.Num() - 1; ++i)
@@ -219,6 +232,7 @@ bool UBTService_UAVPathPlanning::PlanMultiSegmentPath(AUAVPawn* UAVPawn, const T
 		{
 			// 直连无碰撞，只添加终点
 			OutPath.Add(SegEnd);
+			WaypointIndices.Add(OutPath.Num() - 1);
 			UE_LOG(LogUAVPlanning, Log, TEXT("    Direct connection clear, skipping planning"));
 			continue;
 		}
@@ -234,20 +248,37 @@ bool UBTService_UAVPathPlanning::PlanMultiSegmentPath(AUAVPawn* UAVPawn, const T
 			{
 				OutPath.Add(SegmentPath[j]);
 			}
+			WaypointIndices.Add(OutPath.Num() - 1);
 			UE_LOG(LogUAVPlanning, Log, TEXT("    Planning succeeded, added %d path points"), SegmentPath.Num() - 1);
 		}
 		else
 		{
-			// 规划失败，回退到直连（保证路径连续性）
-			OutPath.Add(SegEnd);
+			// 规划失败，尝试高度绕行
 			bAllSegmentsOK = false;
-			UE_LOG(LogUAVPlanning, Warning, TEXT("    Segment [%d->%d] planning failed, falling back to direct connection"), i, i + 1);
+			FVector MidPoint = (SegStart + SegEnd) * 0.5f;
+			MidPoint.Z += 500.0f;
+
+			if (!Planner->CheckLineCollision(SegStart, MidPoint, SafetyMargin) &&
+				!Planner->CheckLineCollision(MidPoint, SegEnd, SafetyMargin))
+			{
+				OutPath.Add(MidPoint);
+				OutPath.Add(SegEnd);
+				WaypointIndices.Add(OutPath.Num() - 1);
+				UE_LOG(LogUAVPlanning, Warning, TEXT("    Segment [%d->%d] A* failed, using altitude bypass at Z+500"), i, i + 1);
+			}
+			else
+			{
+				// 高度绕行也失败，最后手段直连
+				OutPath.Add(SegEnd);
+				WaypointIndices.Add(OutPath.Num() - 1);
+				UE_LOG(LogUAVPlanning, Error, TEXT("    Segment [%d->%d] all planning failed, forced direct connection (UNSAFE)"), i, i + 1);
+			}
 		}
 	}
 
-	// 全局 line-of-sight 精简
+	// 全局 line-of-sight 精简（保留原始航点）
 	int32 BeforeSimplify = OutPath.Num();
-	SimplifyGlobalPath(OutPath, Planner, SafetyMargin);
+	SimplifyGlobalPath(OutPath, Planner, SafetyMargin, WaypointIndices);
 
 	UE_LOG(LogUAVPlanning, Warning, TEXT("========== Multi-Segment Path Planning Completed =========="));
 	UE_LOG(LogUAVPlanning, Warning, TEXT("Total path points: %d (before simplify: %d), All segments OK: %s"),
@@ -463,6 +494,7 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 		if (Tracker)
 		{
 			Tracker->ClearDesiredStateOverride();
+			Tracker->SetTimeFrozen(false);
 		}
 		LocalPlannerStuckCount = 0;
 		return;
@@ -535,12 +567,18 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 		return;
 	}
 
+	// stuck 期间冻结轨迹时钟，防止时间到期触发错误的重规划
+	if (Tracker)
+	{
+		Tracker->SetTimeFrozen(Result.bStuck);
+	}
+
 	if (Result.bNeedsCorrection)
 	{
 		// 构造覆盖期望状态，注入 TrajectoryTracker
 		FTrajectoryPoint OverrideState;
 		OverrideState.Position = Result.CorrectedTarget;
-		OverrideState.Velocity = CurrentVelocity + Result.TotalForce * Dt;
+		OverrideState.Velocity = Result.CorrectedDirection * CurrentVelocity.Size();
 		if (Tracker)
 		{
 			Tracker->SetDesiredStateOverride(OverrideState);
@@ -606,6 +644,17 @@ void UBTService_UAVPathPlanning::TriggerGlobalReplan(AUAVPawn* UAVPawn)
 			{
 				MinDist = Dist;
 				NearestIdx = i;
+			}
+		}
+
+		// 若UAV已经过最近航点（在其前方），则前进到下一个航点
+		if (NearestIdx + 1 < OriginalWaypoints.Num())
+		{
+			FVector ToNext = OriginalWaypoints[NearestIdx + 1] - OriginalWaypoints[NearestIdx];
+			FVector ToUAV = CurrentPos - OriginalWaypoints[NearestIdx];
+			if (FVector::DotProduct(ToUAV, ToNext) > 0)
+			{
+				NearestIdx++;
 			}
 		}
 

@@ -124,6 +124,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
 	void ClearDesiredStateOverride();
 
+	/**
+	 * 冻结/解冻时钟推进（不影响 IsTracking，用于 NMPC stuck 期间防止轨迹提前到期）
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
+	void SetTimeFrozen(bool bFreeze) { bTimeIsFrozen = bFreeze; }
+
 	// 轨迹完成事件
 	UPROPERTY(BlueprintAssignable, Category = "Trajectory Tracking")
 	FOnTrajectoryCompleted OnTrajectoryCompleted;
@@ -157,6 +163,20 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trajectory Tracking")
 	float TimeScale = 1.0f;
 
+	// 自适应时间缩放：误差大时自动减速/暂停推进
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
+	bool bEnableAdaptiveTimeScale = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
+	float ErrorSlowdownStart = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
+	float ErrorPauseThreshold = 300.0f;
+
+	// 完成判定半径 (cm)：时间耗尽后，UAV 须在此距离内才标记完成
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
+	float CompletionRadius = 200.0f;
+
 	// 是否在完成时保持最终状态
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trajectory Tracking")
 	bool bHoldFinalState = true;
@@ -169,6 +189,9 @@ private:
 	// 外部期望状态覆盖（NMPC 避障用）
 	FTrajectoryPoint OverrideDesiredState;
 	bool bHasDesiredStateOverride = false;
+
+	// 冻结时钟推进（NMPC stuck 期间使用）
+	bool bTimeIsFrozen = false;
 
 	// 上次进度更新时间
 	float LastProgressUpdateTime;
