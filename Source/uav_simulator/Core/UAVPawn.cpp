@@ -14,6 +14,7 @@
 #include "../Planning/PlanningVisualizer.h"
 #include "../Mission/MissionComponent.h"
 #include "../Sensors/ObstacleDetector.h"
+#include "../Debug/StabilityScorer.h"
 #include "../Utility/Debug.h"
 #include "GameFramework/PlayerController.h"
 
@@ -51,6 +52,9 @@ AUAVPawn::AUAVPawn()
 
 	// 创建障碍物感知传感器组件
 	ObstacleDetectorComponent = CreateDefaultSubobject<UObstacleDetector>(TEXT("ObstacleDetector"));
+
+	// 创建稳定性评分组件
+	StabilityScorerComponent = CreateDefaultSubobject<UStabilityScorer>(TEXT("StabilityScorer"));
 
 	// 初始化状态
 	CurrentState = FUAVState();
@@ -90,6 +94,13 @@ void AUAVPawn::Tick(float DeltaTime)
 	// 更新Actor的位置和姿态
 	SetActorLocation(CurrentState.Position);
 	SetActorRotation(CurrentState.Rotation);
+
+	// 更新稳定性评分
+	if (StabilityScorerComponent)
+	{
+		StabilityScorerComponent->UpdateFlightScore(CurrentState, ObstacleManagerComponent);
+		StabilityScorerComponent->DrawScoreHUD(GetActorLocation());
+	}
 
 	// 更新调试可视化
 	if (DebugVisualizerComponent)

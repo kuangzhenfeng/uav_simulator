@@ -18,6 +18,7 @@ class UObstacleManager;
 class UPlanningVisualizer;
 class UMissionComponent;
 class UObstacleDetector;
+class UStabilityScorer;
 
 /**
  * 无人机Pawn类
@@ -122,6 +123,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
 	UObstacleDetector* GetObstacleDetector() const { return ObstacleDetectorComponent; }
 
+	// 获取稳定性评分组件
+	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
+	UStabilityScorer* GetStabilityScorer() const { return StabilityScorerComponent; }
+
 protected:
 	// 根组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
@@ -166,6 +171,10 @@ protected:
 	// 障碍物感知传感器组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
 	TObjectPtr<UObstacleDetector> ObstacleDetectorComponent;
+
+	// 稳定性评分组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
+	TObjectPtr<UStabilityScorer> StabilityScorerComponent;
 
 	// 当前状态
 	UPROPERTY(BlueprintReadOnly, Category = "UAV State")

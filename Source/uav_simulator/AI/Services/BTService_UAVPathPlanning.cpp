@@ -13,6 +13,7 @@
 #include "uav_simulator/Planning/TrajectoryTracker.h"
 #include "uav_simulator/Planning/PlanningVisualizer.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
+#include "uav_simulator/Debug/StabilityScorer.h"
 
 UBTService_UAVPathPlanning::UBTService_UAVPathPlanning()
 {
@@ -552,6 +553,11 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 
 	// 调用 NMPC 求解
 	FNMPCAvoidanceResult Result = NMPC->ComputeAvoidance(CurrentPosition, CurrentVelocity, ReferencePoints, NearbyObstacles);
+
+	if (UStabilityScorer* Scorer = UAVPawn->GetStabilityScorer())
+	{
+		Scorer->UpdateAvoidanceScore(Result);
+	}
 
 	// 可视化 NMPC 预测轨迹
 	UPlanningVisualizer* Visualizer = UAVPawn->GetPlanningVisualizer();
