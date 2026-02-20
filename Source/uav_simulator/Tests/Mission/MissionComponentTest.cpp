@@ -401,59 +401,117 @@ bool FMissionComponentResetTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// ==================== FMissionWaypoint 结构测试 ====================
+// ==================== Once 模式到达最后航点后完成 ====================
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionWaypointStructTest,
-	"UAVSimulator.Mission.MissionComponent.WaypointStruct",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionComponentAdvanceOnceTest,
+	"UAVSimulator.Mission.MissionComponent.AdvanceOnceMode",
 	UAV_TEST_FLAGS)
 
-bool FMissionWaypointStructTest::RunTest(const FString& Parameters)
+bool FMissionComponentAdvanceOnceTest::RunTest(const FString& Parameters)
 {
-	// 测试默认构造
-	FMissionWaypoint DefaultWaypoint;
-	UAV_TEST_VECTOR_EQUAL(DefaultWaypoint.Position, FVector::ZeroVector, 0.1f);
-	UAV_TEST_FLOAT_EQUAL(DefaultWaypoint.HoverDuration, 0.0f, 0.01f);
-	UAV_TEST_FLOAT_EQUAL(DefaultWaypoint.DesiredSpeed, 0.0f, 0.01f);
-	TestTrue(TEXT("Default waypoint should use default speed"), DefaultWaypoint.UseDefaultSpeed());
-	TestFalse(TEXT("Default waypoint should not have desired yaw"), DefaultWaypoint.HasDesiredYaw());
+	UMissionComponent* Mission = NewObject<UMissionComponent>();
 
-	// 测试位置构造
-	FMissionWaypoint PosWaypoint(FVector(100.0f, 200.0f, 300.0f));
-	UAV_TEST_VECTOR_EQUAL(PosWaypoint.Position, FVector(100.0f, 200.0f, 300.0f), 0.1f);
+	FMissionConfig Config;
+	Config.Mode = EMissionMode::Once;
+	Mission->SetMissionConfig(Config);
 
-	// 测试完整构造
-	FMissionWaypoint FullWaypoint(FVector(500.0f, 0.0f, 0.0f), 3.0f, 400.0f);
-	UAV_TEST_FLOAT_EQUAL(FullWaypoint.HoverDuration, 3.0f, 0.01f);
-	UAV_TEST_FLOAT_EQUAL(FullWaypoint.DesiredSpeed, 400.0f, 0.01f);
-	TestFalse(TEXT("Full waypoint should not use default speed"), FullWaypoint.UseDefaultSpeed());
+	Mission->AddWaypoint(FVector(100.0f, 0.0f, 0.0f));
+	Mission->AddWaypoint(FVector(200.0f, 0.0f, 0.0f));
+	Mission->StartMission();
 
-	// 测试设置偏航角
-	FMissionWaypoint YawWaypoint;
-	YawWaypoint.DesiredYaw = 45.0f;
-	TestTrue(TEXT("Waypoint with yaw should have desired yaw"), YawWaypoint.HasDesiredYaw());
+	Mission->AdvanceToNextWaypoint(); // wp0 -> wp1
+	Mission->AdvanceToNextWaypoint(); // wp1 -> completed
+
+	TestTrue(TEXT("Mission should be completed"), Mission->IsMissionCompleted());
 
 	return true;
 }
 
-// ==================== FMissionConfig 结构测试 ====================
+// ==================== Loop 模式循环回第一个航点 ====================
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionConfigStructTest,
-	"UAVSimulator.Mission.MissionComponent.ConfigStruct",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionComponentAdvanceLoopTest,
+	"UAVSimulator.Mission.MissionComponent.AdvanceLoopMode",
 	UAV_TEST_FLAGS)
 
-bool FMissionConfigStructTest::RunTest(const FString& Parameters)
+bool FMissionComponentAdvanceLoopTest::RunTest(const FString& Parameters)
 {
-	// 测试默认值
-	FMissionConfig DefaultConfig;
-	TestEqual(TEXT("Default mode should be Once"),
-		static_cast<int32>(DefaultConfig.Mode),
-		static_cast<int32>(EMissionMode::Once));
-	UAV_TEST_FLOAT_EQUAL(DefaultConfig.DefaultSpeed, 500.0f, 0.1f);
-	UAV_TEST_FLOAT_EQUAL(DefaultConfig.MaxAcceleration, 200.0f, 0.1f);
-	UAV_TEST_FLOAT_EQUAL(DefaultConfig.WaypointReachThreshold, 50.0f, 0.1f);
-	TestEqual(TEXT("Default loop count should be 1"), DefaultConfig.LoopCount, 1);
-	TestFalse(TEXT("Default return to start should be false"), DefaultConfig.bReturnToStart);
-	TestFalse(TEXT("Default path planning should be false"), DefaultConfig.bEnablePathPlanning);
+	UMissionComponent* Mission = NewObject<UMissionComponent>();
+
+	FMissionConfig Config;
+	Config.Mode = EMissionMode::Loop;
+	Config.LoopCount = 2;
+	Mission->SetMissionConfig(Config);
+
+	Mission->AddWaypoint(FVector(100.0f, 0.0f, 0.0f));
+	Mission->AddWaypoint(FVector(200.0f, 0.0f, 0.0f));
+	Mission->StartMission();
+
+	Mission->AdvanceToNextWaypoint(); // wp0 -> wp1
+	Mission->AdvanceToNextWaypoint(); // wp1 -> loop back to wp0
+
+	TestEqual(TEXT("Should loop back to wp0"), Mission->GetCurrentWaypointIndex(), 0);
+	TestTrue(TEXT("Should still be running"), Mission->IsMissionRunning());
+
+	return true;
+}
+
+// ==================== PingPong 模式反向遍历 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionComponentAdvancePingPongTest,
+	"UAVSimulator.Mission.MissionComponent.AdvancePingPongMode",
+	UAV_TEST_FLAGS)
+
+bool FMissionComponentAdvancePingPongTest::RunTest(const FString& Parameters)
+{
+	UMissionComponent* Mission = NewObject<UMissionComponent>();
+
+	FMissionConfig Config;
+	Config.Mode = EMissionMode::PingPong;
+	Config.LoopCount = 2;
+	Mission->SetMissionConfig(Config);
+
+	Mission->AddWaypoint(FVector(0.0f, 0.0f, 0.0f));
+	Mission->AddWaypoint(FVector(500.0f, 0.0f, 0.0f));
+	Mission->AddWaypoint(FVector(1000.0f, 0.0f, 0.0f));
+	Mission->StartMission();
+
+	Mission->AdvanceToNextWaypoint(); // wp0 -> wp1
+	Mission->AdvanceToNextWaypoint(); // wp1 -> wp2
+	Mission->AdvanceToNextWaypoint(); // wp2 -> reverse -> wp1
+
+	TestEqual(TEXT("Should reverse to wp1"), Mission->GetCurrentWaypointIndex(), 1);
+
+	return true;
+}
+
+// ==================== 无限循环模式持续循环 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionComponentAdvanceLoopInfiniteTest,
+	"UAVSimulator.Mission.MissionComponent.AdvanceLoopInfinite",
+	UAV_TEST_FLAGS)
+
+bool FMissionComponentAdvanceLoopInfiniteTest::RunTest(const FString& Parameters)
+{
+	UMissionComponent* Mission = NewObject<UMissionComponent>();
+
+	FMissionConfig Config;
+	Config.Mode = EMissionMode::Loop;
+	Config.LoopCount = -1; // 无限循环
+	Mission->SetMissionConfig(Config);
+
+	Mission->AddWaypoint(FVector(100.0f, 0.0f, 0.0f));
+	Mission->AddWaypoint(FVector(200.0f, 0.0f, 0.0f));
+	Mission->StartMission();
+
+	// 循环多次不应完成
+	for (int32 i = 0; i < 10; ++i)
+	{
+		Mission->AdvanceToNextWaypoint();
+		Mission->AdvanceToNextWaypoint();
+	}
+
+	TestTrue(TEXT("Should still be running after many loops"), Mission->IsMissionRunning());
+	TestFalse(TEXT("Should not be completed"), Mission->IsMissionCompleted());
 
 	return true;
 }

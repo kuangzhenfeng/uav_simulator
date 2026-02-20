@@ -129,7 +129,7 @@ struct FNMPCConfig
 
 	// 纠偏目标前瞻步数 (显式欧拉中 step 1 不含控制量，需用更远的步)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC", meta = (ClampMin = "2", ClampMax = "10"))
-	int32 CorrectionLookaheadSteps = 3;
+	int32 CorrectionLookaheadSteps = 5;
 
 	// 获取时间步长 dt
 	float GetDt() const { return PredictionHorizon / FMath::Max(PredictionSteps, 1); }

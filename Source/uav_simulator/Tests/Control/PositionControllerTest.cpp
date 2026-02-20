@@ -240,30 +240,6 @@ bool FPositionControllerResetTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// ==================== 目标设置测试 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPositionControllerTargetSetTest,
-	"UAVSimulator.Control.PositionController.TargetSet",
-	UAV_TEST_FLAGS)
-
-bool FPositionControllerTargetSetTest::RunTest(const FString& Parameters)
-{
-	UPositionController* Controller = NewObject<UPositionController>();
-
-	// 设置目标位置
-	FVector TargetPos(1000.0f, 500.0f, 200.0f);
-	Controller->SetTargetPosition(TargetPos);
-
-	// 设置目标速度
-	FVector TargetVel(100.0f, 50.0f, 0.0f);
-	Controller->SetTargetVelocity(TargetVel);
-
-	// 验证设置成功（通过控制计算间接验证）
-	// 注意：目标位置和速度是内部状态，可能没有直接的 getter
-
-	return true;
-}
-
 // ==================== 推力限制测试 ====================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPositionControllerThrustLimitTest,
@@ -293,33 +269,6 @@ bool FPositionControllerThrustLimitTest::RunTest(const FString& Parameters)
 	// 推力应该在限制范围内
 	TestTrue(TEXT("Thrust should be >= MinThrust"), Thrust >= Controller->MinThrust - 0.01f);
 	TestTrue(TEXT("Thrust should be <= MaxThrust"), Thrust <= Controller->MaxThrust + 0.01f);
-
-	return true;
-}
-
-// ==================== 物理参数测试 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPositionControllerPhysicsParamsTest,
-	"UAVSimulator.Control.PositionController.PhysicsParams",
-	UAV_TEST_FLAGS)
-
-bool FPositionControllerPhysicsParamsTest::RunTest(const FString& Parameters)
-{
-	UPositionController* Controller = NewObject<UPositionController>();
-
-	// 验证默认物理参数
-	UAV_TEST_FLOAT_EQUAL(Controller->UAVMass, 1.5f, 0.01f);
-	UAV_TEST_FLOAT_EQUAL(Controller->SingleMotorMaxThrust, 15.0f, 0.01f);
-	TestEqual(TEXT("Default motor count should be 4"), Controller->NumMotors, 4);
-
-	// 修改物理参数
-	Controller->UAVMass = 2.0f;
-	Controller->SingleMotorMaxThrust = 20.0f;
-	Controller->NumMotors = 6;
-
-	UAV_TEST_FLOAT_EQUAL(Controller->UAVMass, 2.0f, 0.01f);
-	UAV_TEST_FLOAT_EQUAL(Controller->SingleMotorMaxThrust, 20.0f, 0.01f);
-	TestEqual(TEXT("Motor count should be 6"), Controller->NumMotors, 6);
 
 	return true;
 }

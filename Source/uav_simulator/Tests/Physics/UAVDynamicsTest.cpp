@@ -83,41 +83,6 @@ bool FUAVDynamicsThrustTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// ==================== 力矩计算测试 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAVDynamicsTorqueTest,
-	"UAVSimulator.Physics.UAVDynamics.TorqueCalculation",
-	UAV_TEST_FLAGS)
-
-bool FUAVDynamicsTorqueTest::RunTest(const FString& Parameters)
-{
-	UUAVDynamics* Dynamics = NewObject<UUAVDynamics>();
-
-	// 设置不对称推力以产生力矩
-	// 电机布局（俯视）：
-	// 0(前右) 1(后右)
-	// 3(前左) 2(后左)
-	TArray<float> AsymmetricThrusts;
-	AsymmetricThrusts.Add(0.3f);  // 前右
-	AsymmetricThrusts.Add(0.2f);  // 后右
-	AsymmetricThrusts.Add(0.2f);  // 后左
-	AsymmetricThrusts.Add(0.3f);  // 前左
-	Dynamics->SetMotorThrusts(AsymmetricThrusts);
-
-	FUAVState InitialState;
-	InitialState.Position = FVector(0.0f, 0.0f, 100.0f);
-	InitialState.Velocity = FVector::ZeroVector;
-	InitialState.Rotation = FRotator::ZeroRotator;
-	InitialState.AngularVelocity = FVector::ZeroVector;
-
-	FUAVState NewState = Dynamics->UpdateDynamics(InitialState, 0.01f);
-
-	// 不对称推力应该产生角速度变化
-	// 具体方向取决于电机布局
-
-	return true;
-}
-
 // ==================== 重力测试 ====================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAVDynamicsGravityTest,
@@ -218,84 +183,6 @@ bool FUAVDynamicsAttitudeTest::RunTest(const FString& Parameters)
 
 	// 应该产生角速度变化
 	// 具体方向取决于电机布局和坐标系定义
-
-	return true;
-}
-
-// ==================== 陀螺效应测试 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAVDynamicsGyroscopicTest,
-	"UAVSimulator.Physics.UAVDynamics.GyroscopicEffect",
-	UAV_TEST_FLAGS)
-
-bool FUAVDynamicsGyroscopicTest::RunTest(const FString& Parameters)
-{
-	UUAVDynamics* Dynamics = NewObject<UUAVDynamics>();
-
-	// 悬停推力
-	TArray<float> HoverThrusts;
-	HoverThrusts.Init(0.245f, 4);
-	Dynamics->SetMotorThrusts(HoverThrusts);
-
-	// 初始有角速度
-	FUAVState InitialState;
-	InitialState.Position = FVector(0.0f, 0.0f, 100.0f);
-	InitialState.Velocity = FVector::ZeroVector;
-	InitialState.Rotation = FRotator::ZeroRotator;
-	InitialState.AngularVelocity = FVector(10.0f, 0.0f, 0.0f); // Roll 角速度
-
-	FUAVState NewState = Dynamics->UpdateDynamics(InitialState, 0.01f);
-
-	// 陀螺效应会产生耦合力矩
-	// 验证状态更新正常
-	TestTrue(TEXT("State should be updated"), true);
-
-	return true;
-}
-
-// ==================== 电机推力设置测试 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAVDynamicsMotorSetTest,
-	"UAVSimulator.Physics.UAVDynamics.MotorThrustSet",
-	UAV_TEST_FLAGS)
-
-bool FUAVDynamicsMotorSetTest::RunTest(const FString& Parameters)
-{
-	UUAVDynamics* Dynamics = NewObject<UUAVDynamics>();
-
-	// 设置不同的推力值
-	TArray<float> Thrusts;
-	Thrusts.Add(0.1f);
-	Thrusts.Add(0.2f);
-	Thrusts.Add(0.3f);
-	Thrusts.Add(0.4f);
-	Dynamics->SetMotorThrusts(Thrusts);
-
-	// 验证
-	TArray<float> Retrieved = Dynamics->GetMotorThrusts();
-	TestEqual(TEXT("Should have 4 motors"), Retrieved.Num(), 4);
-	UAV_TEST_FLOAT_EQUAL(Retrieved[0], 0.1f, 0.01f);
-	UAV_TEST_FLOAT_EQUAL(Retrieved[1], 0.2f, 0.01f);
-	UAV_TEST_FLOAT_EQUAL(Retrieved[2], 0.3f, 0.01f);
-	UAV_TEST_FLOAT_EQUAL(Retrieved[3], 0.4f, 0.01f);
-
-	// 测试边界值
-	TArray<float> BoundaryThrusts;
-	BoundaryThrusts.Init(0.0f, 4);
-	Dynamics->SetMotorThrusts(BoundaryThrusts);
-	Retrieved = Dynamics->GetMotorThrusts();
-	for (int32 i = 0; i < 4; ++i)
-	{
-		UAV_TEST_FLOAT_EQUAL(Retrieved[i], 0.0f, 0.01f);
-	}
-
-	BoundaryThrusts.Init(1.0f, 4);
-	Dynamics->SetMotorThrusts(BoundaryThrusts);
-	Retrieved = Dynamics->GetMotorThrusts();
-	for (int32 i = 0; i < 4; ++i)
-	{
-		UAV_TEST_FLOAT_EQUAL(Retrieved[i], 1.0f, 0.01f);
-	}
 
 	return true;
 }

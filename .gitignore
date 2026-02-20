@@ -16,3 +16,4 @@ Saved/
 .cache/
 .ignore
 compile_commands.json
+Logs/

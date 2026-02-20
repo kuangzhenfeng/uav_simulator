@@ -349,4 +349,95 @@ bool FTrajectoryTrackerTimeScaleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ==================== DesiredStateOverride 测试 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrajectoryTrackerDesiredStateOverrideTest,
+	"UAVSimulator.Planning.TrajectoryTracker.DesiredStateOverride",
+	UAV_TEST_FLAGS)
+
+bool FTrajectoryTrackerDesiredStateOverrideTest::RunTest(const FString& Parameters)
+{
+	UTrajectoryTracker* Tracker = NewObject<UTrajectoryTracker>();
+
+	FTrajectory Trajectory = UAVTestHelpers::CreateLinearTrajectory(
+		FVector(0.0f, 0.0f, 0.0f),
+		FVector(1000.0f, 0.0f, 0.0f),
+		5.0f, 10);
+
+	Tracker->SetTrajectory(Trajectory);
+	Tracker->StartTracking();
+
+	FTrajectoryPoint Override;
+	Override.Position = FVector(999.0f, 888.0f, 777.0f);
+	Override.Velocity = FVector(10.0f, 20.0f, 30.0f);
+	Tracker->SetDesiredStateOverride(Override);
+
+	FTrajectoryPoint Result = Tracker->GetDesiredState(-1.0f);
+	UAV_TEST_VECTOR_EQUAL(Result.Position, Override.Position, 1.0f);
+
+	return true;
+}
+
+// ==================== ClearDesiredStateOverride 测试 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrajectoryTrackerClearOverrideTest,
+	"UAVSimulator.Planning.TrajectoryTracker.ClearDesiredStateOverride",
+	UAV_TEST_FLAGS)
+
+bool FTrajectoryTrackerClearOverrideTest::RunTest(const FString& Parameters)
+{
+	UTrajectoryTracker* Tracker = NewObject<UTrajectoryTracker>();
+
+	FTrajectory Trajectory = UAVTestHelpers::CreateLinearTrajectory(
+		FVector(0.0f, 0.0f, 0.0f),
+		FVector(1000.0f, 0.0f, 0.0f),
+		5.0f, 10);
+
+	Tracker->SetTrajectory(Trajectory);
+	Tracker->StartTracking();
+
+	// 设置覆盖
+	FTrajectoryPoint Override;
+	Override.Position = FVector(999.0f, 888.0f, 777.0f);
+	Tracker->SetDesiredStateOverride(Override);
+
+	// 清除覆盖
+	Tracker->ClearDesiredStateOverride();
+
+	// 应恢复正常插值（t=0 时在起点附近）
+	FTrajectoryPoint Result = Tracker->GetDesiredState(0.0f);
+	UAV_TEST_VECTOR_EQUAL(Result.Position, FVector(0.0f, 0.0f, 0.0f), 50.0f);
+
+	return true;
+}
+
+// ==================== TimeFrozen 测试 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrajectoryTrackerTimeFrozenTest,
+	"UAVSimulator.Planning.TrajectoryTracker.TimeFrozen",
+	UAV_TEST_FLAGS)
+
+bool FTrajectoryTrackerTimeFrozenTest::RunTest(const FString& Parameters)
+{
+	UTrajectoryTracker* Tracker = NewObject<UTrajectoryTracker>();
+
+	FTrajectory Trajectory = UAVTestHelpers::CreateLinearTrajectory(
+		FVector(0.0f, 0.0f, 0.0f),
+		FVector(1000.0f, 0.0f, 0.0f),
+		5.0f, 10);
+
+	Tracker->SetTrajectory(Trajectory);
+	Tracker->StartTracking();
+
+	float TimeBefore = Tracker->GetCurrentTime();
+	Tracker->SetTimeFrozen(true);
+
+	// 模拟 TickComponent 不会推进时间（内部时钟冻结）
+	// 直接验证 frozen 标志已设置：GetCurrentTime 不变
+	float TimeAfter = Tracker->GetCurrentTime();
+	UAV_TEST_FLOAT_EQUAL(TimeAfter, TimeBefore, 0.01f);
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

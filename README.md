@@ -74,16 +74,27 @@ uav_simulator/
 - Visual Studio 2022
 - Windows 10/11
 
+### 环境配置
+编辑 `Script/env.bat`，将 `UE_ROOT` 修改为你的 UE 安装路径：
+```bat
+set UE_ROOT=D:\mySoftware\Epic Games\UE_5.7
+```
+项目路径会自动从脚本位置推导，无需手动设置。
+
 ### 编译项目
-1. 使用 Unreal Engine 打开 `uav_simulator.uproject`
-2. 等待 Shader 编译完成
-3. 在编辑器中点击 `Compile` 或使用 Visual Studio 编译
+```bash
+Script\build.bat
+```
+或使用 Unreal Engine 打开 `uav_simulator.uproject`，在编辑器中编译。
 
 ### 运行仿真
-1. 打开关卡 `Content/Environment/Levels/UavSimulatorMap`
-2. 在关卡中放置 `BP_UAVPawn_Default`
-3. 配置目标位置或巡逻点
-4. 点击 `Play` 运行仿真
+```bash
+Script\sim.bat          # 默认运行 60 秒
+Script\sim.bat 30       # 指定运行 30 秒
+```
+仿真日志保存至 `Logs/uav.log`。
+
+也可在编辑器中打开关卡 `Content/Environment/Levels/UavSimulatorMap`，放置 `BP_UAVPawn_Default` 后点击 Play。
 
 ### 配置 AI 行为
 1. 在 UAV Pawn 蓝图中设置 AI Controller Class 为 `BP_UAVAIController`
@@ -140,25 +151,20 @@ FNMPCAvoidanceResult Result = NMPCAvoidance->ComputeAvoidance(
 
 | 模块 | 测试数量 | 说明 |
 |------|---------|------|
-| Control.AttitudeController | 9 | 姿态控制器 PID、角度归一化、抗饱和 |
-| Control.PositionController | 12 | 位置控制器、级联控制、推力限制 |
-| Core.UAVTypes | 9 | 数据类型、枚举、结构体 |
-| Mission.MissionComponent | 15 | 任务状态机、航点管理、循环模式 |
-| Physics.UAVDynamics | 11 | 动力学模型、RK4 积分、推力计算 |
-| Planning.AStar | 7 | A* 路径规划、启发式、避障 |
-| Planning.ObstacleManager | 8 | 障碍物管理、碰撞检测 |
-| Planning.RRT | 9 | RRT/RRT* 算法、随机采样 |
-| Planning.TrajectoryOptimizer | 9 | 轨迹优化、多项式求值、约束 |
-| Planning.TrajectoryTracker | 10 | 轨迹跟踪、插值、进度管理 |
-| Planning.NMPCAvoidance | 13 | NMPC 求解、障碍物避障、温启动、Stuck 检测 |
-| Planning.MultiSegmentPlanning | 5 | 多段路径规划、失败回退、路径精简 |
-| Sensors.ObstacleDetector | 5 | 射线检测、障碍物分类 |
+| Control.AttitudeController | 8 | 姿态控制器 PID、角度归一化、抗饱和 |
+| Control.PositionController | 9 | 位置控制器、级联控制、推力限制 |
+| Control.StateEstimator | 7 | EKF 状态估计、预测收敛、GPS 融合 |
+| Mission.MissionComponent | 17 | 任务状态机、航点管理、循环模式 |
+| Physics.UAVDynamics | 8 | 动力学模型、RK4 积分、推力计算 |
+| Planning.AStar | 8 | A* 路径规划、启发式、避障 |
+| Planning.MultiSegment | 4 | 多段路径规划、碰撞检测、路径精简 |
+| Planning.NMPCAvoidance | 5 | NMPC 求解、障碍物代价、动态障碍物 |
 
 ### 运行测试
 
 ```bash
 # 使用测试脚本
-Script/test.bat
+Script\test.bat
 
 # 或在 UE5 编辑器中
 # Window -> Developer Tools -> Session Frontend -> Automation
@@ -203,9 +209,7 @@ Script/test.bat
 
 ## 文档
 
-- [项目路线图](UAV_SIMULATOR_ROADMAP.md)
-- [轨迹规划配置指南](Docs/Phase4_TrajectoryPlanning_Setup_Guide.md)
-- [行为树使用指南](Source/uav_simulator/AI/README_BehaviorTree.md)
+- [clangd配置方法.md](Docs/clangd配置方法.md)
 
 ## 许可证
 

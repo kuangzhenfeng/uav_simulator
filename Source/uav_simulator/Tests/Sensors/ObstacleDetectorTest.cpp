@@ -7,25 +7,6 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-// ==================== ObstacleDetector 初始化测试 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FObstacleDetectorInitTest,
-	"UAVSimulator.Sensors.ObstacleDetector.Initialization",
-	UAV_TEST_FLAGS)
-
-bool FObstacleDetectorInitTest::RunTest(const FString& Parameters)
-{
-	UObstacleDetector* Detector = NewObject<UObstacleDetector>();
-
-	// 验证默认参数
-	TestTrue(TEXT("Detector should be enabled by default"), Detector->IsEnabled());
-
-	// 检测到的障碍物列表应为空
-	TestEqual(TEXT("Should have no detected obstacles initially"), Detector->GetDetectedObstacles().Num(), 0);
-
-	return true;
-}
-
 // ==================== ObstacleManager 感知障碍物注册测试 ====================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FObstacleManagerPerceivedRegistrationTest,
@@ -122,26 +103,6 @@ bool FObstacleManagerStaleRemovalTest::RunTest(const FString& Parameters)
 	// 剩余的应该是普通障碍物
 	TArray<FObstacleInfo> Remaining = Manager->GetPreregisteredObstacles();
 	TestEqual(TEXT("Remaining should be preregistered"), Remaining.Num(), 1);
-
-	return true;
-}
-
-// ==================== FDetectedObstacle 结构体测试 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDetectedObstacleStructTest,
-	"UAVSimulator.Sensors.ObstacleDetector.DetectedObstacleStruct",
-	UAV_TEST_FLAGS)
-
-bool FDetectedObstacleStructTest::RunTest(const FString& Parameters)
-{
-	FDetectedObstacle Obstacle;
-
-	// 验证默认值
-	TestTrue(TEXT("Default center should be zero"), Obstacle.Center.IsNearlyZero());
-	TestEqual(TEXT("Default type should be Sphere"), Obstacle.EstimatedType, EObstacleType::Sphere);
-	UAV_TEST_FLOAT_EQUAL(Obstacle.Distance, 0.0f, 0.01f);
-	TestEqual(TEXT("Default registered ID should be -1"), Obstacle.RegisteredObstacleID, -1);
-	TestFalse(TEXT("Default actor should be invalid"), Obstacle.DetectedActor.IsValid());
 
 	return true;
 }

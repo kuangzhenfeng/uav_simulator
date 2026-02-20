@@ -103,7 +103,6 @@ UNMPCAvoidance* UBTService_UAVPathPlanning::GetNMPCAvoidance()
 		NMPCAvoidanceInstance = NewObject<UNMPCAvoidance>(this);
 		NMPCAvoidanceInstance->Config.MaxAcceleration = MaxAcceleration;
 		NMPCAvoidanceInstance->Config.MaxVelocity = MaxVelocity;
-		NMPCAvoidanceInstance->Config.ObstacleInfluenceDistance = CollisionCheckDistance;
 		NMPCAvoidanceInstance->Config.ObstacleSafeDistance = CollisionWarningDistance;
 	}
 	return NMPCAvoidanceInstance;
@@ -584,7 +583,7 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 		// 构造覆盖期望状态，注入 TrajectoryTracker
 		FTrajectoryPoint OverrideState;
 		OverrideState.Position = Result.CorrectedTarget;
-		OverrideState.Velocity = Result.CorrectedDirection * CurrentVelocity.Size();
+		OverrideState.Velocity = Result.CorrectedDirection * MaxVelocity;
 		if (Tracker)
 		{
 			Tracker->SetDesiredStateOverride(OverrideState);

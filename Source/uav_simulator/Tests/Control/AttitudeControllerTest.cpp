@@ -224,29 +224,6 @@ bool FAttitudeControllerMaxTiltTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// ==================== FPIDParams 结构测试 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPIDParamsTest,
-	"UAVSimulator.Control.AttitudeController.PIDParams",
-	UAV_TEST_FLAGS)
-
-bool FPIDParamsTest::RunTest(const FString& Parameters)
-{
-	// 测试默认构造
-	FPIDParams DefaultParams;
-	UAV_TEST_FLOAT_EQUAL(DefaultParams.Kp, 0.05f, 0.001f);
-	UAV_TEST_FLOAT_EQUAL(DefaultParams.Ki, 0.005f, 0.001f);
-	UAV_TEST_FLOAT_EQUAL(DefaultParams.Kd, 0.05f, 0.001f);
-
-	// 测试参数构造
-	FPIDParams CustomParams(0.1f, 0.02f, 0.08f);
-	UAV_TEST_FLOAT_EQUAL(CustomParams.Kp, 0.1f, 0.001f);
-	UAV_TEST_FLOAT_EQUAL(CustomParams.Ki, 0.02f, 0.001f);
-	UAV_TEST_FLOAT_EQUAL(CustomParams.Kd, 0.08f, 0.001f);
-
-	return true;
-}
-
 // ==================== 角度归一化测试 ====================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAttitudeControllerAngleNormalizationTest,

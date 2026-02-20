@@ -5,10 +5,13 @@ REM Using UE5 Automation Test Framework
 
 setlocal
 
-set UE_EDITOR="D:\mySoftware\Epic Games\UE_5.7\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
-set PROJECT_PATH="D:\myProject\Unreal Projects\uav_simulator\uav_simulator.uproject"
+call "%~dp0env.bat"
+set UE_EDITOR="%UE_ROOT%\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
+set PROJECT_PATH="%PROJECT_ROOT%\uav_simulator.uproject"
 set TEST_FILTER=UAVSimulator
-set TEMP_LOG=%TEMP%\uav_test_output.log
+set TEMP_LOG=Logs\test_output.log
+
+if not exist Logs mkdir Logs
 
 echo ========================================
 echo UAV Simulator Unit Tests
@@ -56,8 +59,5 @@ echo.
 echo ========================================
 echo Test execution completed.
 echo ========================================
-
-REM Cleanup temp file
-del "%TEMP_LOG%" >nul 2>&1
 
 endlocal
