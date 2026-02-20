@@ -43,11 +43,11 @@ protected:
 
 	// 最大飞行速度 (cm/s)
 	UPROPERTY(EditAnywhere, Category = "Trajectory")
-	float MaxVelocity = 500.0f;
+	float MaxVelocity = 800.0f;
 
 	// 最大加速度 (cm/s²)
 	UPROPERTY(EditAnywhere, Category = "Trajectory")
-	float MaxAcceleration = 200.0f;
+	float MaxAcceleration = 400.0f;
 
 	// 完成阈值 - 轨迹进度达到此值时认为完成
 	UPROPERTY(EditAnywhere, Category = "Trajectory")

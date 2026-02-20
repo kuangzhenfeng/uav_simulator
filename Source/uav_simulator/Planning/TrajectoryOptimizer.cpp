@@ -228,7 +228,7 @@ TArray<float> UTrajectoryOptimizer::ComputeTimeAllocation(const TArray<FVector>&
 		UE_LOG(LogUAVPlanning, Verbose, TEXT("TrajectoryOptimizer: Segment %d time: %.3f"), i, SegmentTime);
 
 		// 添加安全余量
-		SegmentTime *= 1.2f;
+		SegmentTime *= 1.05f;
 		SegmentTime = FMath::Max(SegmentTime, 0.5f); // 最小0.5秒
 
 		SegmentTimes.Add(SegmentTime);

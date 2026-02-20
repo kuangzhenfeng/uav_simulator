@@ -25,11 +25,11 @@ struct FNMPCConfig
 
 	// 最大加速度 (cm/s²)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float MaxAcceleration = 500.0f;
+	float MaxAcceleration = 800.0f;
 
 	// 最大速度 (cm/s)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float MaxVelocity = 500.0f;
+	float MaxVelocity = 800.0f;
 
 	// 参考跟踪权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
@@ -109,11 +109,11 @@ struct FNMPCConfig
 
 	// 代价连续上升判定为卡死的阈值
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	int32 CostRiseStuckThreshold = 3;
+	int32 CostRiseStuckThreshold = 8;
 
 	// 每次求解最小有效前进距离 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	float MinProgressPerSolve = 30.0f;
+	float MinProgressPerSolve = 5.0f;
 
 	// 控制接近饱和的比例阈值 (相对 MaxAcceleration)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -126,6 +126,10 @@ struct FNMPCConfig
 	// 纠偏目标最小位移阈值 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
 	float MinCorrectionDistance = 5.0f;
+
+	// 纠偏目标前瞻步数 (显式欧拉中 step 1 不含控制量，需用更远的步)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC", meta = (ClampMin = "2", ClampMax = "10"))
+	int32 CorrectionLookaheadSteps = 3;
 
 	// 获取时间步长 dt
 	float GetDt() const { return PredictionHorizon / FMath::Max(PredictionSteps, 1); }
@@ -337,6 +341,10 @@ private:
 
 	// 连续代价上升计数
 	int32 ConsecutiveCostRiseCount = 0;
+
+	// 上一帧状态 (用于日志状态转换检测)
+	bool bPrevNeedsCorrection = false;
+	bool bPrevStuck = false;
 
 	/**
 	 * 有限差分计算梯度

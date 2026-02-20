@@ -33,7 +33,7 @@ protected:
 
 	// 飞行速度
 	UPROPERTY(EditAnywhere, Category = "UAV")
-	float FlySpeed = 500.0f;
+	float FlySpeed = 800.0f;
 
 	// ===== 路径规划选项 =====
 

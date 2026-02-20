@@ -70,10 +70,10 @@ public:
 
 	// 控制限制
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control Limits")
-	float MaxVelocity = 500.0f; // cm/s
+	float MaxVelocity = 800.0f; // cm/s
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control Limits")
-	float MaxTiltAngle = 30.0f; // 度
+	float MaxTiltAngle = 35.0f; // 度
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control Limits")
 	float MaxThrust = 1.0f;

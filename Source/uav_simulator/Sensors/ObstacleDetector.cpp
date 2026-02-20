@@ -281,7 +281,7 @@ void UObstacleDetector::RegisterDetectedObstacle(FDetectedObstacle& Obstacle)
 	// 记录到本地集合
 	RegisteredActors.Add(TWeakObjectPtr<AActor>(Actor));
 
-	UE_LOG(LogUAVSensor, Warning, TEXT("[ObstacleDetector] New obstacle detected and registered: ID=%d, Actor=%s, Type=%d, Distance=%.1fcm"),
+	UE_LOG(LogUAVSensor, Verbose, TEXT("[ObstacleDetector] New obstacle detected and registered: ID=%d, Actor=%s, Type=%d, Distance=%.1fcm"),
 		ID, *Actor->GetName(), (int32)Obstacle.EstimatedType, Obstacle.Distance);
 
 	// 广播事件

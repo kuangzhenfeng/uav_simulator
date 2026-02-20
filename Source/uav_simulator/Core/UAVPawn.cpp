@@ -82,6 +82,10 @@ void AUAVPawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	// 限幅 DeltaTime：防止首帧或卡顿帧的超大步长导致物理积分发散和控制器振荡
+	const float MaxDeltaTime = 0.02f; // 50fps 下限
+	DeltaTime = FMath::Min(DeltaTime, MaxDeltaTime);
+
 	// 更新传感器
 	UpdateSensors(DeltaTime);
 

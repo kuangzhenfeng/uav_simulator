@@ -81,7 +81,7 @@ void UBTService_UAVPathPlanning::TickNode(UBehaviorTreeComponent& OwnerComp, uin
 	// ========== Local Planner (NMPC) ==========
 	if (bEnableDynamicAvoidance)
 	{
-		UE_LOG(LogUAVAI, Log, TEXT("Performing local collision check and avoidance"));
+		UE_LOG(LogUAVAI, Verbose, TEXT("Performing local collision check and avoidance"));
 		CheckCollisionAndAvoid(UAVPawn, DeltaSeconds);
 	}
 }
@@ -90,7 +90,7 @@ bool UBTService_UAVPathPlanning::ShouldReplan(const FVector& CurrentTarget) cons
 {
 	float Distance = FVector::Dist(CurrentTarget, LastTargetLocation);
 	bool bShouldReplan = Distance > ReplanningThreshold;
-	UE_LOG(LogUAVAI, Log, TEXT("ShouldReplan: Distance=%.1f, Threshold=%.1f, Result=%s"),
+	UE_LOG(LogUAVAI, Verbose, TEXT("ShouldReplan: Distance=%.1f, Threshold=%.1f, Result=%s"),
 		Distance, ReplanningThreshold, bShouldReplan ? TEXT("YES") : TEXT("NO"));
 	return bShouldReplan;
 }
@@ -590,8 +590,8 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 			Tracker->SetDesiredStateOverride(OverrideState);
 		}
 
-		UE_LOG(LogUAVPlanning, Log, TEXT("[LocalPlanner] NMPC correction: Target=%s, Cost=%.2f"),
-			*Result.CorrectedTarget.ToString(), Result.TotalCost);
+		UE_LOG(LogUAVPlanning, Log, TEXT("[LocalPlanner] NMPC correction: Pos=%s Obs=%d Target=%s, Cost=%.2f"),
+			*CurrentPosition.ToString(), NearbyObstacles.Num(), *Result.CorrectedTarget.ToString(), Result.TotalCost);
 	}
 	else
 	{

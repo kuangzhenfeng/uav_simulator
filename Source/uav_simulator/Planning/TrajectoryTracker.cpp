@@ -26,6 +26,9 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
+	// 与 UAVPawn::Tick 保持一致的步长上限，防止首帧大步长导致轨迹时间跳变
+	DeltaTime = FMath::Min(DeltaTime, 0.02f);
+
 	if (!bIsTracking || bIsPaused || bIsComplete)
 	{
 		return;
