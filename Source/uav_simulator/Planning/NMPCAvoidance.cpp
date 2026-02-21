@@ -491,6 +491,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	const int32 LookaheadIdx = FMath::Clamp(Config.CorrectionLookaheadSteps, 1, N);
 	FVector NextPos = FinalPositions.IsValidIndex(LookaheadIdx) ? FinalPositions[LookaheadIdx] : CurrentPosition;
 	Result.CorrectedTarget = NextPos;
+	Result.OptimalAcceleration = FirstControl;
 
 	// 修正方向
 	FVector CorrDir = NextPos - CurrentPosition;

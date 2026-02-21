@@ -476,12 +476,6 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 	FVector CurrentPosition = UAVPawn->GetActorLocation();
 	FVector CurrentVelocity = UAVPawn->GetUAVState().Velocity;
 
-	// 速度接近零时跳过
-	if (CurrentVelocity.IsNearlyZero())
-	{
-		return;
-	}
-
 	// 获取检测范围内的障碍物
 	TArray<FObstacleInfo> NearbyObstacles = ObstacleManager->GetObstaclesInRange(CurrentPosition, CollisionCheckDistance);
 
@@ -490,14 +484,21 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 
 	if (NearbyObstacles.Num() == 0)
 	{
-		// 附近无障碍物，清除 Override 恢复正常轨迹跟踪
+		// 附近无障碍物，清除 NMPC 直接控制并恢复正常轨迹跟踪
+		UAVPawn->ClearNMPCAcceleration();
 		if (Tracker)
 		{
 			Tracker->ClearDesiredStateOverride();
 			Tracker->SetTimeFrozen(false);
 		}
 		LocalPlannerStuckCount = 0;
-		return;
+		bWasStuckLastFrame = false;
+	}
+
+	// 有障碍物时即使速度为零也继续运行 NMPC（避免 u0≈0 导致无人机永久停止）
+	if (CurrentVelocity.IsNearlyZero())
+	{
+		CurrentVelocity = FVector::ZeroVector;
 	}
 
 	// 获取 NMPC 实例
@@ -572,34 +573,17 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 		return;
 	}
 
-	// stuck 期间冻结轨迹时钟，防止时间到期触发错误的重规划
-	if (Tracker)
-	{
-		Tracker->SetTimeFrozen(Result.bStuck);
-	}
-
 	if (Result.bNeedsCorrection)
 	{
-		// 构造覆盖期望状态，注入 TrajectoryTracker
-		FTrajectoryPoint OverrideState;
-		OverrideState.Position = Result.CorrectedTarget;
-		float OverrideSpeed = FMath::Max(CurrentVelocity.Size(), 200.0f);
-		OverrideState.Velocity = Result.CorrectedDirection * OverrideSpeed;
-		if (Tracker)
-		{
-			Tracker->SetDesiredStateOverride(OverrideState);
-		}
-
-		UE_LOG(LogUAVPlanning, Log, TEXT("[LocalPlanner] NMPC correction: Pos=%s Obs=%d Target=%s, Cost=%.2f"),
-			*CurrentPosition.ToString(), NearbyObstacles.Num(), *Result.CorrectedTarget.ToString(), Result.TotalCost);
+		UAVPawn->SetNMPCAcceleration(Result.OptimalAcceleration);
+		if (Tracker) Tracker->SetTimeFrozen(Result.bStuck);
+		UE_LOG(LogUAVPlanning, Log, TEXT("[LocalPlanner] NMPC direct ctrl: u0=%s Obs=%d Cost=%.2f"),
+			*Result.OptimalAcceleration.ToString(), NearbyObstacles.Num(), Result.TotalCost);
 	}
 	else
 	{
-		// 无需修正，清除 Override 恢复正常轨迹跟踪
-		if (Tracker)
-		{
-			Tracker->ClearDesiredStateOverride();
-		}
+		UAVPawn->ClearNMPCAcceleration();
+		if (Tracker) { Tracker->ClearDesiredStateOverride(); Tracker->SetTimeFrozen(false); }
 	}
 }
 
@@ -607,20 +591,27 @@ bool UBTService_UAVPathPlanning::UpdateStuckStateAndCheckReplan(bool bIsStuck)
 {
 	if (!bIsStuck)
 	{
-		LocalPlannerStuckCount = 0;
+		bWasStuckLastFrame = false;
 		return false;
 	}
 
-	++LocalPlannerStuckCount;
-	UE_LOG(LogUAVPlanning, Warning, TEXT("[LocalPlanner] NMPC stuck! Consecutive count: %d/%d"),
-		LocalPlannerStuckCount, LocalPlannerFailThreshold);
+	// 只在 N->Y 转换时递增，避免每帧累积导致过度重规划
+	if (!bWasStuckLastFrame)
+	{
+		++LocalPlannerStuckCount;
+		UE_LOG(LogUAVPlanning, Warning, TEXT("[LocalPlanner] NMPC stuck! Consecutive count: %d/%d"),
+			LocalPlannerStuckCount, LocalPlannerFailThreshold);
+	}
+	bWasStuckLastFrame = true;
 
 	if (LocalPlannerStuckCount < LocalPlannerFailThreshold)
 	{
 		return false;
 	}
 
-	LocalPlannerStuckCount = 0;
+	// 重规划后设置冷却期（需再累积 threshold 次才能再次触发）
+	LocalPlannerStuckCount = -LocalPlannerFailThreshold;
+	bWasStuckLastFrame = false;
 	return true;
 }
 

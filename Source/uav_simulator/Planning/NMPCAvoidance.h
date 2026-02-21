@@ -89,7 +89,7 @@ struct FNMPCConfig
 
 	// Stuck 检测: 合力阈值
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float StuckForceThreshold = 2.0f;
+	float StuckForceThreshold = 1.5f;
 
 	// 到达目标距离阈值 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
@@ -211,6 +211,10 @@ struct FNMPCAvoidanceResult
 	UPROPERTY(BlueprintReadOnly, Category = "NMPC")
 	float TotalCost;
 
+	// 第一步最优控制量 u*[0]（cm/s²），直接用于控制层
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC")
+	FVector OptimalAcceleration;
+
 	FNMPCAvoidanceResult()
 		: CorrectedTarget(FVector::ZeroVector)
 		, CorrectedDirection(FVector::ForwardVector)
@@ -220,6 +224,7 @@ struct FNMPCAvoidanceResult
 		, bNeedsCorrection(false)
 		, bStuck(false)
 		, TotalCost(0.0f)
+		, OptimalAcceleration(FVector::ZeroVector)
 	{}
 };
 

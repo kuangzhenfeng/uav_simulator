@@ -129,6 +129,37 @@ void UPositionController::Reset()
 	PreviousVelocityError = FVector::ZeroVector;
 }
 
+void UPositionController::AccelerationToControl(const FVector& DesiredAcceleration, float CurrentYaw,
+	FRotator& OutAttitude, float& OutThrust) const
+{
+	float VerticalThrustZ = GravityAcceleration + DesiredAcceleration.Z;
+	bool bNeedsDescent = VerticalThrustZ <= 0.0f;
+	FVector ThrustVector(DesiredAcceleration.X, DesiredAcceleration.Y,
+		bNeedsDescent ? 0.0f : VerticalThrustZ);
+
+	float MaxTotalThrust = NumMotors * SingleMotorMaxThrust;
+	float RequiredThrustN = UAVMass * ThrustVector.Size() / 100.0f;
+	float RawThrust = RequiredThrustN / MaxTotalThrust;
+	if (bNeedsDescent)
+	{
+		float HoverThrust = UAVMass * GravityAcceleration / (MaxTotalThrust * 100.0f);
+		RawThrust = FMath::Min(RawThrust, HoverThrust);
+	}
+	OutThrust = FMath::Clamp(RawThrust, MinThrust, MaxThrust);
+
+	float DesiredPitch = 0.0f;
+	float DesiredRoll = 0.0f;
+	if (!ThrustVector.IsNearlyZero())
+	{
+		FVector ThrustDirection = ThrustVector.GetSafeNormal();
+		DesiredPitch = FMath::Asin(-ThrustDirection.X) * (180.0f / PI);
+		DesiredRoll = FMath::Asin(ThrustDirection.Y / FMath::Cos(DesiredPitch * PI / 180.0f)) * (180.0f / PI);
+		DesiredPitch = FMath::Clamp(DesiredPitch, -MaxTiltAngle, MaxTiltAngle);
+		DesiredRoll = FMath::Clamp(DesiredRoll, -MaxTiltAngle, MaxTiltAngle);
+	}
+	OutAttitude = FRotator(DesiredPitch, CurrentYaw, DesiredRoll);
+}
+
 void UPositionController::ComputeControlWithAcceleration(const FUAVState& CurrentState, const FVector& InTargetPosition,
 	const FVector& InTargetVelocity, const FVector& InTargetAcceleration,
 	FRotator& OutDesiredAttitude, float& OutThrust, float DeltaTime)

@@ -88,8 +88,11 @@ private:
 	// 是否已处理过预定义航点
 	bool bWaypointsProcessed = false;
 
-	// Local Planner 连续 stuck 计数
+	// Local Planner stuck 计数（负值为重规划冷却期）
 	int32 LocalPlannerStuckCount = 0;
+
+	// 上一帧是否处于 stuck 状态（用于检测 N->Y 转换）
+	bool bWasStuckLastFrame = false;
 
 	// 原始航点（用于 Global Replan）
 	TArray<FVector> OriginalWaypoints;

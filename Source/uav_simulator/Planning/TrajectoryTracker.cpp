@@ -44,18 +44,24 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		FVector ErrorVec = DesiredState.Position - CurrentPos;
 
 		FVector Forward = DesiredState.Velocity.GetSafeNormal();
-		float Error = Forward.IsNearlyZero()
+		float ForwardError = Forward.IsNearlyZero()
 			? ErrorVec.Size()
-			: FMath::Max(0.0f, FVector::DotProduct(ErrorVec, Forward));
+			: FVector::DotProduct(ErrorVec, Forward);
 
-		if (Error > ErrorPauseThreshold)
+		if (ForwardError > ErrorPauseThreshold)
 		{
 			EffectiveTimeScale = 0.0f;
 		}
-		else if (Error > ErrorSlowdownStart)
+		else if (ForwardError > ErrorSlowdownStart)
 		{
-			float Alpha = (Error - ErrorSlowdownStart) / (ErrorPauseThreshold - ErrorSlowdownStart);
+			float Alpha = (ForwardError - ErrorSlowdownStart) / (ErrorPauseThreshold - ErrorSlowdownStart);
 			EffectiveTimeScale = TimeScale * (1.0f - Alpha);
+		}
+		else if (ForwardError < -ErrorSlowdownStart)
+		{
+			// UAV 超前：加速轨迹时间追上 UAV，减少位置误差和大俯仰角修正
+			float Alpha = FMath::Min(1.0f, (-ForwardError - ErrorSlowdownStart) / (ErrorPauseThreshold - ErrorSlowdownStart));
+			EffectiveTimeScale = TimeScale * (1.0f + Alpha);
 		}
 	}
 

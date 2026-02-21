@@ -48,6 +48,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Position Controller")
 	void Reset();
 
+	// 将期望加速度转换为姿态+推力（供 NMPC 控制层直接调用）
+	void AccelerationToControl(const FVector& DesiredAcceleration, float CurrentYaw,
+		FRotator& OutAttitude, float& OutThrust) const;
+
 	// 位置PID参数 (增大增益以提高响应速度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Position Control Parameters")
 	float Kp_Position = 2.25f;

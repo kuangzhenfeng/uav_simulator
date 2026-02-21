@@ -128,6 +128,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
 	UStabilityScorer* GetStabilityScorer() const { return StabilityScorerComponent; }
 
+	// NMPC 直接控制接口
+	void SetNMPCAcceleration(const FVector& Acceleration);
+	void ClearNMPCAcceleration();
+
 protected:
 	// 根组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
@@ -213,6 +217,9 @@ protected:
 	float ArmLength = 0.225f; // m
 
 private:
+	bool bNMPCDirectControl = false;
+	FVector NMPCOptimalAcceleration;
+
 	// 更新传感器数据
 	void UpdateSensors(float DeltaTime);
 

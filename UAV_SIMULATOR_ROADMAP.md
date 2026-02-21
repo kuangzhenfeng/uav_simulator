@@ -258,7 +258,14 @@
   - 新增文件：`Tests/Planning/MultiSegmentPlanningTest.cpp`
   - 新增文件：`Tests/Sensors/ObstacleDetectorTest.cpp`
 
-### Phase 8: 多机协同与安全滤波
+### Phase 8: NMPC 控制层升级（直接输出 u*[0]）✅ (已完成)
+- [x] NMPC 从规划层升级为控制层，直接输出最优加速度 u*[0] → 姿态+推力，绕过位置 PID
+  - `FNMPCAvoidanceResult.OptimalAcceleration`：存储第一步最优控制量
+  - `UPositionController::AccelerationToControl()`：加速度→姿态+推力转换
+  - `AUAVPawn::SetNMPCAcceleration()` / `ClearNMPCAcceleration()`：直接控制接口
+  - `BTService_UAVPathPlanning`：避障时调用 `SetNMPCAcceleration()` 替代 Tracker Override
+
+### Phase 9: 多机协同与安全滤波
 - [ ] 集中式联合轨迹优化
   - 多机 NMPC：将单机 NMPC 扩展为联合状态空间，同时优化所有 UAV 的控制序列
   - 硬约束：机间最小安全距离、通信范围、动力学可行性
@@ -276,7 +283,7 @@
   - 支持预定义队形：线形、V 形、环形
   - 动态队形切换与障碍物穿越
 
-### Phase 9: 任务分配与联合优化
+### Phase 10: 任务分配与联合优化
 - [ ] 任务分配（MILP/MIQP/MINLP）
   - Mixed-Integer 优化：将任务分配建模为 MILP/MIQP/MINLP 问题
   - 决策变量：任务-UAV 分配矩阵、任务执行顺序
@@ -291,7 +298,7 @@
   - 动态重分配：UAV 故障、新任务插入、环境变化时触发重规划
   - 支持优先级调度和抢占式任务切换
 
-### Phase 10: 环境与优化
+### Phase 11: 环境与优化
 - [ ] 完善环境系统（风场、天气）
 - [ ] 添加复杂场景（城市、森林）
 - [ ] 性能优化

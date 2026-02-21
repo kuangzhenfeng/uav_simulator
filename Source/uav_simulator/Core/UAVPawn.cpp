@@ -93,22 +93,19 @@ void AUAVPawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	// 限幅 DeltaTime：防止首帧或卡顿帧的超大步长导致物理积分发散和控制器振荡
-	const float MaxDeltaTime = 0.02f; // 50fps 下限
-	DeltaTime = FMath::Min(DeltaTime, MaxDeltaTime);
-
-	// 更新传感器
-	UpdateSensors(DeltaTime);
-
-	// 更新控制器
-	UpdateController(DeltaTime);
-
-	// 更新物理模型
-	UpdatePhysics(DeltaTime);
-
-	// 更新Actor的位置和姿态
-	SetActorLocation(CurrentState.Position);
-	SetActorRotation(CurrentState.Rotation);
+	// 子步积分：将大帧拆成固定 0.02s 步长，保证物理精度的同时支持时间加速
+	const float FixedStep = 0.02f;
+	float Remaining = FMath::Min(DeltaTime, 1.0f); // 最多1秒防止卡顿帧
+	while (Remaining > KINDA_SMALL_NUMBER)
+	{
+		const float Step = FMath::Min(Remaining, FixedStep);
+		UpdateSensors(Step);
+		UpdateController(Step);
+		UpdatePhysics(Step);
+		SetActorLocation(CurrentState.Position);
+		SetActorRotation(CurrentState.Rotation);
+		Remaining -= Step;
+	}
 
 	// 更新稳定性评分
 	if (StabilityScorerComponent)
@@ -207,6 +204,23 @@ void AUAVPawn::UpdateController(float DeltaTime)
 	{
 	case EUAVControlMode::Trajectory:
 		{
+			// NMPC 直接控制路径（绕过位置 PID）
+			if (bNMPCDirectControl && PositionControllerComponent && AttitudeControllerComponent)
+			{
+				FRotator DesiredAttitude;
+				float DesiredThrust;
+				PositionControllerComponent->AccelerationToControl(
+					NMPCOptimalAcceleration, CurrentState.Rotation.Yaw, DesiredAttitude, DesiredThrust);
+				FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
+					CurrentState, DesiredAttitude, DeltaTime);
+				float HoverThrust = AttitudeControllerComponent->HoverThrust;
+				for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
+					MotorOutput.Thrusts[i] = FMath::Clamp(
+						DesiredThrust + (MotorOutput.Thrusts[i] - HoverThrust), 0.0f, 1.0f);
+				if (DynamicsComponent) DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
+				break;
+			}
+
 			// 轨迹跟踪模式
 			if (TrajectoryTrackerComponent && TrajectoryTrackerComponent->IsTracking() && PositionControllerComponent)
 			{
@@ -477,4 +491,15 @@ void AUAVPawn::ClearWaypoints()
 		MissionComponent->ClearWaypoints();
 	}
 	Waypoints.Empty();
+}
+
+void AUAVPawn::SetNMPCAcceleration(const FVector& Acceleration)
+{
+	NMPCOptimalAcceleration = Acceleration;
+	bNMPCDirectControl = true;
+}
+
+void AUAVPawn::ClearNMPCAcceleration()
+{
+	bNMPCDirectControl = false;
 }
