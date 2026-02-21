@@ -29,7 +29,7 @@ struct FNMPCConfig
 
 	// 最大速度 (cm/s)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float MaxVelocity = 800.0f;
+	float MaxVelocity = 2000.0f;
 
 	// 参考跟踪权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")

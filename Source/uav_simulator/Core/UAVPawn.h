@@ -19,6 +19,7 @@ class UPlanningVisualizer;
 class UMissionComponent;
 class UObstacleDetector;
 class UStabilityScorer;
+class UControlParameterTuner;
 
 /**
  * 无人机Pawn类
@@ -175,6 +176,10 @@ protected:
 	// 稳定性评分组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
 	TObjectPtr<UStabilityScorer> StabilityScorerComponent;
+
+	// PID调参组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
+	TObjectPtr<UControlParameterTuner> ParameterTunerComponent;
 
 	// 当前状态
 	UPROPERTY(BlueprintReadOnly, Category = "UAV State")

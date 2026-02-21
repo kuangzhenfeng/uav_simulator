@@ -329,7 +329,7 @@ struct FPlanningConfig
 	FPlanningConfig()
 		: Algorithm(EPathPlanningAlgorithm::AStar)
 		, bEnableTrajectoryOptimization(true)
-		, MaxVelocity(800.0f)
+		, MaxVelocity(2000.0f)
 		, MaxAcceleration(400.0f)
 		, SafetyMargin(50.0f)
 		, GridResolution(50.0f)

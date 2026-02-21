@@ -4,10 +4,15 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "HAL/IConsoleManager.h"
 #include "ControlParameterTuner.generated.h"
 
 class UAttitudeController;
 class UPositionController;
+class AUAVPawn;
+class AUAVHUD;
+
+enum class EAutoTunePhase : uint8 { Idle, PosLoop };
 
 /**
  * 控制参数调试组件
@@ -47,6 +52,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Parameter Tuner")
 	void ResetToDefaults();
 
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 protected:
 	// 控制器引用
 	UPROPERTY()
@@ -58,4 +65,34 @@ protected:
 	// 是否启用实时调试
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
 	bool bEnableDebugDisplay = true;
+
+	UPROPERTY()
+	TObjectPtr<AUAVPawn> UAVPawnRef;
+
+private:
+	// 阶跃测试状态
+	bool bStepTestActive = false;
+	float StepMagnitude = 200.0f;
+	float StepTargetZ = 0.0f;
+	float StepElapsed = 0.0f;
+	float StepPeakOvershoot = 0.0f;
+	float SettleTimer = 0.0f;
+
+	TArray<IConsoleObject*> ConsoleCommands;
+
+	// 自动调参状态
+	EAutoTunePhase AutoTunePhase = EAutoTunePhase::Idle;
+	float LastSettleTime = 0.0f, LastOvershootPct = 0.0f;
+	bool bStepResultReady = false;
+	float StepBaseZ = 0.0f;
+	float AT_DeadTime = 0.0f;   // θ
+	float AT_TimeConst = 0.0f;  // τ
+
+	void RegisterConsoleCommands();
+	void HandleSetParam(const TArray<FString>& Args);
+	void HandleStep(const TArray<FString>& Args);
+	void TriggerStepTest(float Magnitude);
+	void TickStepTest(float DeltaTime);
+	void HandleAutoTune(const TArray<FString>& Args);
+	void TickAutoTune();
 };

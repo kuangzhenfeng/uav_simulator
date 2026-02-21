@@ -33,6 +33,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV HUD")
 	void SetControllerParams(class UAttitudeController* AttitudeCtrl, class UPositionController* PositionCtrl);
 
+	// 设置阶跃测试结果
+	void SetStepTestResult(float SettleTime, float OvershootPct, float SteadyErr);
+
 protected:
 	// 当前UAV状态
 	FUAVState CurrentState;
@@ -51,6 +54,12 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUD Settings")
 	bool bShowUAVInfo = true;
 
+	// 阶跃测试结果
+	bool bHasStepResult = false;
+	float StepSettleTime = 0.0f;
+	float StepOvershootPct = 0.0f;
+	float StepSteadyError = 0.0f;
+
 private:
 	// 绘制状态信息
 	void DrawStateInfo();
@@ -60,4 +69,7 @@ private:
 
 	// 绘制控制器参数
 	void DrawControllerParams();
+
+	// 绘制阶跃测试结果
+	void DrawStepTestResult();
 };

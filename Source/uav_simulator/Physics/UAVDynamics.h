@@ -55,7 +55,7 @@ protected:
 	float DragCoefficient = 0.1f; // 线性空气阻力系数
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics Parameters")
-	float QuadraticDragCoefficient = 0.01f; // 二次空气阻力系数
+	float QuadraticDragCoefficient = 0.0002f; // 二次空气阻力系数
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics Parameters")
 	float MotorTorqueCoefficient = 0.0045f; // 电机扭矩系数 (N·m / N)

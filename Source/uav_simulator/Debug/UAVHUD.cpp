@@ -20,6 +20,7 @@ void AUAVHUD::DrawHUD()
 	DrawStateInfo();
 	DrawMotorInfo();
 	DrawControllerParams();
+	DrawStepTestResult();
 }
 
 void AUAVHUD::SetUAVState(const FUAVState& InState)
@@ -100,6 +101,35 @@ void AUAVHUD::SetControllerParams(UAttitudeController* AttitudeCtrl, UPositionCo
 {
 	AttitudeController = AttitudeCtrl;
 	PositionController = PositionCtrl;
+}
+
+void AUAVHUD::SetStepTestResult(float SettleTime, float OvershootPct, float SteadyErr)
+{
+	bHasStepResult = true;
+	StepSettleTime = SettleTime;
+	StepOvershootPct = OvershootPct;
+	StepSteadyError = SteadyErr;
+}
+
+void AUAVHUD::DrawStepTestResult()
+{
+	if (!Canvas || !bHasStepResult) return;
+
+	float XPos = Canvas->SizeX - 280.0f;
+	float YPos = 50.0f;
+	float LineHeight = 20.0f;
+
+	DrawText(TEXT("Step Test Result"), FColor::White, XPos, YPos, nullptr, 1.2f);
+	YPos += LineHeight * 1.5f;
+
+	DrawText(FString::Printf(TEXT("Settle Time: %.2f s"), StepSettleTime), FColor::Green, XPos, YPos);
+	YPos += LineHeight;
+
+	FColor OvershootColor = (StepOvershootPct > 20.0f) ? FColor::Red : FColor::Yellow;
+	DrawText(FString::Printf(TEXT("Overshoot:   %.1f %%"), StepOvershootPct), OvershootColor, XPos, YPos);
+	YPos += LineHeight;
+
+	DrawText(FString::Printf(TEXT("Steady Err:  %.1f cm"), StepSteadyError), FColor::Cyan, XPos, YPos);
 }
 
 void AUAVHUD::DrawControllerParams()

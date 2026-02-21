@@ -15,6 +15,7 @@
 #include "../Mission/MissionComponent.h"
 #include "../Sensors/ObstacleDetector.h"
 #include "../Debug/StabilityScorer.h"
+#include "../Debug/ControlParameterTuner.h"
 #include "../Utility/Debug.h"
 #include "GameFramework/PlayerController.h"
 
@@ -56,6 +57,9 @@ AUAVPawn::AUAVPawn()
 	// 创建稳定性评分组件
 	StabilityScorerComponent = CreateDefaultSubobject<UStabilityScorer>(TEXT("StabilityScorer"));
 
+	// 创建PID调参组件
+	ParameterTunerComponent = CreateDefaultSubobject<UControlParameterTuner>(TEXT("ParameterTuner"));
+
 	// 初始化状态
 	CurrentState = FUAVState();
 	TargetAttitude = FRotator::ZeroRotator;
@@ -76,6 +80,13 @@ void AUAVPawn::BeginPlay()
 	
 	// 设置初始目标位置为当前位置
 	TargetPosition = CurrentState.Position;
+
+	// 接线PID调参组件
+	if (ParameterTunerComponent)
+	{
+		ParameterTunerComponent->SetAttitudeController(AttitudeControllerComponent);
+		ParameterTunerComponent->SetPositionController(PositionControllerComponent);
+	}
 }
 
 void AUAVPawn::Tick(float DeltaTime)

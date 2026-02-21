@@ -583,7 +583,8 @@ void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float
 		// 构造覆盖期望状态，注入 TrajectoryTracker
 		FTrajectoryPoint OverrideState;
 		OverrideState.Position = Result.CorrectedTarget;
-		OverrideState.Velocity = Result.CorrectedDirection * MaxVelocity;
+		float OverrideSpeed = FMath::Max(CurrentVelocity.Size(), 200.0f);
+		OverrideState.Velocity = Result.CorrectedDirection * OverrideSpeed;
 		if (Tracker)
 		{
 			Tracker->SetDesiredStateOverride(OverrideState);

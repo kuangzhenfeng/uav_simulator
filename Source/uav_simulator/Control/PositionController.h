@@ -50,27 +50,27 @@ public:
 
 	// 位置PID参数 (增大增益以提高响应速度)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Position Control Parameters")
-	float Kp_Position = 1.0f;
+	float Kp_Position = 2.25f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Position Control Parameters")
 	float Ki_Position = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Position Control Parameters")
-	float Kd_Position = 0.0f;
+	float Kd_Position = 0.1f;
 
 	// 速度PID参数 (增大增益以产生足够的姿态角)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Velocity Control Parameters")
-	float Kp_Velocity = 2.0f;
+	float Kp_Velocity = 4.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Velocity Control Parameters")
 	float Ki_Velocity = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Velocity Control Parameters")
-	float Kd_Velocity = 0.0f;
+	float Kd_Velocity = 0.05f;
 
 	// 控制限制
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control Limits")
-	float MaxVelocity = 800.0f; // cm/s
+	float MaxVelocity = 2000.0f; // cm/s
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control Limits")
 	float MaxTiltAngle = 35.0f; // 度

@@ -51,20 +51,21 @@ void UPositionController::ComputeControl(const FUAVState& CurrentState, const FV
 								+ Ki_Velocity * VelocityErrorIntegral
 								+ Kd_Velocity * (VelocityError - PreviousVelocityError) / DeltaTime;
 
-	// 计算期望推力（使用实际物理参数）
-	// 推力需要克服重力并产生期望加速度
-	// 当期望加速度向上（正值）时，推力 = m*(g + a)
-	// 当期望加速度向下（负值）时，推力 = m*(g + a) = m*(g - |a|)
-	// 所以公式是：Thrust = m * (g + a_desired)
-	// 但这里 g 是正值980，实际重力是-g，所以：
-	// Thrust_needed = m * g (悬停) + m * a_desired (加速度)
-	// 当 a_desired 向下（负值）时，推力减小；向上（正值）时，推力增大
-	// 推力向量 = (a_x, a_y, g + a_z)，用模长计算推力以补偿倾斜角
-	FVector ThrustVector(DesiredAcceleration.X, DesiredAcceleration.Y, GravityAcceleration + DesiredAcceleration.Z);
-	float RequiredThrustN = UAVMass * ThrustVector.Size() / 100.0f;
-	// 归一化到[0,1]范围
+	float VerticalThrustZ = GravityAcceleration + DesiredAcceleration.Z;
+	bool bNeedsDescent = VerticalThrustZ <= 0.0f;
+	// Z分量钳制到0：多旋翼无法产生向下推力，但保留X/Y分量以维持水平制动能力
+	FVector ThrustVector(DesiredAcceleration.X, DesiredAcceleration.Y,
+		bNeedsDescent ? 0.0f : VerticalThrustZ);
+
 	float MaxTotalThrust = NumMotors * SingleMotorMaxThrust;
+	float RequiredThrustN = UAVMass * ThrustVector.Size() / 100.0f;
 	float RawThrust = RequiredThrustN / MaxTotalThrust;
+	// 需要下降时，推力上限为悬停推力：确保倾斜后垂直分量 < 重力，UAV 自然下降
+	if (bNeedsDescent)
+	{
+		float HoverThrust = UAVMass * GravityAcceleration / (MaxTotalThrust * 100.0f);
+		RawThrust = FMath::Min(RawThrust, HoverThrust);
+	}
 	OutThrust = FMath::Clamp(RawThrust, MinThrust, MaxThrust);
 
 	// 调试日志：输出推力计算详情
@@ -73,18 +74,16 @@ void UPositionController::ComputeControl(const FUAVState& CurrentState, const FV
 		RequiredThrustN, RawThrust, OutThrust);
 
 	// 计算期望姿态（Roll和Pitch）
-	FVector ThrustDirection = ThrustVector.GetSafeNormal();
-
-	// 从推力方向计算期望姿态
-	// Pitch: 前后倾斜（绕Y轴）
-	float DesiredPitch = FMath::Asin(-ThrustDirection.X) * (180.0f / PI);
-
-	// Roll: 左右倾斜（绕X轴）
-	float DesiredRoll = FMath::Asin(ThrustDirection.Y / FMath::Cos(DesiredPitch * PI / 180.0f)) * (180.0f / PI);
-
-	// 限制倾斜角度
-	DesiredPitch = FMath::Clamp(DesiredPitch, -MaxTiltAngle, MaxTiltAngle);
-	DesiredRoll = FMath::Clamp(DesiredRoll, -MaxTiltAngle, MaxTiltAngle);
+	float DesiredPitch = 0.0f;
+	float DesiredRoll = 0.0f;
+	if (!ThrustVector.IsNearlyZero())
+	{
+		FVector ThrustDirection = ThrustVector.GetSafeNormal();
+		DesiredPitch = FMath::Asin(-ThrustDirection.X) * (180.0f / PI);
+		DesiredRoll = FMath::Asin(ThrustDirection.Y / FMath::Cos(DesiredPitch * PI / 180.0f)) * (180.0f / PI);
+		DesiredPitch = FMath::Clamp(DesiredPitch, -MaxTiltAngle, MaxTiltAngle);
+		DesiredRoll = FMath::Clamp(DesiredRoll, -MaxTiltAngle, MaxTiltAngle);
+	}
 
 	// Yaw保持当前值（或可以设置为目标Yaw）
 	float DesiredYaw = CurrentState.Rotation.Yaw;
@@ -166,21 +165,32 @@ void UPositionController::ComputeControlWithAcceleration(const FUAVState& Curren
 	// 总期望加速度 = 前馈加速度 + 反馈加速度
 	FVector DesiredAcceleration = InTargetAcceleration + FeedbackAcceleration;
 
-	// 计算期望推力（用推力向量模长补偿倾斜角）
-	FVector ThrustVector(DesiredAcceleration.X, DesiredAcceleration.Y, GravityAcceleration + DesiredAcceleration.Z);
-	float RequiredThrustN = UAVMass * ThrustVector.Size() / 100.0f;
+	float VerticalThrustZ2 = GravityAcceleration + DesiredAcceleration.Z;
+	bool bNeedsDescent2 = VerticalThrustZ2 <= 0.0f;
+	FVector ThrustVector(DesiredAcceleration.X, DesiredAcceleration.Y,
+		bNeedsDescent2 ? 0.0f : VerticalThrustZ2);
+
 	float MaxTotalThrust = NumMotors * SingleMotorMaxThrust;
+	float RequiredThrustN = UAVMass * ThrustVector.Size() / 100.0f;
 	float RawThrust = RequiredThrustN / MaxTotalThrust;
+	if (bNeedsDescent2)
+	{
+		float HoverThrust = UAVMass * GravityAcceleration / (MaxTotalThrust * 100.0f);
+		RawThrust = FMath::Min(RawThrust, HoverThrust);
+	}
 	OutThrust = FMath::Clamp(RawThrust, MinThrust, MaxThrust);
 
 	// 计算期望姿态
-	FVector ThrustDirection = ThrustVector.GetSafeNormal();
-
-	float DesiredPitch = FMath::Asin(-ThrustDirection.X) * (180.0f / PI);
-	float DesiredRoll = FMath::Asin(ThrustDirection.Y / FMath::Cos(DesiredPitch * PI / 180.0f)) * (180.0f / PI);
-
-	DesiredPitch = FMath::Clamp(DesiredPitch, -MaxTiltAngle, MaxTiltAngle);
-	DesiredRoll = FMath::Clamp(DesiredRoll, -MaxTiltAngle, MaxTiltAngle);
+	float DesiredPitch = 0.0f;
+	float DesiredRoll = 0.0f;
+	if (!ThrustVector.IsNearlyZero())
+	{
+		FVector ThrustDirection = ThrustVector.GetSafeNormal();
+		DesiredPitch = FMath::Asin(-ThrustDirection.X) * (180.0f / PI);
+		DesiredRoll = FMath::Asin(ThrustDirection.Y / FMath::Cos(DesiredPitch * PI / 180.0f)) * (180.0f / PI);
+		DesiredPitch = FMath::Clamp(DesiredPitch, -MaxTiltAngle, MaxTiltAngle);
+		DesiredRoll = FMath::Clamp(DesiredRoll, -MaxTiltAngle, MaxTiltAngle);
+	}
 
 	float DesiredYaw = CurrentState.Rotation.Yaw;
 
