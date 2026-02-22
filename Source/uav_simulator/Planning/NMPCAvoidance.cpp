@@ -473,8 +473,9 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	// 最终投影
 	ProjectControls(Controls, CurrentVelocity);
 
-	// 更新连续代价上升计数
-	if (CurrentCost >= PreviousTotalCost)
+	// 更新连续代价上升计数：仅在超过收敛容差时才视为“上升”，避免持平/微抖动触发重置
+	const float CostRiseEpsilon = FMath::Max(Config.ConvergenceTolerance, KINDA_SMALL_NUMBER);
+	if (CurrentCost > PreviousTotalCost + CostRiseEpsilon)
 	{
 		++ConsecutiveCostRiseCount;
 	}

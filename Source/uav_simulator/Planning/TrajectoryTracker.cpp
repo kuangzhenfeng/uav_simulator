@@ -53,6 +53,7 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 	float EffectiveTimeScale = TimeScale;
 	if (bEnableAdaptiveTimeScale)
 	{
+		const float ClampedMinScale = FMath::Clamp(MinAdaptiveTimeScale, 0.01f, 1.0f);
 		FVector CurrentPos = GetOwner()->GetActorLocation();
 		FTrajectoryPoint DesiredState = InterpolateTrajectory(TrackingTime);
 		FVector ErrorVec = DesiredState.Position - CurrentPos;
@@ -64,12 +65,13 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 
 		if (ForwardError > ErrorPauseThreshold)
 		{
-			EffectiveTimeScale = 0.0f;
+			EffectiveTimeScale = TimeScale * ClampedMinScale;
 		}
 		else if (ForwardError > ErrorSlowdownStart)
 		{
 			float Alpha = (ForwardError - ErrorSlowdownStart) / (ErrorPauseThreshold - ErrorSlowdownStart);
-			EffectiveTimeScale = TimeScale * (1.0f - Alpha);
+			float AdaptiveScale = FMath::Lerp(1.0f, ClampedMinScale, Alpha);
+			EffectiveTimeScale = TimeScale * AdaptiveScale;
 		}
 		else if (ForwardError < -ErrorSlowdownStart)
 		{
@@ -77,6 +79,8 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 			float Alpha = FMath::Min(1.0f, (-ForwardError - ErrorSlowdownStart) / (ErrorPauseThreshold - ErrorSlowdownStart));
 			EffectiveTimeScale = TimeScale * (1.0f + Alpha);
 		}
+
+		EffectiveTimeScale = FMath::Max(EffectiveTimeScale, TimeScale * ClampedMinScale);
 	}
 
 	// 更新跟踪时间

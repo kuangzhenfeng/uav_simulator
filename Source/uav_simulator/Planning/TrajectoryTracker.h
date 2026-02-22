@@ -154,6 +154,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
 	float ErrorPauseThreshold = 300.0f;
 
+	// 自适应时间缩放的最小比例（相对 TimeScale），避免 TrackingTime 被完全冻结
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking", meta = (ClampMin = "0.01", ClampMax = "1.0"))
+	float MinAdaptiveTimeScale = 0.1f;
+
 	// 完成判定半径 (cm)：时间耗尽后，UAV 须在此距离内才标记完成
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
 	float CompletionRadius = 200.0f;
