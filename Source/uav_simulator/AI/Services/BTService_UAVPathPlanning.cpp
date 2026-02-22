@@ -9,7 +9,6 @@
 #include "uav_simulator/Planning/RRTPathPlanner.h"
 #include "uav_simulator/Planning/TrajectoryOptimizer.h"
 #include "uav_simulator/Planning/ObstacleManager.h"
-#include "uav_simulator/Planning/NMPCAvoidance.h"
 #include "uav_simulator/Planning/TrajectoryTracker.h"
 #include "uav_simulator/Planning/PlanningVisualizer.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
@@ -78,11 +77,11 @@ void UBTService_UAVPathPlanning::TickNode(UBehaviorTreeComponent& OwnerComp, uin
 		}
 	}
 
-	// ========== Local Planner (NMPC) ==========
-	if (bEnableDynamicAvoidance)
+	// ========== Local Planner (NMPC Stuck 检测) ==========
+	if (UpdateStuckStateAndCheckReplan(UAVPawn->IsNMPCStuck()))
 	{
-		UE_LOG(LogUAVAI, Verbose, TEXT("Performing local collision check and avoidance"));
-		CheckCollisionAndAvoid(UAVPawn, DeltaSeconds);
+		UE_LOG(LogUAVAI, Warning, TEXT("[LocalPlanner] Consecutive stuck, triggering global replan"));
+		TriggerGlobalReplan(UAVPawn);
 	}
 }
 
@@ -93,19 +92,6 @@ bool UBTService_UAVPathPlanning::ShouldReplan(const FVector& CurrentTarget) cons
 	UE_LOG(LogUAVAI, Verbose, TEXT("ShouldReplan: Distance=%.1f, Threshold=%.1f, Result=%s"),
 		Distance, ReplanningThreshold, bShouldReplan ? TEXT("YES") : TEXT("NO"));
 	return bShouldReplan;
-}
-
-// ========== 获取或创建 NMPCAvoidance 实例 ==========
-UNMPCAvoidance* UBTService_UAVPathPlanning::GetNMPCAvoidance()
-{
-	if (!NMPCAvoidanceInstance)
-	{
-		NMPCAvoidanceInstance = NewObject<UNMPCAvoidance>(this);
-		NMPCAvoidanceInstance->Config.MaxAcceleration = MaxAcceleration;
-		NMPCAvoidanceInstance->Config.MaxVelocity = MaxVelocity;
-		NMPCAvoidanceInstance->Config.ObstacleSafeDistance = CollisionWarningDistance;
-	}
-	return NMPCAvoidanceInstance;
 }
 
 // ========== 创建路径规划器（消除重复代码） ==========
@@ -459,134 +445,6 @@ void UBTService_UAVPathPlanning::PerformPathPlanning(AUAVPawn* UAVPawn, const FV
 	}
 }
 
-// ========== Local Planner: NMPC 局部避障 ==========
-void UBTService_UAVPathPlanning::CheckCollisionAndAvoid(AUAVPawn* UAVPawn, float DeltaSeconds)
-{
-	if (!UAVPawn)
-	{
-		return;
-	}
-
-	UObstacleManager* ObstacleManager = UAVPawn->GetObstacleManager();
-	if (!ObstacleManager)
-	{
-		return;
-	}
-
-	FVector CurrentPosition = UAVPawn->GetActorLocation();
-	FVector CurrentVelocity = UAVPawn->GetUAVState().Velocity;
-
-	// 获取检测范围内的障碍物
-	TArray<FObstacleInfo> NearbyObstacles = ObstacleManager->GetObstaclesInRange(CurrentPosition, CollisionCheckDistance);
-
-	// 获取 TrajectoryTracker（后续 Override 和参考点采样都需要）
-	UTrajectoryTracker* Tracker = UAVPawn->GetTrajectoryTracker();
-
-	if (NearbyObstacles.Num() == 0)
-	{
-		// 附近无障碍物，清除 NMPC 直接控制并恢复正常轨迹跟踪
-		UAVPawn->ClearNMPCAcceleration();
-		if (Tracker)
-		{
-			Tracker->ClearDesiredStateOverride();
-			Tracker->SetTimeFrozen(false);
-		}
-		LocalPlannerStuckCount = 0;
-		bWasStuckLastFrame = false;
-	}
-
-	// 有障碍物时即使速度为零也继续运行 NMPC（避免 u0≈0 导致无人机永久停止）
-	if (CurrentVelocity.IsNearlyZero())
-	{
-		CurrentVelocity = FVector::ZeroVector;
-	}
-
-	// 获取 NMPC 实例
-	UNMPCAvoidance* NMPC = GetNMPCAvoidance();
-	if (!NMPC)
-	{
-		return;
-	}
-
-	// 从 TrajectoryTracker 采样参考轨迹点
-	TArray<FVector> ReferencePoints;
-	int32 N = NMPC->Config.PredictionSteps;
-	float Dt = NMPC->Config.GetDt();
-
-	if (Tracker && Tracker->IsTracking())
-	{
-		float CurrentTime = Tracker->GetCurrentTime();
-		for (int32 i = 0; i <= N; ++i)
-		{
-			float t = CurrentTime + i * Dt;
-			FTrajectoryPoint RefPoint = Tracker->GetDesiredState(t);
-			ReferencePoints.Add(RefPoint.Position);
-		}
-	}
-	else
-	{
-		// 无轨迹跟踪时，用目标位置填充参考点
-		FVector TargetPos = UAVPawn->GetTargetPosition();
-		for (int32 i = 0; i <= N; ++i)
-		{
-			ReferencePoints.Add(TargetPos);
-		}
-	}
-
-	// 修正穿过障碍物的参考点：将其推到障碍物外侧安全位置
-	for (FVector& RefPt : ReferencePoints)
-	{
-		for (const FObstacleInfo& Obs : NearbyObstacles)
-		{
-			float Dist = NMPC->CalculateDistanceToObstacle(RefPt, Obs);
-			if (Dist < NMPC->Config.ObstacleSafeDistance)
-			{
-				FVector PushDir = (RefPt - Obs.Center).GetSafeNormal();
-				if (PushDir.IsNearlyZero())
-				{
-					PushDir = FVector::UpVector;
-				}
-				RefPt += PushDir * (NMPC->Config.ObstacleSafeDistance - Dist);
-			}
-		}
-	}
-
-	// 调用 NMPC 求解
-	FNMPCAvoidanceResult Result = NMPC->ComputeAvoidance(CurrentPosition, CurrentVelocity, ReferencePoints, NearbyObstacles);
-
-	if (UStabilityScorer* Scorer = UAVPawn->GetStabilityScorer())
-	{
-		Scorer->UpdateAvoidanceScore(Result);
-	}
-
-	// 可视化 NMPC 预测轨迹
-	UPlanningVisualizer* Visualizer = UAVPawn->GetPlanningVisualizer();
-	if (Visualizer)
-	{
-		Visualizer->SetPersistentNMPCPrediction(CurrentPosition, Result);
-	}
-
-	if (UpdateStuckStateAndCheckReplan(Result.bStuck))
-	{
-		UE_LOG(LogUAVPlanning, Warning, TEXT("[LocalPlanner] Consecutive stuck reached threshold, triggering global replan"));
-		TriggerGlobalReplan(UAVPawn);
-		return;
-	}
-
-	if (Result.bNeedsCorrection)
-	{
-		UAVPawn->SetNMPCAcceleration(Result.OptimalAcceleration);
-		if (Tracker) Tracker->SetTimeFrozen(Result.bStuck);
-		UE_LOG(LogUAVPlanning, Log, TEXT("[LocalPlanner] NMPC direct ctrl: u0=%s Obs=%d Cost=%.2f"),
-			*Result.OptimalAcceleration.ToString(), NearbyObstacles.Num(), Result.TotalCost);
-	}
-	else
-	{
-		UAVPawn->ClearNMPCAcceleration();
-		if (Tracker) { Tracker->ClearDesiredStateOverride(); Tracker->SetTimeFrozen(false); }
-	}
-}
-
 bool UBTService_UAVPathPlanning::UpdateStuckStateAndCheckReplan(bool bIsStuck)
 {
 	if (!bIsStuck)
@@ -732,12 +590,10 @@ FString UBTService_UAVPathPlanning::GetStaticDescription() const
 
 	if (bUsePresetWaypoints)
 	{
-		return FString::Printf(TEXT("Path Planning Service\nMode: Preset Waypoints (Multi-Segment %s)\nLocal Planner (NMPC): %s"),
-			*AlgorithmName,
-			bEnableDynamicAvoidance ? TEXT("Enabled") : TEXT("Disabled"));
+		return FString::Printf(TEXT("Path Planning Service\nMode: Preset Waypoints (Multi-Segment %s)\nLocal Planner: NMPC Full Control"),
+			*AlgorithmName);
 	}
 
-	return FString::Printf(TEXT("Path Planning Service\nMode: Dynamic Planning\nAlgorithm: %s\nLocal Planner (NMPC): %s"),
-		*AlgorithmName,
-		bEnableDynamicAvoidance ? TEXT("Enabled") : TEXT("Disabled"));
+	return FString::Printf(TEXT("Path Planning Service\nMode: Dynamic Planning\nAlgorithm: %s\nLocal Planner: NMPC Full Control"),
+		*AlgorithmName);
 }

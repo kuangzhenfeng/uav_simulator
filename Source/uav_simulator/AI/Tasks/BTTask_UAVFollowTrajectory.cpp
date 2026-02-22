@@ -167,6 +167,7 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 			UMissionComponent* MissionComp = UAVPawn->GetMissionComponent();
 			if (MissionComp)
 			{
+				MissionComp->StopMission();
 				MissionComp->StartMission();
 			}
 		}

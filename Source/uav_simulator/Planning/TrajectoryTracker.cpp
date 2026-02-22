@@ -29,6 +29,20 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 	// 与 UAVPawn::Tick 保持一致的步长上限，防止首帧大步长导致轨迹时间跳变
 	DeltaTime = FMath::Min(DeltaTime, 0.02f);
 
+	// 轨迹时间耗尽后切换为位置控制兜底：持续检测是否到达终点
+	if (!bIsTracking && !bIsComplete && CurrentTrajectory.bIsValid
+		&& TrackingTime >= CurrentTrajectory.TotalDuration
+		&& CurrentTrajectory.Points.Num() > 0 && GetOwner())
+	{
+		FVector CurrentPos = GetOwner()->GetActorLocation();
+		if (FVector::Dist(CurrentPos, CurrentTrajectory.Points.Last().Position) <= CompletionRadius)
+		{
+			bIsComplete = true;
+			OnTrajectoryCompleted.Broadcast();
+		}
+		return;
+	}
+
 	if (!bIsTracking || bIsPaused || bIsComplete)
 	{
 		return;
@@ -37,7 +51,7 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 	// 自适应时间缩放：UAV落后时减速/暂停TrackingTime推进
 	// 用前向投影误差（沿轨迹方向的落后量），忽略避障造成的横向偏移
 	float EffectiveTimeScale = TimeScale;
-	if (bEnableAdaptiveTimeScale && !bHasDesiredStateOverride)
+	if (bEnableAdaptiveTimeScale)
 	{
 		FVector CurrentPos = GetOwner()->GetActorLocation();
 		FTrajectoryPoint DesiredState = InterpolateTrajectory(TrackingTime);
@@ -65,16 +79,14 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		}
 	}
 
-	// 更新跟踪时间（bTimeIsFrozen 时暂停推进，防止 NMPC stuck 期间轨迹提前到期）
-	if (!bTimeIsFrozen)
-	{
-		TrackingTime += DeltaTime * EffectiveTimeScale;
-	}
+	// 更新跟踪时间
+	TrackingTime += DeltaTime * EffectiveTimeScale;
 
 	// 检查是否完成
 	if (TrackingTime >= CurrentTrajectory.TotalDuration)
 	{
 		TrackingTime = CurrentTrajectory.TotalDuration;
+		bIsTracking = false; // 停止轨迹跟踪，UAVPawn 回退到位置控制模式驱动 UAV 到达终点
 
 		if (CurrentTrajectory.Points.Num() > 0 && GetOwner())
 		{
@@ -84,7 +96,6 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 			if (FVector::Dist(CurrentPos, FinalPos) <= CompletionRadius)
 			{
 				bIsComplete = true;
-				bIsTracking = false;
 				OnTrajectoryCompleted.Broadcast();
 			}
 		}
@@ -151,24 +162,14 @@ void UTrajectoryTracker::Reset()
 	bIsTracking = false;
 	bIsPaused = false;
 	bIsComplete = false;
-	bTimeIsFrozen = false;
 	LastProgressUpdateTime = 0.0f;
 	LastProgress = 0.0f;
 }
 
 FTrajectoryPoint UTrajectoryTracker::GetDesiredState(float CurrentTime) const
 {
-	// Override 仅在使用内部计时时生效（UAVPawn::UpdateController 的调用路径）
-	// 显式传入时间时返回原始轨迹插值（NMPC 参考点采样路径）
 	if (CurrentTime < 0.0f)
-	{
-		if (bHasDesiredStateOverride)
-		{
-			return OverrideDesiredState;
-		}
 		CurrentTime = TrackingTime;
-	}
-
 	return InterpolateTrajectory(CurrentTime);
 }
 
@@ -252,15 +253,4 @@ FTrajectoryPoint UTrajectoryTracker::InterpolateTrajectory(float Time) const
 	Result.Yaw = FMath::Lerp(P0.Yaw, P1.Yaw, Alpha);
 
 	return Result;
-}
-
-void UTrajectoryTracker::SetDesiredStateOverride(const FTrajectoryPoint& InOverrideState)
-{
-	OverrideDesiredState = InOverrideState;
-	bHasDesiredStateOverride = true;
-}
-
-void UTrajectoryTracker::ClearDesiredStateOverride()
-{
-	bHasDesiredStateOverride = false;
 }

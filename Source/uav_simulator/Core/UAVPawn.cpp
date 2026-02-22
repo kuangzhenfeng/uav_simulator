@@ -17,6 +17,7 @@
 #include "../Sensors/ObstacleDetector.h"
 #include "../Debug/StabilityScorer.h"
 #include "../Debug/ControlParameterTuner.h"
+#include "../Planning/NMPCAvoidance.h"
 #include "../Utility/Debug.h"
 #include "GameFramework/PlayerController.h"
 
@@ -102,6 +103,8 @@ void AUAVPawn::BeginPlay()
 		ParameterTunerComponent->SetAttitudeController(AttitudeControllerComponent);
 		ParameterTunerComponent->SetPositionController(PositionControllerComponent);
 	}
+
+	NMPCComponent = NewObject<UNMPCAvoidance>(this);
 }
 
 void AUAVPawn::SetPayloadMass(float NewPayloadMass)
@@ -229,114 +232,71 @@ void AUAVPawn::UpdateController(float DeltaTime)
 	{
 	case EUAVControlMode::Trajectory:
 		{
-			// NMPC 直接控制路径（绕过位置 PID）
-			if (bNMPCDirectControl && PositionControllerComponent && AttitudeControllerComponent)
+			if (!TrajectoryTrackerComponent || !TrajectoryTrackerComponent->IsTracking()
+				|| !PositionControllerComponent || !AttitudeControllerComponent || !NMPCComponent)
 			{
-				FRotator DesiredAttitude;
-				float DesiredThrust;
-				PositionControllerComponent->AccelerationToControl(
-					NMPCOptimalAcceleration, CurrentState.Rotation.Yaw, DesiredAttitude, DesiredThrust);
-				FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
-					CurrentState, DesiredAttitude, DeltaTime);
-				float HoverThrust = AttitudeControllerComponent->HoverThrust;
-				for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
-					MotorOutput.Thrusts[i] = FMath::Clamp(
-						DesiredThrust + (MotorOutput.Thrusts[i] - HoverThrust), 0.0f, 1.0f);
-				if (DynamicsComponent) DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
-				break;
-			}
-
-			// 轨迹跟踪模式
-			if (TrajectoryTrackerComponent && TrajectoryTrackerComponent->IsTracking() && PositionControllerComponent)
-			{
-				FTrajectoryPoint DesiredState = TrajectoryTrackerComponent->GetDesiredState();
-
-				// 调试日志：轨迹跟踪状态
-				float Progress = TrajectoryTrackerComponent->GetProgress();
-				FVector PosError = DesiredState.Position - CurrentState.Position;
-				UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] Progress: %.2f%% | DesPos: (%.1f, %.1f, %.1f) | CurPos: (%.1f, %.1f, %.1f) | PosErr: (%.1f, %.1f, %.1f) | ErrMag: %.1f"),
-					Progress * 100.0f,
-					DesiredState.Position.X, DesiredState.Position.Y, DesiredState.Position.Z,
-					CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
-					PosError.X, PosError.Y, PosError.Z,
-					PosError.Size());
-
-				UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] DesVel: (%.1f, %.1f, %.1f) | CurVel: (%.1f, %.1f, %.1f) | DesAcc: (%.1f, %.1f, %.1f)"),
-					DesiredState.Velocity.X, DesiredState.Velocity.Y, DesiredState.Velocity.Z,
-					CurrentState.Velocity.X, CurrentState.Velocity.Y, CurrentState.Velocity.Z,
-					DesiredState.Acceleration.X, DesiredState.Acceleration.Y, DesiredState.Acceleration.Z);
-
-				FRotator DesiredAttitude;
-				float DesiredThrust;
-
-				// 使用轨迹点的速度和加速度作为前馈
-				PositionControllerComponent->ComputeControlWithAcceleration(
-					CurrentState, DesiredState.Position, DesiredState.Velocity, DesiredState.Acceleration, DesiredAttitude, DesiredThrust, DeltaTime);
-
-				UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] DesAttitude: (P:%.2f, Y:%.2f, R:%.2f) | DesThrust: %.3f"),
-					DesiredAttitude.Pitch, DesiredAttitude.Yaw, DesiredAttitude.Roll, DesiredThrust);
-
-				if (AttitudeControllerComponent)
-				{
-					FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
-						CurrentState, DesiredAttitude, DeltaTime);
-
-					float HoverThrust = AttitudeControllerComponent->HoverThrust;
-
-					for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
-					{
-						float ControlDelta = MotorOutput.Thrusts[i] - HoverThrust;
-						MotorOutput.Thrusts[i] = DesiredThrust + ControlDelta;
-						MotorOutput.Thrusts[i] = FMath::Clamp(MotorOutput.Thrusts[i], 0.0f, 1.0f);
-					}
-
-					UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] Motors: [%.3f, %.3f, %.3f, %.3f] | HoverThrust: %.3f"),
-						MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3], HoverThrust);
-
-					if (DynamicsComponent)
-					{
-						DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
-					}
-				}
-			}
-			else
-			{
-				// 轨迹跟踪完成或未激活，切换到位置保持
-				UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] Holding position - Tracker: %s, IsTracking: %s"),
-					TrajectoryTrackerComponent ? TEXT("Valid") : TEXT("Null"),
-					(TrajectoryTrackerComponent && TrajectoryTrackerComponent->IsTracking()) ? TEXT("Yes") : TEXT("No"));
-
+				// 位置保持
 				if (PositionControllerComponent && AttitudeControllerComponent)
 				{
 					FRotator DesiredAttitude;
 					float DesiredThrust;
-
 					PositionControllerComponent->ComputeControl(
 						CurrentState, TargetPosition, FVector::ZeroVector, DesiredAttitude, DesiredThrust, DeltaTime);
-
-					UE_LOG(LogUAVActor, Log, TEXT("[Trajectory] HoldPos: (%.1f, %.1f, %.1f) | CurPos: (%.1f, %.1f, %.1f) | Err: %.1f"),
-						TargetPosition.X, TargetPosition.Y, TargetPosition.Z,
-						CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
-						FVector::Dist(TargetPosition, CurrentState.Position));
-
 					FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
 						CurrentState, DesiredAttitude, DeltaTime);
-
 					float HoverThrust = AttitudeControllerComponent->HoverThrust;
-
 					for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
-					{
-						float ControlDelta = MotorOutput.Thrusts[i] - HoverThrust;
-						MotorOutput.Thrusts[i] = DesiredThrust + ControlDelta;
-						MotorOutput.Thrusts[i] = FMath::Clamp(MotorOutput.Thrusts[i], 0.0f, 1.0f);
-					}
+						MotorOutput.Thrusts[i] = FMath::Clamp(
+							DesiredThrust + (MotorOutput.Thrusts[i] - HoverThrust), 0.0f, 1.0f);
+					if (DynamicsComponent) DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
+				}
+				break;
+			}
 
-					if (DynamicsComponent)
+			// 采样参考轨迹点
+			TArray<FVector> ReferencePoints;
+			const int32 N = NMPCComponent->Config.PredictionSteps;
+			const float Dt = NMPCComponent->Config.GetDt();
+			const float CurrentTime = TrajectoryTrackerComponent->GetCurrentTime();
+			for (int32 i = 0; i <= N; ++i)
+				ReferencePoints.Add(TrajectoryTrackerComponent->GetDesiredState(CurrentTime + i * Dt).Position);
+
+			// 获取附近障碍物
+			TArray<FObstacleInfo> NearbyObstacles;
+			if (ObstacleManagerComponent)
+				NearbyObstacles = ObstacleManagerComponent->GetObstaclesInRange(
+					CurrentState.Position, NMPCComponent->Config.ObstacleInfluenceDistance * 2.0f);
+
+			// 修正穿过障碍物的参考点
+			for (FVector& RefPt : ReferencePoints)
+				for (const FObstacleInfo& Obs : NearbyObstacles)
+				{
+					float Dist = NMPCComponent->CalculateDistanceToObstacle(RefPt, Obs);
+					if (Dist < NMPCComponent->Config.ObstacleSafeDistance)
 					{
-						DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
+						FVector PushDir = (RefPt - Obs.Center).GetSafeNormal();
+						if (PushDir.IsNearlyZero()) PushDir = FVector::UpVector;
+						RefPt += PushDir * (NMPCComponent->Config.ObstacleSafeDistance - Dist);
 					}
 				}
-			}
+
+			// NMPC 求解
+			FNMPCAvoidanceResult Result = NMPCComponent->ComputeAvoidance(
+				CurrentState.Position, CurrentState.Velocity, ReferencePoints, NearbyObstacles);
+			bNMPCStuck = Result.bStuck;
+
+			// 加速度 → 姿态+推力 → 电机
+			FRotator DesiredAttitude;
+			float DesiredThrust;
+			PositionControllerComponent->AccelerationToControl(
+				Result.OptimalAcceleration, CurrentState.Rotation.Yaw, DesiredAttitude, DesiredThrust);
+			FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
+				CurrentState, DesiredAttitude, DeltaTime);
+			float HoverThrust = AttitudeControllerComponent->HoverThrust;
+			for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
+				MotorOutput.Thrusts[i] = FMath::Clamp(
+					DesiredThrust + (MotorOutput.Thrusts[i] - HoverThrust), 0.0f, 1.0f);
+			if (DynamicsComponent) DynamicsComponent->SetMotorThrusts(MotorOutput.Thrusts);
 		}
 		break;
 
@@ -518,13 +478,4 @@ void AUAVPawn::ClearWaypoints()
 	Waypoints.Empty();
 }
 
-void AUAVPawn::SetNMPCAcceleration(const FVector& Acceleration)
-{
-	NMPCOptimalAcceleration = Acceleration;
-	bNMPCDirectControl = true;
-}
 
-void AUAVPawn::ClearNMPCAcceleration()
-{
-	bNMPCDirectControl = false;
-}

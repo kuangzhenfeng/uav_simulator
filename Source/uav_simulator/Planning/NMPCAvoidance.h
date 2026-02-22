@@ -41,7 +41,7 @@ struct FNMPCConfig
 
 	// 控制输入权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightControl = 0.05f;
+	float WeightControl = 0.0001f;
 
 	// 障碍物代价权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
@@ -77,7 +77,7 @@ struct FNMPCConfig
 
 	// 初始学习率
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	float InitialStepSize = 2.0f;
+	float InitialStepSize = 500.0f;
 
 	// 回溯线搜索缩减因子
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -350,6 +350,15 @@ private:
 	// 上一帧状态 (用于日志状态转换检测)
 	bool bPrevNeedsCorrection = false;
 	bool bPrevStuck = false;
+
+	// 滞后计数器：NeedsCorrection 触发后最少保持的帧数
+	int32 NeedsCorrectionHoldCount = 0;
+	// 冷却计数器：Y->N 后最少保持 N 的帧数，防止立即重新触发
+	int32 NeedsCorrectionCooldownCount = 0;
+	// MaxHorizonObs EMA 平滑值（滤除 NMPC 求解噪声）
+	float SmoothedMaxHorizonObs = 0.0f;
+	// 上次周期性日志时间戳（秒）
+	double LastPeriodicLogTime = 0.0;
 
 	/**
 	 * 有限差分计算梯度

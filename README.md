@@ -191,9 +191,10 @@ Script\test.bat
 | Phase 7 | 路径规划与实时避障（多航段 A*、NMPC 局部避障、障碍物感知） | 已完成 |
 | Phase 8 | NMPC 控制层升级（直接输出 u*[0]，绕过位置 PID） | 已完成 |
 | Phase 9 | 产品化支持（农业 AG-10/20/40、测绘 SV-Pro/LiDAR，型号注册表） | 已完成 |
-| Phase 10 | 多机协同与安全滤波（联合 NMPC、CBF-QP、编队控制） | 计划中 |
-| Phase 11 | 任务分配与联合优化（MILP/MIQP/MINLP、联合轨迹优化） | 计划中 |
-| Phase 12 | 环境与优化 | 计划中 |
+| Phase 10 | NMPC 全程接管重构（50Hz 全程控制，消除模式切换） | 已完成 |
+| Phase 11 | 多机协同与安全滤波（联合 NMPC、CBF-QP、编队控制） | 计划中 |
+| Phase 12 | 任务分配与联合优化（MILP/MIQP/MINLP、联合轨迹优化） | 计划中 |
+| Phase 13 | 环境与优化 | 计划中 |
 
 ### 目标架构
 

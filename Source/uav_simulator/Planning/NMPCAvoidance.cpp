@@ -308,6 +308,11 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	}
 	else
 	{
+		if (bHasPreviousControls)
+		{
+			UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] WarmStart reset: RiseCount=%d >= Threshold=%d"),
+				ConsecutiveCostRiseCount, Config.WarmStartResetThreshold);
+		}
 		for (int32 k = 0; k < N; ++k)
 		{
 			Controls[k] = FVector::ZeroVector;
@@ -324,8 +329,11 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 
 	// 投影梯度下降求解
 	float CurrentCost = MAX_FLT;
+	int32 FinalIter = 0;
+	bool bConverged = false;
 	for (int32 Iter = 0; Iter < Config.MaxIterations; ++Iter)
 	{
+		FinalIter = Iter + 1;
 		// 投影到可行域
 		ProjectControls(Controls, CurrentVelocity);
 
@@ -340,6 +348,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		if (FMath::Abs(CurrentCost - Cost) < Config.ConvergenceTolerance && Iter > 0)
 		{
 			CurrentCost = Cost;
+			bConverged = true;
 			break;
 		}
 		CurrentCost = Cost;
@@ -533,11 +542,31 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		MaxPredictedObsCost = FMath::Max(MaxPredictedObsCost, Result.PredictedTrajectory[k].ObstacleCost);
 	}
 
+	// EMA 平滑 MaxHorizonObs，滤除 NMPC 求解噪声（alpha=0.3，约 3 帧响应）
+	SmoothedMaxHorizonObs = 0.7f * SmoothedMaxHorizonObs + 0.3f * MaxPredictedObsCost;
+
 	// 纠偏判断：当前位置有障碍物时无条件纠偏；仅预测到障碍物时需要最小位移门槛
 	const bool bCurrentHasObs = CurrentObstacleCost > Config.ObstacleCostDeadband;
-	const bool bHorizonHasObs = MaxPredictedObsCost > Config.ObstacleCostDeadband * 10.0f;
+	const bool bHorizonHasObs = SmoothedMaxHorizonObs > Config.ObstacleCostDeadband * 10.0f;
 	const bool bHasMeaningfulCorrection = CorrectionDistance >= Config.MinCorrectionDistance;
-	Result.bNeedsCorrection = bCurrentHasObs || (bHorizonHasObs && bHasMeaningfulCorrection);
+	const bool bRawNeedsCorrection = bCurrentHasObs || (bHorizonHasObs && bHasMeaningfulCorrection);
+
+	// 滞后：触发后保持至少 20 帧（~100ms），Y->N 后冷却 10 帧（~50ms）防止立即重触发
+	if (bRawNeedsCorrection && NeedsCorrectionCooldownCount == 0)
+	{
+		NeedsCorrectionHoldCount = 20;
+	}
+	else if (NeedsCorrectionHoldCount > 0)
+	{
+		--NeedsCorrectionHoldCount;
+		if (NeedsCorrectionHoldCount == 0)
+			NeedsCorrectionCooldownCount = 10;
+	}
+	else if (NeedsCorrectionCooldownCount > 0)
+	{
+		--NeedsCorrectionCooldownCount;
+	}
+	Result.bNeedsCorrection = (NeedsCorrectionHoldCount > 0);
 
 	// 卡死判定：控制极小且当前位置确实有障碍物（不能仅靠远处预测）
 	const float FirstControlMagnitude = FirstControl.Size();
@@ -585,7 +614,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 
 	if (bStateChanged)
 	{
-		UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] >>> State changed: NeedsCorr %s->%s, Stuck %s->%s | Pos=(%.0f,%.0f,%.0f) Obs=%d NearDist=%.0f NearDir=(%.2f,%.2f,%.2f) Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Reason=%s"),
+		UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] >>> State changed: NeedsCorr %s->%s, Stuck %s->%s | Pos=(%.0f,%.0f,%.0f) Obs=%d NearDist=%.0f NearDir=(%.2f,%.2f,%.2f) Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Iter=%d Conv=%s Hold=%d Cool=%d Reason=%s"),
 			bPrevNeedsCorrection ? TEXT("Y") : TEXT("N"),
 			Result.bNeedsCorrection ? TEXT("Y") : TEXT("N"),
 			bPrevStuck ? TEXT("Y") : TEXT("N"),
@@ -595,19 +624,28 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 			CurrentCost, CurrentObstacleCost, MaxPredictedObsCost,
 			ConsecutiveCostRiseCount, CorrectionDistance, SaturationRatio,
 			FirstControl.X, FirstControl.Y, FirstControl.Z,
+			FinalIter, bConverged ? TEXT("Y") : TEXT("N"),
+			NeedsCorrectionHoldCount, NeedsCorrectionCooldownCount,
 			StuckReason);
 	}
 	else
 	{
-		UE_LOG(LogUAVPlanning, Verbose, TEXT("[NMPC] Pos=(%.0f,%.0f,%.0f) Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Saturated=%s NeedsCorr=%s Stuck=%s Reason=%s"),
-			CurrentPosition.X, CurrentPosition.Y, CurrentPosition.Z,
-			CurrentCost, CurrentObstacleCost, MaxPredictedObsCost,
-			ConsecutiveCostRiseCount, CorrectionDistance, SaturationRatio,
-			FirstControl.X, FirstControl.Y, FirstControl.Z,
-			bControlSaturated ? TEXT("Y") : TEXT("N"),
-			Result.bNeedsCorrection ? TEXT("Y") : TEXT("N"),
-			Result.bStuck ? TEXT("Y") : TEXT("N"),
-			StuckReason);
+		const double Now = FPlatformTime::Seconds();
+		if (Now - LastPeriodicLogTime >= 1.0)
+		{
+			LastPeriodicLogTime = Now;
+			UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] Pos=(%.0f,%.0f,%.0f) Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Saturated=%s Iter=%d Conv=%s Hold=%d Cool=%d NeedsCorr=%s Stuck=%s Reason=%s"),
+				CurrentPosition.X, CurrentPosition.Y, CurrentPosition.Z,
+				CurrentCost, CurrentObstacleCost, MaxPredictedObsCost,
+				ConsecutiveCostRiseCount, CorrectionDistance, SaturationRatio,
+				FirstControl.X, FirstControl.Y, FirstControl.Z,
+				bControlSaturated ? TEXT("Y") : TEXT("N"),
+				FinalIter, bConverged ? TEXT("Y") : TEXT("N"),
+				NeedsCorrectionHoldCount, NeedsCorrectionCooldownCount,
+				Result.bNeedsCorrection ? TEXT("Y") : TEXT("N"),
+				Result.bStuck ? TEXT("Y") : TEXT("N"),
+				StuckReason);
+		}
 	}
 
 	bPrevNeedsCorrection = Result.bNeedsCorrection;

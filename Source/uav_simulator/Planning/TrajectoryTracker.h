@@ -111,25 +111,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
 	FVector GetTrackingError(const FVector& CurrentPosition) const;
 
-	/**
-	 * 设置外部期望状态覆盖（用于 NMPC 局部避障修正）
-	 * 设置后 GetDesiredState() 将返回此覆盖状态而非轨迹插值结果
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
-	void SetDesiredStateOverride(const FTrajectoryPoint& InOverrideState);
-
-	/**
-	 * 清除外部期望状态覆盖，恢复正常轨迹跟踪
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
-	void ClearDesiredStateOverride();
-
-	/**
-	 * 冻结/解冻时钟推进（不影响 IsTracking，用于 NMPC stuck 期间防止轨迹提前到期）
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
-	void SetTimeFrozen(bool bFreeze) { bTimeIsFrozen = bFreeze; }
-
 	// 轨迹完成事件
 	UPROPERTY(BlueprintAssignable, Category = "Trajectory Tracking")
 	FOnTrajectoryCompleted OnTrajectoryCompleted;
@@ -186,13 +167,6 @@ protected:
 	float ProgressUpdateInterval = 0.1f;
 
 private:
-	// 外部期望状态覆盖（NMPC 避障用）
-	FTrajectoryPoint OverrideDesiredState;
-	bool bHasDesiredStateOverride = false;
-
-	// 冻结时钟推进（NMPC stuck 期间使用）
-	bool bTimeIsFrozen = false;
-
 	// 上次进度更新时间
 	float LastProgressUpdateTime;
 

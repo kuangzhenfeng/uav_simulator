@@ -21,6 +21,7 @@ class UMissionComponent;
 class UObstacleDetector;
 class UStabilityScorer;
 class UControlParameterTuner;
+class UNMPCAvoidance;
 
 /**
  * 无人机Pawn类
@@ -129,9 +130,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
 	UStabilityScorer* GetStabilityScorer() const { return StabilityScorerComponent; }
 
-	// NMPC 直接控制接口
-	void SetNMPCAcceleration(const FVector& Acceleration);
-	void ClearNMPCAcceleration();
+	// NMPC stuck 状态查询
+	bool IsNMPCStuck() const { return bNMPCStuck; }
 
 protected:
 	// 根组件
@@ -186,6 +186,10 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
 	TObjectPtr<UControlParameterTuner> ParameterTunerComponent;
 
+	// NMPC 避障组件（全程接管轨迹跟踪+避障）
+	UPROPERTY()
+	TObjectPtr<UNMPCAvoidance> NMPCComponent;
+
 	// 当前状态
 	UPROPERTY(BlueprintReadOnly, Category = "UAV State")
 	FUAVState CurrentState;
@@ -229,8 +233,7 @@ protected:
 	float CurrentPayloadMass = 0.0f;	// kg，运行时可变
 
 private:
-	bool bNMPCDirectControl = false;
-	FVector NMPCOptimalAcceleration;
+	bool bNMPCStuck = false;
 
 	// 更新传感器数据
 	void UpdateSensors(float DeltaTime);

@@ -7,14 +7,12 @@
 #include "uav_simulator/Core/UAVTypes.h"
 #include "BTService_UAVPathPlanning.generated.h"
 
-class UNMPCAvoidance;
-
 /**
  * 行为树服务：后台持续进行路径规划和避障检测
  *
  * 两层架构：
  * - Global Planner: 基于已知障碍物的全局路径规划 (A* / RRT)
- * - Local Planner: 基于 NMPC 的实时局部避障
+ * - Local Planner: NMPC 全程接管，通过 IsNMPCStuck() 轮询触发全局重规划
  */
 UCLASS()
 class UAV_SIMULATOR_API UBTService_UAVPathPlanning : public UBTService
@@ -58,21 +56,9 @@ protected:
 
 	// 最大加速度 (cm/s²)
 	UPROPERTY(EditAnywhere, Category = "Global Planner")
-	float MaxAcceleration = 200.0f;
+	float MaxAcceleration = 800.0f;
 
 	// ---- Local Planner 参数 ----
-
-	// 是否启用局部避障 (NMPC)
-	UPROPERTY(EditAnywhere, Category = "Local Planner")
-	bool bEnableDynamicAvoidance = true;
-
-	// 碰撞检测距离 (cm) - 检测前方此距离内的障碍物
-	UPROPERTY(EditAnywhere, Category = "Local Planner")
-	float CollisionCheckDistance = 3000.0f;
-
-	// 碰撞警告距离 (cm) - 触发 NMPC 修正的距离
-	UPROPERTY(EditAnywhere, Category = "Local Planner")
-	float CollisionWarningDistance = 300.0f;
 
 	// Local Planner 连续失败次数阈值 - 超过此值触发 Global Replan
 	UPROPERTY(EditAnywhere, Category = "Local Planner")
@@ -100,10 +86,6 @@ private:
 	// 全局规划路径（A* 输出，用于可视化）
 	TArray<FVector> GlobalPlannedPath;
 
-	// Local Planner 实例
-	UPROPERTY()
-	TObjectPtr<UNMPCAvoidance> NMPCAvoidanceInstance;
-
 	// ---- Global Planner 方法 ----
 
 	// 检查是否需要重规划
@@ -126,15 +108,9 @@ private:
 
 	// ---- Local Planner 方法 ----
 
-	// 使用 NMPC 进行局部避障检测和修正
-	void CheckCollisionAndAvoid(class AUAVPawn* UAVPawn, float DeltaSeconds);
-
 	// 触发全局重规划（Local Planner 失败时调用）
 	void TriggerGlobalReplan(class AUAVPawn* UAVPawn);
 
 	// 更新连续卡死计数并判断是否应触发全局重规划。
 	bool UpdateStuckStateAndCheckReplan(bool bIsStuck);
-
-	// 获取或创建 NMPCAvoidance 实例
-	UNMPCAvoidance* GetNMPCAvoidance();
 };

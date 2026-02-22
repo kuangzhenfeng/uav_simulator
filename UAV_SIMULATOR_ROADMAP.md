@@ -262,8 +262,6 @@
 - [x] NMPC 从规划层升级为控制层，直接输出最优加速度 u*[0] → 姿态+推力，绕过位置 PID
   - `FNMPCAvoidanceResult.OptimalAcceleration`：存储第一步最优控制量
   - `UPositionController::AccelerationToControl()`：加速度→姿态+推力转换
-  - `AUAVPawn::SetNMPCAcceleration()` / `ClearNMPCAcceleration()`：直接控制接口
-  - `BTService_UAVPathPlanning`：避障时调用 `SetNMPCAcceleration()` 替代 Tracker Override
 
 ### Phase 9: 产品化支持（农业无人机 & 测绘无人机）✅ (已完成)
 - [x] 产品类型与型号定义
@@ -289,7 +287,15 @@
   - `FMissionConfig` 新增测绘参数：`OverlapRatio`（重叠率）、`CameraTriggerIntervalM`（触发间距）
   - 更新文件：`Mission/MissionTypes.h`
 
-### Phase 10: 多机协同与安全滤波
+### Phase 10: NMPC 全程接管重构 ✅ (已完成)
+- [x] 删除混合控制模式，NMPC 作为唯一控制器每控制周期（50Hz）全程运行
+  - 移除 `SetNMPCAcceleration()` / `ClearNMPCAcceleration()` / `bNMPCDirectControl`
+  - `UAVPawn::UpdateController()` Trajectory case 重构：采样参考点 → NMPC 求解 → `AccelerationToControl()` → 电机
+- [x] 删除 TrajectoryTracker 中的 hack 补丁
+  - 移除 `SetDesiredStateOverride()` / `ClearDesiredStateOverride()` / `SetTimeFrozen()`
+- [x] BTService 简化：移除 `CheckCollisionAndAvoid()` / `GetNMPCAvoidance()`，仅保留 Stuck 检测触发全局重规划
+
+### Phase 11: 多机协同与安全滤波
 - [ ] 集中式联合轨迹优化
   - 多机 NMPC：将单机 NMPC 扩展为联合状态空间，同时优化所有 UAV 的控制序列
   - 硬约束：机间最小安全距离、通信范围、动力学可行性
@@ -307,7 +313,7 @@
   - 支持预定义队形：线形、V 形、环形
   - 动态队形切换与障碍物穿越
 
-### Phase 11: 任务分配与联合优化
+### Phase 12: 任务分配与联合优化
 - [ ] 任务分配（MILP/MIQP/MINLP）
   - Mixed-Integer 优化：将任务分配建模为 MILP/MIQP/MINLP 问题
   - 决策变量：任务-UAV 分配矩阵、任务执行顺序
@@ -322,7 +328,7 @@
   - 动态重分配：UAV 故障、新任务插入、环境变化时触发重规划
   - 支持优先级调度和抢占式任务切换
 
-### Phase 12: 环境与优化
+### Phase 13: 环境与优化
 - [ ] 完善环境系统（风场、天气）
 - [ ] 添加复杂场景（城市、森林）
 - [ ] 性能优化
