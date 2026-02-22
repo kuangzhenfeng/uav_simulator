@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UAVPawn.h"
+#include "UAVProductManager.h"
 #include "../Physics/UAVDynamics.h"
 #include "../Sensors/SensorBase.h"
 #include "../Control/AttitudeController.h"
@@ -81,12 +82,36 @@ void AUAVPawn::BeginPlay()
 	// 设置初始目标位置为当前位置
 	TargetPosition = CurrentState.Position;
 
+	// 按型号初始化物理/控制参数
+	{
+		const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
+		DynamicsComponent->SetPhysicsParams(Spec.Mass, Spec.ArmLength, Spec.MomentOfInertia, Spec.MaxThrust);
+		AttitudeControllerComponent->HoverThrust = Spec.HoverThrust;
+		AttitudeControllerComponent->RollPID     = Spec.RollPID;
+		AttitudeControllerComponent->PitchPID    = Spec.PitchPID;
+		PositionControllerComponent->MaxVelocity          = Spec.MaxVelocity;
+		PositionControllerComponent->UAVMass              = Spec.Mass;
+		PositionControllerComponent->SingleMotorMaxThrust = Spec.MaxThrust;
+		UE_LOG(LogUAVActor, Log, TEXT("[Model] %s | Mass=%.1fkg | MaxThrust=%.1fN | MaxVel=%.0fcm/s"),
+			*Spec.ModelName, Spec.Mass, Spec.MaxThrust, Spec.MaxVelocity);
+	}
+
 	// 接线PID调参组件
 	if (ParameterTunerComponent)
 	{
 		ParameterTunerComponent->SetAttitudeController(AttitudeControllerComponent);
 		ParameterTunerComponent->SetPositionController(PositionControllerComponent);
 	}
+}
+
+void AUAVPawn::SetPayloadMass(float NewPayloadMass)
+{
+	const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
+	CurrentPayloadMass = FMath::Clamp(NewPayloadMass, 0.0f, Spec.MaxPayloadKg);
+	const float TotalMass = Spec.Mass + CurrentPayloadMass;
+	DynamicsComponent->SetPhysicsParams(TotalMass, Spec.ArmLength, Spec.MomentOfInertia, Spec.MaxThrust);
+	PositionControllerComponent->UAVMass = TotalMass;
+	AttitudeControllerComponent->HoverThrust = Spec.HoverThrust * TotalMass / Spec.Mass;
 }
 
 void AUAVPawn::Tick(float DeltaTime)

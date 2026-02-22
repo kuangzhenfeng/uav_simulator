@@ -58,7 +58,7 @@ protected:
 
 	// 最大加速度 (cm/s²)
 	UPROPERTY(EditAnywhere, Category = "Global Planner")
-	float MaxAcceleration = 400.0f;
+	float MaxAcceleration = 200.0f;
 
 	// ---- Local Planner 参数 ----
 

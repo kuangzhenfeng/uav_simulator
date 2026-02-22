@@ -47,7 +47,7 @@ protected:
 
 	// 最大加速度 (cm/s²)
 	UPROPERTY(EditAnywhere, Category = "Trajectory")
-	float MaxAcceleration = 400.0f;
+	float MaxAcceleration = 200.0f;
 
 	// 完成阈值 - 轨迹进度达到此值时认为完成
 	UPROPERTY(EditAnywhere, Category = "Trajectory")

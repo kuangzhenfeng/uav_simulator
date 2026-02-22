@@ -22,6 +22,12 @@
 - 积分抗饱和与重力补偿
 - 运行时参数调整
 
+### 产品型号支持
+- 农业无人机：AG-20（20L）、AG-60（60L）、AG-100（100L）
+- 测绘无人机：SV-Pro（RGB 相机）、SV-LiDAR（激光雷达）
+- 通过 `ModelID` UPROPERTY 一键切换型号，自动应用物理/控制参数
+- 运行时动态载荷质量更新（`SetPayloadMass`）
+
 ### 路径规划与避障
 - A* 算法（3D 网格搜索）
 - RRT/RRT* 算法（快速随机探索树）
@@ -184,9 +190,10 @@ Script\test.bat
 | Phase 6 | 单元测试（UE5 Automation Test Framework） | 已完成 |
 | Phase 7 | 路径规划与实时避障（多航段 A*、NMPC 局部避障、障碍物感知） | 已完成 |
 | Phase 8 | NMPC 控制层升级（直接输出 u*[0]，绕过位置 PID） | 已完成 |
-| Phase 9 | 多机协同与安全滤波（联合 NMPC、CBF-QP、编队控制） | 计划中 |
-| Phase 10 | 任务分配与联合优化（MILP/MIQP/MINLP、联合轨迹优化） | 计划中 |
-| Phase 11 | 环境优化（风场、天气、性能优化） | 计划中 |
+| Phase 9 | 产品化支持（农业 AG-10/20/40、测绘 SV-Pro/LiDAR，型号注册表） | 已完成 |
+| Phase 10 | 多机协同与安全滤波（联合 NMPC、CBF-QP、编队控制） | 计划中 |
+| Phase 11 | 任务分配与联合优化（MILP/MIQP/MINLP、联合轨迹优化） | 计划中 |
+| Phase 12 | 环境与优化 | 计划中 |
 
 ### 目标架构
 

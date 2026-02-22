@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
 #include "UAVTypes.h"
+#include "UAVProductTypes.h"
 #include "UAVPawn.generated.h"
 
 class UUAVDynamics;
@@ -209,12 +210,23 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Control", meta = (DeprecatedProperty, DeprecationMessage = "Use ControlMode instead"))
 	bool bUsePositionControl = true;
 
+	// 设置载荷质量（运行时可变，如喷洒消耗药液）
+	UFUNCTION(BlueprintCallable, Category = "UAV Model")
+	void SetPayloadMass(float NewPayloadMass);
+
 protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Parameters")
 	float Mass = 1.5f; // kg
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Parameters")
 	float ArmLength = 0.225f; // m
+
+	// 型号选择
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Model")
+	EUAVModelID ModelID = EUAVModelID::Agri_AG20;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Model")
+	float CurrentPayloadMass = 0.0f;	// kg，运行时可变
 
 private:
 	bool bNMPCDirectControl = false;

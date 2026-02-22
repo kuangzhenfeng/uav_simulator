@@ -265,7 +265,31 @@
   - `AUAVPawn::SetNMPCAcceleration()` / `ClearNMPCAcceleration()`：直接控制接口
   - `BTService_UAVPathPlanning`：避障时调用 `SetNMPCAcceleration()` 替代 Tracker Override
 
-### Phase 9: 多机协同与安全滤波
+### Phase 9: 产品化支持（农业无人机 & 测绘无人机）✅ (已完成)
+- [x] 产品类型与型号定义
+  - 新增 `EUAVProductType` 枚举：`Agricultural`、`Mapping`
+  - 新增 `EUAVModelID` 枚举：5 个型号（AG-10/AG-20/AG-40/SV-Pro/SV-LiDAR）
+  - 新增 `FUAVModelSpec` 结构体：物理参数、控制参数、载荷元数据
+  - 新增文件：`Core/UAVProductTypes.h`
+- [x] 农业无人机产品线（3 款）
+  - AG-20：12kg，20L 喷洒，喷幅 6m，MaxVel 1200cm/s
+  - AG-60：22kg，60L 喷洒，喷幅 10m，MaxVel 800cm/s
+  - AG-100：35kg，100L 喷洒，喷幅 14m，MaxVel 600cm/s
+- [x] 测绘无人机产品线（2 款）
+  - SV-Pro：3.2kg，5000万像素 RGB 相机，GSD 2cm@100m，MaxVel 2000cm/s
+  - SV-LiDAR：4.5kg，Livox Mid-360 激光雷达，精度 ±2cm，MaxVel 1800cm/s
+- [x] 型号注册表与参数自动应用
+  - `FUAVProductManager::GetModelSpec()`：静态型号查询
+  - `AUAVPawn::BeginPlay()` 自动按 `ModelID` 写入 UAVDynamics/AttitudeController/PositionController
+  - `AUAVPawn::SetPayloadMass()`：运行时动态更新载荷质量（同步 Mass + HoverThrust）
+  - 新增文件：`Core/UAVProductManager.h`
+  - 更新文件：`Core/UAVPawn.h/cpp`、`Physics/UAVDynamics.h`
+- [x] MissionComponent 扩展
+  - `FMissionConfig` 新增农业参数：`StripSpacingM`（条带间距）、`SprayFlowLPerMin`（喷洒流量）
+  - `FMissionConfig` 新增测绘参数：`OverlapRatio`（重叠率）、`CameraTriggerIntervalM`（触发间距）
+  - 更新文件：`Mission/MissionTypes.h`
+
+### Phase 10: 多机协同与安全滤波
 - [ ] 集中式联合轨迹优化
   - 多机 NMPC：将单机 NMPC 扩展为联合状态空间，同时优化所有 UAV 的控制序列
   - 硬约束：机间最小安全距离、通信范围、动力学可行性
@@ -283,7 +307,7 @@
   - 支持预定义队形：线形、V 形、环形
   - 动态队形切换与障碍物穿越
 
-### Phase 10: 任务分配与联合优化
+### Phase 11: 任务分配与联合优化
 - [ ] 任务分配（MILP/MIQP/MINLP）
   - Mixed-Integer 优化：将任务分配建模为 MILP/MIQP/MINLP 问题
   - 决策变量：任务-UAV 分配矩阵、任务执行顺序
@@ -298,7 +322,7 @@
   - 动态重分配：UAV 故障、新任务插入、环境变化时触发重规划
   - 支持优先级调度和抢占式任务切换
 
-### Phase 11: 环境与优化
+### Phase 12: 环境与优化
 - [ ] 完善环境系统（风场、天气）
 - [ ] 添加复杂场景（城市、森林）
 - [ ] 性能优化

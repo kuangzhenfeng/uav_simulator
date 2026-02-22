@@ -37,6 +37,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
 	TArray<float> GetMotorThrusts() const { return MotorThrusts; }
 
+	// 批量设置物理参数（供型号注册表调用）
+	void SetPhysicsParams(float InMass, float InArmLength, const FVector& InMomentOfInertia, float InMaxThrust)
+	{
+		Mass = InMass; ArmLength = InArmLength;
+		MomentOfInertia = InMomentOfInertia; MaxThrust = InMaxThrust;
+	}
+
 protected:
 	// 物理参数
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics Parameters")

@@ -134,6 +134,20 @@ struct FMissionConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mission")
 	bool bEnablePathPlanning;
 
+	// 农业模式参数（ProductType == Agricultural 时有效）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mission|Agricultural")
+	float StripSpacingM = 4.0f;			// 条带间距（m）
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mission|Agricultural")
+	float SprayFlowLPerMin = 1.5f;		// 喷洒流量（L/min）
+
+	// 测绘模式参数（ProductType == Mapping 时有效）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mission|Mapping")
+	float OverlapRatio = 0.8f;			// 航线重叠率
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mission|Mapping")
+	float CameraTriggerIntervalM = 5.0f;	// 相机触发间距（m）
+
 	FMissionConfig()
 		: Mode(EMissionMode::Once)
 		, DefaultSpeed(500.0f)

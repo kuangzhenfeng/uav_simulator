@@ -51,6 +51,20 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 		return EBTNodeResult::Failed;
 	}
 
+	// 若轨迹已在跟踪中（BTService 已启动），直接复用，避免双重启动
+	if (Tracker->IsTracking())
+	{
+		UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Trajectory already tracking, skipping restart"));
+		return EBTNodeResult::InProgress;
+	}
+
+	// 若 BTService 已启动轨迹跟踪，直接接管，不重复初始化
+	if (Tracker->IsTracking())
+	{
+		UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Trajectory already running, skipping re-init"));
+		return EBTNodeResult::InProgress;
+	}
+
 	// 获取或生成轨迹
 	if (bUseTrajectoryFromBlackboard)
 	{
