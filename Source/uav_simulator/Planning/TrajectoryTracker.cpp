@@ -1,6 +1,15 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TrajectoryTracker.h"
+#include "uav_simulator/Debug/UAVLogConfig.h"
+#include "uav_simulator/Core/UAVPawn.h"
+
+static float GetUAVSpeed(AActor* Owner)
+{
+	if (AUAVPawn* Pawn = Cast<AUAVPawn>(Owner))
+		return Pawn->GetUAVState().Velocity.Size();
+	return Owner ? Owner->GetVelocity().Size() : 0.f;
+}
 
 UTrajectoryTracker::UTrajectoryTracker()
 {
@@ -35,10 +44,17 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		&& CurrentTrajectory.Points.Num() > 0 && GetOwner())
 	{
 		FVector CurrentPos = GetOwner()->GetActorLocation();
-		if (FVector::Dist(CurrentPos, CurrentTrajectory.Points.Last().Position) <= CompletionRadius)
+		float Dist1 = FVector::Dist(CurrentPos, CurrentTrajectory.Points.Last().Position);
+		float Speed1 = GetUAVSpeed(GetOwner());
+		if (Dist1 <= CompletionRadius && Speed1 <= CompletionMaxSpeed)
 		{
+			UE_LOG(LogUAVPlanning, Log, TEXT("[Tracker] Completed (overtime): Dist=%.0f Speed=%.0f"), Dist1, Speed1);
 			bIsComplete = true;
 			OnTrajectoryCompleted.Broadcast();
+		}
+		else
+		{
+			UE_LOG(LogUAVPlanning, Log, TEXT("[Tracker] Waiting (overtime): Dist=%.0f/%.0f Speed=%.0f/%.0f"), Dist1, CompletionRadius, Speed1, CompletionMaxSpeed);
 		}
 		return;
 	}
@@ -97,8 +113,11 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 			FVector CurrentPos = GetOwner()->GetActorLocation();
 			FVector FinalPos = CurrentTrajectory.Points.Last().Position;
 
-			if (FVector::Dist(CurrentPos, FinalPos) <= CompletionRadius)
+			float Dist2 = FVector::Dist(CurrentPos, FinalPos);
+			float Speed2 = GetUAVSpeed(GetOwner());
+			if (Dist2 <= CompletionRadius && Speed2 <= CompletionMaxSpeed)
 			{
+				UE_LOG(LogUAVPlanning, Log, TEXT("[Tracker] Completed: Dist=%.0f Speed=%.0f"), Dist2, Speed2);
 				bIsComplete = true;
 				OnTrajectoryCompleted.Broadcast();
 			}

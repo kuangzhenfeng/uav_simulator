@@ -142,13 +142,35 @@ float UNMPCAvoidance::ComputeCost(
 	const float dt = Config.GetDt();
 	float Cost = 0.0f;
 
+	// 检测避障冲突：计算最小障碍物距离
+	float MinObsDist = MAX_FLT;
+	for (int32 k = 0; k <= N; ++k)
+	{
+		for (const FObstacleInfo& Obstacle : Obstacles)
+		{
+			FObstacleInfo PredObs = PredictObstacle(Obstacle, k * dt);
+			float Dist = CalculateDistanceToObstacle(Positions[k], PredObs);
+			MinObsDist = FMath::Min(MinObsDist, Dist);
+		}
+	}
+
+	// 动态权重调整：当有近距障碍物时，降低参考跟踪权重
+	float RefWeight = Config.WeightReference;
+	float VelWeight = Config.WeightVelocity;
+	if (MinObsDist < Config.ObstacleSafeDistance * 1.5f)
+	{
+		// 在强避障场景下，大幅降低轨迹跟踪权重，优先保证避障
+		RefWeight *= 0.1f;
+		VelWeight *= 0.1f;
+	}
+
 	for (int32 k = 0; k < N; ++k)
 	{
 		// 参考跟踪代价
 		if (k < ReferencePoints.Num())
 		{
 			float RefDist = FVector::Dist(Positions[k], ReferencePoints[k]);
-			Cost += Config.WeightReference * RefDist;
+			Cost += RefWeight * RefDist;
 		}
 
 		// 速度跟踪代价: 鼓励沿参考方向运动
@@ -156,7 +178,7 @@ float UNMPCAvoidance::ComputeCost(
 		{
 			FVector DesiredVel = (ReferencePoints[k + 1] - ReferencePoints[k]) / FMath::Max(dt, KINDA_SMALL_NUMBER);
 			float VelDist = FVector::Dist(Velocities[k], DesiredVel);
-			Cost += Config.WeightVelocity * VelDist;
+			Cost += VelWeight * VelDist;
 		}
 
 		// 控制代价
@@ -255,13 +277,39 @@ void UNMPCAvoidance::ProjectControls(TArray<FVector>& Controls, const FVector& I
 			Controls[k] = Controls[k] * (Config.MaxAcceleration / AccMag);
 		}
 
-		// 速度约束: ||v|| ≤ MaxVelocity（球形约束，与加速度约束几何一致）
+		// 速度约束: ||v|| ≤ MaxVelocity
+		// 采用投影方法：将速度投影到可行域，而非直接修正加速度
 		FVector NextVel = Vel + Controls[k] * dt;
 		float VelMag = NextVel.Size();
-		if (VelMag > Config.MaxVelocity)
+
+		// 动态速度限制：当速度过高时，主动降低限制以增加机动空间
+		float EffectiveMaxVel = Config.MaxVelocity;
+		if (VelMag > Config.MaxVelocity * 1.2f)
 		{
-			NextVel = NextVel * (Config.MaxVelocity / VelMag);
-			Controls[k] = (NextVel - Vel) / dt;
+			// 速度严重超限时，降低目标速度到当前速度的 95%
+			EffectiveMaxVel = VelMag * 0.95f;
+		}
+
+		if (VelMag > EffectiveMaxVel)
+		{
+			// 方法：沿速度方向缩放，保持方向一致性
+			NextVel = NextVel * (EffectiveMaxVel / VelMag);
+
+			// 计算修正后的加速度
+			FVector CorrAccel = (NextVel - Vel) / dt;
+			float CorrAccMag = CorrAccel.Size();
+
+			// 如果修正加速度仍超限，则采用混合策略：
+			// 优先保证加速度约束，允许速度略微超限（由下一步迭代修正）
+			if (CorrAccMag > Config.MaxAcceleration)
+			{
+				// 限制加速度大小
+				CorrAccel = CorrAccel * (Config.MaxAcceleration / CorrAccMag);
+				// 更新速度为加速度约束下的最大速度
+				NextVel = Vel + CorrAccel * dt;
+			}
+
+			Controls[k] = CorrAccel;
 		}
 
 		Vel = Vel + Controls[k] * dt;
@@ -313,11 +361,19 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 			UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] WarmStart reset: RiseCount=%d >= Threshold=%d"),
 				ConsecutiveCostRiseCount, Config.WarmStartResetThreshold);
 		}
+		FVector InitControl = FVector::ZeroVector;
+		if (ReferencePoints.Num() > 1)
+		{
+			FVector RefDir = (ReferencePoints[1] - ReferencePoints[0]).GetSafeNormal();
+			if (!RefDir.IsNearlyZero())
+				InitControl = RefDir * Config.MaxAcceleration * 0.2f;
+		}
 		for (int32 k = 0; k < N; ++k)
 		{
-			Controls[k] = FVector::ZeroVector;
+			Controls[k] = InitControl;
 		}
 		ConsecutiveCostRiseCount = 0;
+		WarmStartResetImmunityCount = Config.WarmStartResetImmunity;
 	}
 
 	// 确保参考点数量足够
@@ -475,7 +531,11 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 
 	// 更新连续代价上升计数：仅在超过收敛容差时才视为“上升”，避免持平/微抖动触发重置
 	const float CostRiseEpsilon = FMath::Max(Config.ConvergenceTolerance, KINDA_SMALL_NUMBER);
-	if (CurrentCost > PreviousTotalCost + CostRiseEpsilon)
+	if (WarmStartResetImmunityCount > 0)
+	{
+		--WarmStartResetImmunityCount;
+	}
+	else if (CurrentCost > PreviousTotalCost + CostRiseEpsilon)
 	{
 		++ConsecutiveCostRiseCount;
 	}
@@ -544,11 +604,11 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	}
 
 	// EMA 平滑 MaxHorizonObs，滤除 NMPC 求解噪声（alpha=0.3，约 3 帧响应）
-	SmoothedMaxHorizonObs = 0.7f * SmoothedMaxHorizonObs + 0.3f * MaxPredictedObsCost;
+	SmoothedMaxHorizonObs = 0.85f * SmoothedMaxHorizonObs + 0.15f * MaxPredictedObsCost;
 
 	// 纠偏判断：当前位置有障碍物时无条件纠偏；仅预测到障碍物时需要最小位移门槛
 	const bool bCurrentHasObs = CurrentObstacleCost > Config.ObstacleCostDeadband;
-	const bool bHorizonHasObs = SmoothedMaxHorizonObs > Config.ObstacleCostDeadband * 10.0f;
+	const bool bHorizonHasObs = SmoothedMaxHorizonObs > Config.ObstacleCostDeadband * 15.0f;
 	const bool bHasMeaningfulCorrection = CorrectionDistance >= Config.MinCorrectionDistance;
 	const bool bRawNeedsCorrection = bCurrentHasObs || (bHorizonHasObs && bHasMeaningfulCorrection);
 
@@ -561,7 +621,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	{
 		--NeedsCorrectionHoldCount;
 		if (NeedsCorrectionHoldCount == 0)
-			NeedsCorrectionCooldownCount = 10;
+			NeedsCorrectionCooldownCount = 30;
 	}
 	else if (NeedsCorrectionCooldownCount > 0)
 	{
@@ -615,12 +675,13 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 
 	if (bStateChanged)
 	{
-		UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] >>> State changed: NeedsCorr %s->%s, Stuck %s->%s | Pos=(%.0f,%.0f,%.0f) Obs=%d NearDist=%.0f NearDir=(%.2f,%.2f,%.2f) Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Iter=%d Conv=%s Hold=%d Cool=%d Reason=%s"),
+		UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] >>> State changed: NeedsCorr %s->%s, Stuck %s->%s | Pos=(%.0f,%.0f,%.0f) Speed=%.0f Obs=%d NearDist=%.0f NearDir=(%.2f,%.2f,%.2f) Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Iter=%d Conv=%s Hold=%d Cool=%d Reason=%s"),
 			bPrevNeedsCorrection ? TEXT("Y") : TEXT("N"),
 			Result.bNeedsCorrection ? TEXT("Y") : TEXT("N"),
 			bPrevStuck ? TEXT("Y") : TEXT("N"),
 			Result.bStuck ? TEXT("Y") : TEXT("N"),
 			CurrentPosition.X, CurrentPosition.Y, CurrentPosition.Z,
+			CurrentVelocity.Size(),
 			Obstacles.Num(), NearestObsDist, NearestObsDir.X, NearestObsDir.Y, NearestObsDir.Z,
 			CurrentCost, CurrentObstacleCost, MaxPredictedObsCost,
 			ConsecutiveCostRiseCount, CorrectionDistance, SaturationRatio,
@@ -635,8 +696,9 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		if (Now - LastPeriodicLogTime >= 1.0)
 		{
 			LastPeriodicLogTime = Now;
-			UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] Pos=(%.0f,%.0f,%.0f) Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Saturated=%s Iter=%d Conv=%s Hold=%d Cool=%d NeedsCorr=%s Stuck=%s Reason=%s"),
+			UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] Pos=(%.0f,%.0f,%.0f) Speed=%.0f Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Saturated=%s Iter=%d Conv=%s Hold=%d Cool=%d NeedsCorr=%s Stuck=%s Reason=%s"),
 				CurrentPosition.X, CurrentPosition.Y, CurrentPosition.Z,
+				CurrentVelocity.Size(),
 				CurrentCost, CurrentObstacleCost, MaxPredictedObsCost,
 				ConsecutiveCostRiseCount, CorrectionDistance, SaturationRatio,
 				FirstControl.X, FirstControl.Y, FirstControl.Z,
@@ -653,4 +715,21 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	bPrevStuck = Result.bStuck;
 
 	return Result;
+}
+
+float UNMPCAvoidance::GetMinObstacleDistance(
+	const FVector& CurrentPosition,
+	float LookAheadDistance,
+	const TArray<FObstacleInfo>& Obstacles) const
+{
+	float MinDist = MAX_FLT;
+	for (const FObstacleInfo& Obstacle : Obstacles)
+	{
+		float Dist = CalculateDistanceToObstacle(CurrentPosition, Obstacle);
+		if (Dist < LookAheadDistance)
+		{
+			MinDist = FMath::Min(MinDist, Dist);
+		}
+	}
+	return MinDist;
 }

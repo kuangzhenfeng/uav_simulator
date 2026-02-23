@@ -9,7 +9,7 @@ set UAV_LOG=%PROJECT_ROOT%\Logs\uav.log
 set DEFAULT_LOG=%PROJECT_ROOT%\Saved\Logs\uav_simulator.log
 if not exist "%PROJECT_ROOT%\Logs" mkdir "%PROJECT_ROOT%\Logs"
 set SIM_DURATION=60
-set SLOMO=5
+set SLOMO=8
 
 if "%~1" NEQ "" set SIM_DURATION=%~1
 if "%~2" NEQ "" set SLOMO=%~2

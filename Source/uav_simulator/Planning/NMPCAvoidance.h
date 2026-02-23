@@ -21,7 +21,7 @@ struct FNMPCConfig
 
 	// 预测时域 T_h (秒)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float PredictionHorizon = 2.0f;
+	float PredictionHorizon = 3.5f;
 
 	// 最大加速度 (cm/s²)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
@@ -45,11 +45,11 @@ struct FNMPCConfig
 
 	// 障碍物代价权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightObstacle = 5.0f;
+	float WeightObstacle = 1.5f;
 
 	// 终端代价权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightTerminal = 1.0f;
+	float WeightTerminal = 2.0f;
 
 	// 障碍物势垒衰减系数 α
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
@@ -61,7 +61,7 @@ struct FNMPCConfig
 
 	// 障碍物影响距离 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float ObstacleInfluenceDistance = 800.0f;
+	float ObstacleInfluenceDistance = 2000.0f;
 
 	// 求解器最大迭代次数
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -105,7 +105,11 @@ struct FNMPCConfig
 
 	// 连续代价上升次数阈值，超过后重置温启动
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	int32 WarmStartResetThreshold = 5;
+	int32 WarmStartResetThreshold = 25;
+
+	// reset 后免疫帧数，防止立即重触发（~150ms）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
+	int32 WarmStartResetImmunity = 200;
 
 	// 代价连续上升判定为卡死的阈值
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -334,6 +338,18 @@ public:
 	 */
 	void WarmStart();
 
+	/**
+	 * 计算前方障碍物的最小距离 (用于主动减速)
+	 * @param CurrentPosition 当前位置
+	 * @param LookAheadDistance 前瞻距离 (cm)
+	 * @param Obstacles 障碍物列表
+	 * @return 最小距离 (cm)，MAX_FLT 表示无障碍物
+	 */
+	float GetMinObstacleDistance(
+		const FVector& CurrentPosition,
+		float LookAheadDistance,
+		const TArray<FObstacleInfo>& Obstacles) const;
+
 private:
 	// 上次最优控制序列 (用于温启动)
 	TArray<FVector> PreviousControls;
@@ -346,6 +362,9 @@ private:
 
 	// 连续代价上升计数
 	int32 ConsecutiveCostRiseCount = 0;
+
+	// reset 后剩余免疫帧数
+	int32 WarmStartResetImmunityCount = 0;
 
 	// 上一帧状态 (用于日志状态转换检测)
 	bool bPrevNeedsCorrection = false;

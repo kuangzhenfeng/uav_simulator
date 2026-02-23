@@ -108,6 +108,8 @@ private:
 	FStabilityScore Score;
 	FVector PrevVelocity = FVector::ZeroVector;
 	bool bHasPrevVelocity = false;
+	float LastObstaclePenetrationLogTime = -10.0f;
+	float LastAttitudeAnomalyLogTime = -10.0f;
 
 	FORCEINLINE float EMA(float Prev, float Cur) const { return Prev + SmoothAlpha * (Cur - Prev); }
 	FORCEINLINE FColor ToColor(float S) const

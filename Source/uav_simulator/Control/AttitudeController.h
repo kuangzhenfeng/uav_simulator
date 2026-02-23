@@ -92,6 +92,9 @@ private:
 	float LastPitchError = 0.0f;
 	float LastYawError = 0.0f;
 
+	// 日志降频计时器
+	float LogAccumTime = 0.0f;
+
 	// 计算单轴PID控制
 	float ComputePID(float Error, float& Integral, float& LastError, const FPIDParams& Params, float DeltaTime);
 

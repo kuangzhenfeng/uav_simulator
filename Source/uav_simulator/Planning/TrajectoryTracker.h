@@ -104,6 +104,13 @@ public:
 	float GetCurrentTime() const { return TrackingTime; }
 
 	/**
+	 * 设置速度缩放因子 (用于主动减速)
+	 * @param InSpeedScale 速度缩放因子 (0.0-1.0)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
+	void SetSpeedScale(float InSpeedScale) { SpeedScale = FMath::Clamp(InSpeedScale, 0.0f, 1.0f); }
+
+	/**
 	 * 计算跟踪误差
 	 * @param CurrentPosition 当前位置
 	 * @return 位置误差向量
@@ -144,6 +151,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trajectory Tracking")
 	float TimeScale = 1.0f;
 
+	// 速度缩放因子 (用于主动减速避障)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trajectory Tracking")
+	float SpeedScale = 1.0f;
+
 	// 自适应时间缩放：误差大时自动减速/暂停推进
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
 	bool bEnableAdaptiveTimeScale = true;
@@ -160,7 +171,11 @@ protected:
 
 	// 完成判定半径 (cm)：时间耗尽后，UAV 须在此距离内才标记完成
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
-	float CompletionRadius = 200.0f;
+	float CompletionRadius = 500.0f;
+
+	// 完成判定最大速度 (cm/s)：速度超过此值时不标记完成，等待减速
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
+	float CompletionMaxSpeed = 300.0f;
 
 	// 是否在完成时保持最终状态
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trajectory Tracking")

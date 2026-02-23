@@ -3,6 +3,7 @@
 #include "StabilityScorer.h"
 #include "../Planning/ObstacleManager.h"
 #include "DrawDebugHelpers.h"
+#include "UAVLogConfig.h"
 
 UStabilityScorer::UStabilityScorer()
 {
@@ -14,6 +15,16 @@ void UStabilityScorer::UpdateFlightScore(const FUAVState& State, UObstacleManage
 	// 1. 姿态评分: 惩罚过大的 Roll/Pitch
 	float Tilt = FMath::Abs(State.Rotation.Roll) + FMath::Abs(State.Rotation.Pitch);
 	float RawAttitude = FMath::Clamp(100.f - Tilt / MaxTiltDeg * 100.f, 0.f, 100.f);
+	if (Tilt > 90.f)
+	{
+		const float Now = GetWorld()->GetTimeSeconds();
+		if (Now - LastAttitudeAnomalyLogTime > 1.0f)
+		{
+			LastAttitudeAnomalyLogTime = Now;
+			UE_LOG(LogUAVAttitude, Error, TEXT("[UAV] Attitude anomaly! Roll=%.1f Pitch=%.1f"),
+				State.Rotation.Roll, State.Rotation.Pitch);
+		}
+	}
 
 	// 2. 角速度评分: 惩罚高角速率
 	float RawAngVel = FMath::Clamp(100.f - State.AngularVelocity.Size() / MaxAngVelMag * 100.f, 0.f, 100.f);
@@ -35,6 +46,16 @@ void UStabilityScorer::UpdateFlightScore(const FUAVState& State, UObstacleManage
 		FObstacleInfo Nearest;
 		float Dist = ObstacleManager->GetDistanceToNearestObstacle(State.Position, Nearest);
 		RawObsDist = Dist <= 0.f ? 0.f : FMath::Clamp(Dist / SafeDistance * 100.f, 0.f, 100.f);
+		if (Dist < 0.f)
+		{
+			const float Now = GetWorld()->GetTimeSeconds();
+			if (Now - LastObstaclePenetrationLogTime > 1.0f)
+			{
+				LastObstaclePenetrationLogTime = Now;
+				UE_LOG(LogUAVPlanning, Error, TEXT("[UAV] Obstacle penetration! ID=%d depth=%.1fcm"),
+					Nearest.ObstacleID, -Dist);
+			}
+		}
 	}
 
 	// EMA 平滑

@@ -28,11 +28,16 @@ FMotorOutput UAttitudeController::ComputeControl(const FUAVState& CurrentState, 
 	float PitchError = NormalizeAngle(TargetAttitude.Pitch - CurrentState.Rotation.Pitch);
 	float YawError = NormalizeAngle(TargetAttitude.Yaw - CurrentState.Rotation.Yaw);
 
-	// 调试日志：输出姿态信息
-	UE_LOG(LogUAVAttitude, Log, TEXT("Target: R=%.2f P=%.2f Y=%.2f | Current: R=%.2f P=%.2f Y=%.2f | Error: R=%.2f P=%.2f Y=%.2f"),
-		TargetAttitude.Roll, TargetAttitude.Pitch, TargetAttitude.Yaw,
-		CurrentState.Rotation.Roll, CurrentState.Rotation.Pitch, CurrentState.Rotation.Yaw,
-		RollError, PitchError, YawError);
+	LogAccumTime += DeltaTime;
+	const bool bShouldLog = LogAccumTime >= 1.0f;
+	if (bShouldLog)
+	{
+		LogAccumTime = 0.0f;
+		UE_LOG(LogUAVAttitude, Log, TEXT("Target: R=%.2f P=%.2f Y=%.2f | Current: R=%.2f P=%.2f Y=%.2f | Error: R=%.2f P=%.2f Y=%.2f"),
+			TargetAttitude.Roll, TargetAttitude.Pitch, TargetAttitude.Yaw,
+			CurrentState.Rotation.Roll, CurrentState.Rotation.Pitch, CurrentState.Rotation.Yaw,
+			RollError, PitchError, YawError);
+	}
 
 	// 限制目标角度
 	RollError = FMath::Clamp(RollError, -MaxTiltAngle, MaxTiltAngle);
@@ -64,8 +69,11 @@ FMotorOutput UAttitudeController::ComputeControl(const FUAVState& CurrentState, 
 	YawControl = FMath::Clamp(YawControl, -MaxControlOutput * 0.5f, MaxControlOutput * 0.5f);
 
 	// 调试日志：输出控制量详情
-	UE_LOG(LogUAVAttitude, Log, TEXT("PID: P:(%.4f,%.4f) D:(%.4f,%.4f) Out:(%.4f,%.4f) AngVel:(%.1f,%.1f)"),
-		RollP, PitchP, RollD, PitchD, RollControl, PitchControl, AngularVelDeg.X, AngularVelDeg.Y);
+	if (bShouldLog)
+	{
+		UE_LOG(LogUAVAttitude, Log, TEXT("PID: P:(%.4f,%.4f) D:(%.4f,%.4f) Out:(%.4f,%.4f) AngVel:(%.1f,%.1f)"),
+			RollP, PitchP, RollD, PitchD, RollControl, PitchControl, AngularVelDeg.X, AngularVelDeg.Y);
+	}
 
 	// 将控制输出映射到电机推力
 	// 四旋翼X型配置:
