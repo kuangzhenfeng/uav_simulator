@@ -12,7 +12,7 @@ Saved/
 
 .DS_Store
 .vscode/
-.claude/
+.claude/*.json
 .cache/
 .ignore
 compile_commands.json

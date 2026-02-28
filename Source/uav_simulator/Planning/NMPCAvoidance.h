@@ -111,18 +111,6 @@ struct FNMPCConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
 	int32 WarmStartResetImmunity = 200;
 
-	// 代价连续上升判定为卡死的阈值
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	int32 CostRiseStuckThreshold = 8;
-
-	// 每次求解最小有效前进距离 (cm)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	float MinProgressPerSolve = 5.0f;
-
-	// 控制接近饱和的比例阈值 (相对 MaxAcceleration)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	float SaturationAccelRatio = 0.9f;
-
 	// 障碍物代价死区: 小于该值视为无障碍影响
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
 	float ObstacleCostDeadband = 0.3f;
@@ -187,14 +175,6 @@ struct FNMPCAvoidanceResult
 	UPROPERTY(BlueprintReadOnly, Category = "NMPC")
 	FVector CorrectedDirection;
 
-	// 合力向量 (从第一步控制输入映射, 可视化用)
-	UPROPERTY(BlueprintReadOnly, Category = "NMPC")
-	FVector TotalForce;
-
-	// 引力分量 (指向参考点方向, 可视化用)
-	UPROPERTY(BlueprintReadOnly, Category = "NMPC")
-	FVector AttractiveForce;
-
 	// 斥力分量 (控制输入 - 引力, 可视化用)
 	UPROPERTY(BlueprintReadOnly, Category = "NMPC")
 	FVector RepulsiveForce;
@@ -222,8 +202,6 @@ struct FNMPCAvoidanceResult
 	FNMPCAvoidanceResult()
 		: CorrectedTarget(FVector::ZeroVector)
 		, CorrectedDirection(FVector::ForwardVector)
-		, TotalForce(FVector::ZeroVector)
-		, AttractiveForce(FVector::ZeroVector)
 		, RepulsiveForce(FVector::ZeroVector)
 		, bNeedsCorrection(false)
 		, bStuck(false)
@@ -337,18 +315,6 @@ public:
 	 * 温启动: 将上次最优控制序列左移一步
 	 */
 	void WarmStart();
-
-	/**
-	 * 计算前方障碍物的最小距离 (用于主动减速)
-	 * @param CurrentPosition 当前位置
-	 * @param LookAheadDistance 前瞻距离 (cm)
-	 * @param Obstacles 障碍物列表
-	 * @return 最小距离 (cm)，MAX_FLT 表示无障碍物
-	 */
-	float GetMinObstacleDistance(
-		const FVector& CurrentPosition,
-		float LookAheadDistance,
-		const TArray<FObstacleInfo>& Obstacles) const;
 
 private:
 	// 上次最优控制序列 (用于温启动)

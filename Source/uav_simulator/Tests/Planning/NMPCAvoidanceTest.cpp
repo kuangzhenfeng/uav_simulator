@@ -357,46 +357,6 @@ bool FNMPCAvoidanceTest_StuckDetection::RunTest(const FString& Parameters)
 
 // ==================== 控制量约束测试 ====================
 
-// ==================== 代价上升 + 饱和 + 低进展卡死测试 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNMPCAvoidanceTest_StuckWhenCostRisesAndControlSaturates,
-	"UAVSimulator.Planning.NMPCAvoidance.StuckWhenCostRisesAndControlSaturates",
-	UAV_TEST_FLAGS)
-
-bool FNMPCAvoidanceTest_StuckWhenCostRisesAndControlSaturates::RunTest(const FString& Parameters)
-{
-	UNMPCAvoidance* NMPC = NewObject<UNMPCAvoidance>();
-
-	// 收紧阈值，构造“代价恶化 + 饱和 + 低进展”场景
-	NMPC->Config.CostRiseStuckThreshold = 1;
-	NMPC->Config.MinProgressPerSolve = 20.0f;
-	NMPC->Config.SaturationAccelRatio = 0.01f;
-	NMPC->Config.StuckForceThreshold = 0.01f;
-	NMPC->Config.MinCorrectionDistance = 0.0f;
-
-	FVector CurrentPos(0, 0, 0);
-	FVector CurrentVel(0, 0, 0);
-	TArray<FVector> ReferencePoints;
-	for (int32 i = 0; i <= NMPC->Config.PredictionSteps; ++i)
-	{
-		ReferencePoints.Add(FVector(2000, 0, 0));
-	}
-
-	// 第一次：无障碍，建立代价基线
-	TArray<FObstacleInfo> NoObstacles;
-	FNMPCAvoidanceResult Baseline = NMPC->ComputeAvoidance(CurrentPos, CurrentVel, ReferencePoints, NoObstacles);
-	TestFalse("Baseline should not be stuck", Baseline.bStuck);
-
-	// 第二次：加入近距离障碍物，触发代价上升
-	TArray<FObstacleInfo> Obstacles;
-	Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(1, FVector(80, 0, 0), 120.0f));
-
-	FNMPCAvoidanceResult Result = NMPC->ComputeAvoidance(CurrentPos, CurrentVel, ReferencePoints, Obstacles);
-	TestTrue("Cost rise with saturated control and low progress should be stuck", Result.bStuck);
-
-	return true;
-}
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNMPCAvoidanceTest_ControlLimits, "UAVSimulator.Planning.NMPCAvoidance.ControlLimits", UAV_TEST_FLAGS)
 bool FNMPCAvoidanceTest_ControlLimits::RunTest(const FString& Parameters)
 {

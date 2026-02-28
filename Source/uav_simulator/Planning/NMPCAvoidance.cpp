@@ -500,39 +500,6 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 					CurrentCost = PertCost;
 				}
 			}
-
-			// 扰动后追加梯度下降精炼
-			for (int32 PostIter = 0; PostIter < 5; ++PostIter)
-			{
-				ProjectControls(Controls, CurrentVelocity);
-
-				TArray<FVector> Gradient;
-				ComputeGradient(CurrentPosition, CurrentVelocity, Controls, RefPoints, Obstacles, Gradient);
-
-				float StepSize = Config.InitialStepSize;
-				for (int32 BT = 0; BT < Config.MaxBacktrackSteps; ++BT)
-				{
-					TArray<FVector> TrialControls;
-					TrialControls.SetNum(N);
-					for (int32 k = 0; k < N; ++k)
-					{
-						TrialControls[k] = Controls[k] - Gradient[k] * StepSize;
-					}
-					ProjectControls(TrialControls, CurrentVelocity);
-
-					TArray<FVector> TrialPos, TrialVel;
-					ForwardSimulate(CurrentPosition, CurrentVelocity, TrialControls, TrialPos, TrialVel);
-					float TrialCost = ComputeCost(TrialPos, TrialVel, TrialControls, RefPoints, Obstacles);
-
-					if (TrialCost < CurrentCost)
-					{
-						Controls = TrialControls;
-						CurrentCost = TrialCost;
-						break;
-					}
-					StepSize *= Config.BacktrackFactor;
-				}
-			}
 		}
 	}
 
@@ -578,13 +545,12 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	const float CorrectionDistance = CorrDir.Size();
 	Result.CorrectedDirection = CorrDir.IsNearlyZero() ? FVector::ForwardVector : CorrDir.GetSafeNormal();
 
-	// 力分量映射 (可视化用)
-	Result.TotalForce = FirstControl;
+	// 斥力分量 (可视化用)
 	if (RefPoints.Num() > 0)
 	{
-		FVector ToRef = RefPoints[0] - CurrentPosition;
-		Result.AttractiveForce = ToRef.IsNearlyZero() ? FVector::ZeroVector : ToRef.GetSafeNormal() * FirstControl.Size();
-		Result.RepulsiveForce = FirstControl - Result.AttractiveForce;
+		FVector ToRef = (RefPoints[0] - CurrentPosition).GetSafeNormal();
+		FVector Attractive = ToRef * FirstControl.Size();
+		Result.RepulsiveForce = FirstControl - Attractive;
 	}
 
 	// 填充预测轨迹（必须在 bNeedsCorrection 判断之前）
@@ -645,15 +611,6 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	const float SaturationRatio =
 		Config.MaxAcceleration > KINDA_SMALL_NUMBER ? (FirstControlMagnitude / Config.MaxAcceleration) : 0.0f;
 
-	const bool bControlSaturated =
-		Config.MaxAcceleration > KINDA_SMALL_NUMBER &&
-		FirstControlMagnitude >= Config.MaxAcceleration * Config.SaturationAccelRatio;
-	const bool bCostRiseStuck =
-		(bCurrentHasObs || bHorizonHasObs) &&
-		ConsecutiveCostRiseCount >= Config.CostRiseStuckThreshold &&
-		bControlSaturated &&
-		CorrectionDistance < Config.MinProgressPerSolve;
-
 	// 位置基准卡死：连续多次求解几乎没移动且附近有障碍物
 	const float DistFromCheck = FVector::Dist(CurrentPosition, StuckCheckPosition);
 	if (DistFromCheck < 30.0f && (bCurrentHasObs || bHorizonHasObs))
@@ -670,7 +627,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		StuckCheckPosition = CurrentPosition;
 	}
 
-	Result.bStuck = bLowControlStuck || bCostRiseStuck || bPositionStuck;
+	Result.bStuck = bLowControlStuck || bPositionStuck;
 	const TCHAR* StuckReason = TEXT("None");
 	if (bLowControlStuck)
 	{
@@ -679,10 +636,6 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	else if (bPositionStuck)
 	{
 		StuckReason = TEXT("PositionStuck");
-	}
-	else if (bCostRiseStuck)
-	{
-		StuckReason = TEXT("CostRiseSaturationNoProgress");
 	}
 
 	// 最近障碍物诊断
@@ -698,27 +651,9 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		}
 	}
 
-	// 逃逸覆盖：沿参考轨迹方向推进，附加小幅远离障碍物分量
+	// 卡死时重置温启动，避免下次继续喂入零控制
 	if ((bLowControlStuck || bPositionStuck) && NearestObsDist < Config.ObstacleInfluenceDistance)
 	{
-		// 主方向：朝参考轨迹终点
-		FVector EscapeDir = FVector::ZeroVector;
-		if (RefPoints.Num() > 0)
-			EscapeDir = (RefPoints.Last() - CurrentPosition).GetSafeNormal();
-		if (EscapeDir.IsNearlyZero())
-			EscapeDir = FVector::ForwardVector;
-
-		// 附加 30% 远离最近障碍物分量
-		FVector AwayObs = -NearestObsDir;
-		if (!AwayObs.IsNearlyZero())
-			EscapeDir = (EscapeDir * 0.7f + AwayObs * 0.3f).GetSafeNormal();
-
-		// 约束 Z 分量
-		EscapeDir.Z = FMath::Clamp(EscapeDir.Z, -0.2f, 0.2f);
-		EscapeDir.Normalize();
-		Result.OptimalAcceleration = EscapeDir * Config.MaxAcceleration * 0.3f;
-
-		// 强制重置温启动，避免下次继续喂入零控制
 		bHasPreviousControls = false;
 		ConsecutiveCostRiseCount = 0;
 	}
@@ -751,13 +686,12 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		if (Now - LastPeriodicLogTime >= 1.0)
 		{
 			LastPeriodicLogTime = Now;
-			UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] Pos=(%.0f,%.0f,%.0f) Speed=%.0f Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Saturated=%s Iter=%d Conv=%s Hold=%d Cool=%d NeedsCorr=%s Stuck=%s Reason=%s"),
+			UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] Pos=(%.0f,%.0f,%.0f) Speed=%.0f Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Iter=%d Conv=%s Hold=%d Cool=%d NeedsCorr=%s Stuck=%s Reason=%s"),
 				CurrentPosition.X, CurrentPosition.Y, CurrentPosition.Z,
 				CurrentVelocity.Size(),
 				CurrentCost, CurrentObstacleCost, MaxPredictedObsCost,
 				ConsecutiveCostRiseCount, CorrectionDistance, SaturationRatio,
 				FirstControl.X, FirstControl.Y, FirstControl.Z,
-				bControlSaturated ? TEXT("Y") : TEXT("N"),
 				FinalIter, bConverged ? TEXT("Y") : TEXT("N"),
 				NeedsCorrectionHoldCount, NeedsCorrectionCooldownCount,
 				Result.bNeedsCorrection ? TEXT("Y") : TEXT("N"),
@@ -770,21 +704,4 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	bPrevStuck = Result.bStuck;
 
 	return Result;
-}
-
-float UNMPCAvoidance::GetMinObstacleDistance(
-	const FVector& CurrentPosition,
-	float LookAheadDistance,
-	const TArray<FObstacleInfo>& Obstacles) const
-{
-	float MinDist = MAX_FLT;
-	for (const FObstacleInfo& Obstacle : Obstacles)
-	{
-		float Dist = CalculateDistanceToObstacle(CurrentPosition, Obstacle);
-		if (Dist < LookAheadDistance)
-		{
-			MinDist = FMath::Min(MinDist, Dist);
-		}
-	}
-	return MinDist;
 }
