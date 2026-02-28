@@ -21,7 +21,7 @@ struct FNMPCConfig
 
 	// 预测时域 T_h (秒)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float PredictionHorizon = 3.5f;
+	float PredictionHorizon = 2.0f;
 
 	// 最大加速度 (cm/s²)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
@@ -33,7 +33,7 @@ struct FNMPCConfig
 
 	// 参考跟踪权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightReference = 0.3f;
+	float WeightReference = 0.5f;
 
 	// 速度跟踪权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
@@ -41,7 +41,7 @@ struct FNMPCConfig
 
 	// 控制输入权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightControl = 0.0001f;
+	float WeightControl = 0.001f;
 
 	// 障碍物代价权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
@@ -65,7 +65,7 @@ struct FNMPCConfig
 
 	// 求解器最大迭代次数
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	int32 MaxIterations = 15;
+	int32 MaxIterations = 25;
 
 	// 收敛容差
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -73,11 +73,11 @@ struct FNMPCConfig
 
 	// 有限差分步长 (cm/s²)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	float FiniteDiffEpsilon = 1.0f;
+	float FiniteDiffEpsilon = 20.0f;
 
 	// 初始学习率
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	float InitialStepSize = 500.0f;
+	float InitialStepSize = 150.0f;
 
 	// 回溯线搜索缩减因子
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -105,7 +105,7 @@ struct FNMPCConfig
 
 	// 连续代价上升次数阈值，超过后重置温启动
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	int32 WarmStartResetThreshold = 25;
+	int32 WarmStartResetThreshold = 20;
 
 	// reset 后免疫帧数，防止立即重触发（~150ms）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -366,6 +366,9 @@ private:
 	// reset 后剩余免疫帧数
 	int32 WarmStartResetImmunityCount = 0;
 
+	// 输出加速度 EMA 平滑值（减少帧间控制量抖动）
+	FVector SmoothedOutputAccel = FVector::ZeroVector;
+
 	// 上一帧状态 (用于日志状态转换检测)
 	bool bPrevNeedsCorrection = false;
 	bool bPrevStuck = false;
@@ -376,6 +379,10 @@ private:
 	int32 NeedsCorrectionCooldownCount = 0;
 	// MaxHorizonObs EMA 平滑值（滤除 NMPC 求解噪声）
 	float SmoothedMaxHorizonObs = 0.0f;
+	// 位置基准卡死检测
+	FVector StuckCheckPosition = FVector::ZeroVector;
+	int32 SlowProgressCount = 0;
+
 	// 上次周期性日志时间戳（秒）
 	double LastPeriodicLogTime = 0.0;
 

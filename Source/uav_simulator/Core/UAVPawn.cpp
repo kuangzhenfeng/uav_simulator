@@ -253,43 +253,95 @@ void AUAVPawn::UpdateController(float DeltaTime)
 				break;
 			}
 
-			// 采样参考轨迹点
-			TArray<FVector> ReferencePoints;
-			const int32 N = NMPCComponent->Config.PredictionSteps;
-			const float Dt = NMPCComponent->Config.GetDt();
-			const float CurrentTime = TrajectoryTrackerComponent->GetCurrentTime();
-			for (int32 i = 0; i <= N; ++i)
-				ReferencePoints.Add(TrajectoryTrackerComponent->GetDesiredState(CurrentTime + i * Dt).Position);
+			// NMPC 调用节流：每 0.1s 求解一次，子步间复用缓存加速度
+			// stuck 逃逸冷却期间跳过求解，让逃逸加速度持续生效
+			const float NMPCSolveInterval = 0.1f;
+			NMPCSolveAccumulator += DeltaTime;
+			if (StuckEscapeCooldown > 0.0f)
+			{
+				StuckEscapeCooldown -= DeltaTime;
+				NMPCSolveAccumulator = 0.0f; // 冷却期间不累积
+			}
+			else if (NMPCSolveAccumulator >= NMPCSolveInterval || !bHasCachedNMPC)
+			{
+				NMPCSolveAccumulator = 0.0f;
 
-			// 获取附近障碍物
-			TArray<FObstacleInfo> NearbyObstacles;
-			if (ObstacleManagerComponent)
-				NearbyObstacles = ObstacleManagerComponent->GetObstaclesInRange(
-					CurrentState.Position, NMPCComponent->Config.ObstacleInfluenceDistance * 2.0f);
+				// 采样参考轨迹点
+				TArray<FVector> ReferencePoints;
+				const int32 N = NMPCComponent->Config.PredictionSteps;
+				const float Dt = NMPCComponent->Config.GetDt();
+				const float CurrentTime = TrajectoryTrackerComponent->GetCurrentTime();
+				for (int32 i = 0; i <= N; ++i)
+					ReferencePoints.Add(TrajectoryTrackerComponent->GetDesiredState(CurrentTime + i * Dt).Position);
 
-			// 修正穿过障碍物的参考点
-			for (FVector& RefPt : ReferencePoints)
-				for (const FObstacleInfo& Obs : NearbyObstacles)
+				// 获取附近障碍物
+				TArray<FObstacleInfo> NearbyObstacles;
+				if (ObstacleManagerComponent)
+					NearbyObstacles = ObstacleManagerComponent->GetObstaclesInRange(
+						CurrentState.Position, NMPCComponent->Config.ObstacleInfluenceDistance * 2.0f);
+
+				// 参考点退化检测
+				if (ReferencePoints.Num() > 1)
 				{
-					float Dist = NMPCComponent->CalculateDistanceToObstacle(RefPt, Obs);
-					if (Dist < NMPCComponent->Config.ObstacleSafeDistance)
+					FVector EndRef = ReferencePoints.Last();
+					bool bAllSame = true;
+					for (int32 i = 0; i < ReferencePoints.Num() - 1; ++i)
 					{
-						FVector PushDir = (RefPt - Obs.Center).GetSafeNormal();
-						if (PushDir.IsNearlyZero()) PushDir = FVector::UpVector;
-						RefPt += PushDir * (NMPCComponent->Config.ObstacleSafeDistance - Dist);
+						if (!ReferencePoints[i].Equals(EndRef, 10.0f))
+						{
+							bAllSame = false;
+							break;
+						}
+					}
+					if (bAllSame && FVector::Dist(CurrentState.Position, EndRef) > 50.0f)
+					{
+						for (int32 i = 0; i <= N; ++i)
+						{
+							float Alpha = (float)i / FMath::Max(N, 1);
+							ReferencePoints[i] = FMath::Lerp(CurrentState.Position, EndRef, Alpha);
+						}
 					}
 				}
 
-			// NMPC 求解
-			FNMPCAvoidanceResult Result = NMPCComponent->ComputeAvoidance(
-				CurrentState.Position, CurrentState.Velocity, ReferencePoints, NearbyObstacles);
-			bNMPCStuck = Result.bStuck;
+				// 修正穿过障碍物的参考点
+				for (FVector& RefPt : ReferencePoints)
+					for (const FObstacleInfo& Obs : NearbyObstacles)
+					{
+						float Dist = NMPCComponent->CalculateDistanceToObstacle(RefPt, Obs);
+						if (Dist < NMPCComponent->Config.ObstacleSafeDistance)
+						{
+							FVector PushDir = (RefPt - Obs.Center).GetSafeNormal();
+							if (PushDir.IsNearlyZero()) PushDir = FVector::UpVector;
+							RefPt += PushDir * (NMPCComponent->Config.ObstacleSafeDistance - Dist);
+						}
+					}
+
+				// NMPC 求解
+				FNMPCAvoidanceResult Result = NMPCComponent->ComputeAvoidance(
+					CurrentState.Position, CurrentState.Velocity, ReferencePoints, NearbyObstacles);
+				bNMPCStuck = Result.bStuck;
+				CachedNMPCAcceleration = Result.OptimalAcceleration;
+				bHasCachedNMPC = true;
+				if (Result.bStuck)
+					StuckEscapeCooldown = 0.2f; // 逃逸加速度持续 0.2s
+			}
+
+			// 偏差保护：偏离参考轨迹过远时强制飞回
+			{
+				FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
+				float Deviation = FVector::Dist(CurrentState.Position, DesiredPos);
+				if (Deviation > 500.0f)
+				{
+					FVector FlyBackDir = (DesiredPos - CurrentState.Position).GetSafeNormal();
+					CachedNMPCAcceleration = FlyBackDir * 400.0f;
+				}
+			}
 
 			// 加速度 → 姿态+推力 → 电机
 			FRotator DesiredAttitude;
 			float DesiredThrust;
 			PositionControllerComponent->AccelerationToControl(
-				Result.OptimalAcceleration, CurrentState.Rotation.Yaw, DesiredAttitude, DesiredThrust);
+				CachedNMPCAcceleration, CurrentState.Rotation.Yaw, DesiredAttitude, DesiredThrust);
 			FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
 				CurrentState, DesiredAttitude, DeltaTime);
 			float HoverThrust = AttitudeControllerComponent->HoverThrust;

@@ -16,7 +16,7 @@ fi
 mkdir -p "$PROJECT_ROOT/Logs"
 
 SIM_DURATION=${1:-60}
-SLOMO=${2:-5}
+SLOMO=${2:-8}
 
 echo "========================================"
 echo "UAV Simulator - Headless Simulation (${SIM_DURATION}s real, slomo=$SLOMO)"

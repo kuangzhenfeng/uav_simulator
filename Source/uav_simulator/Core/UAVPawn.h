@@ -235,6 +235,14 @@ protected:
 private:
 	bool bNMPCStuck = false;
 
+	// NMPC 调用节流：缓存上次结果，避免每个子步都调用
+	float NMPCSolveAccumulator = 0.0f;
+	FVector CachedNMPCAcceleration = FVector::ZeroVector;
+	bool bHasCachedNMPC = false;
+
+	// stuck 逃逸冷却：stuck 时延长不求解时间，让逃逸加速度持续生效
+	float StuckEscapeCooldown = 0.0f;
+
 	// 更新传感器数据
 	void UpdateSensors(float DeltaTime);
 

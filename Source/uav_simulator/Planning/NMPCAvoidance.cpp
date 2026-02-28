@@ -154,14 +154,19 @@ float UNMPCAvoidance::ComputeCost(
 		}
 	}
 
-	// 动态权重调整：当有近距障碍物时，降低参考跟踪权重
+	// 动态权重调整：根据最小障碍物距离渐进降低参考跟踪权重
 	float RefWeight = Config.WeightReference;
 	float VelWeight = Config.WeightVelocity;
-	if (MinObsDist < Config.ObstacleSafeDistance * 1.5f)
+	if (MinObsDist < Config.ObstacleInfluenceDistance)
 	{
-		// 在强避障场景下，大幅降低轨迹跟踪权重，优先保证避障
-		RefWeight *= 0.1f;
-		VelWeight *= 0.1f;
+		// 渐进式：从 InfluenceDistance 到 SafeDistance 线性插值，最低 0.3x
+		float Alpha = FMath::Clamp(
+			(MinObsDist - Config.ObstacleSafeDistance) /
+			(Config.ObstacleInfluenceDistance - Config.ObstacleSafeDistance),
+			0.0f, 1.0f);
+		float Scale = FMath::Lerp(0.3f, 1.0f, Alpha);
+		RefWeight *= Scale;
+		VelWeight *= Scale;
 	}
 
 	for (int32 k = 0; k < N; ++k)
@@ -184,11 +189,12 @@ float UNMPCAvoidance::ComputeCost(
 		// 控制代价
 		Cost += Config.WeightControl * Controls[k].SizeSquared();
 
-		// 障碍物代价
+		// 障碍物代价（时间衰减：远期预测步权重更低，避免远处障碍物引起振荡）
+		float TimeDiscount = FMath::Pow(0.7f, (float)k);
 		for (const FObstacleInfo& Obstacle : Obstacles)
 		{
 			FObstacleInfo PredObs = PredictObstacle(Obstacle, k * dt);
-			Cost += Config.WeightObstacle * ComputeObstacleCost(Positions[k], PredObs);
+			Cost += Config.WeightObstacle * TimeDiscount * ComputeObstacleCost(Positions[k], PredObs);
 		}
 	}
 
@@ -199,11 +205,12 @@ float UNMPCAvoidance::ComputeCost(
 		Cost += Config.WeightTerminal * TermDist;
 	}
 
-	// 终端障碍物代价
+	// 终端障碍物代价（同样应用时间衰减）
+	float TermDiscount = FMath::Pow(0.7f, (float)N);
 	for (const FObstacleInfo& Obstacle : Obstacles)
 	{
 		FObstacleInfo PredObs = PredictObstacle(Obstacle, N * dt);
-		Cost += Config.WeightObstacle * ComputeObstacleCost(Positions[N], PredObs);
+		Cost += Config.WeightObstacle * TermDiscount * ComputeObstacleCost(Positions[N], PredObs);
 	}
 
 	return Cost;
@@ -365,8 +372,11 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		if (ReferencePoints.Num() > 1)
 		{
 			FVector RefDir = (ReferencePoints[1] - ReferencePoints[0]).GetSafeNormal();
+			// 参考点退化时（相邻点重合），用终点方向兜底
+			if (RefDir.IsNearlyZero())
+				RefDir = (ReferencePoints.Last() - ReferencePoints[0]).GetSafeNormal();
 			if (!RefDir.IsNearlyZero())
-				InitControl = RefDir * Config.MaxAcceleration * 0.2f;
+				InitControl = RefDir * Config.MaxAcceleration * 0.5f;
 		}
 		for (int32 k = 0; k < N; ++k)
 		{
@@ -603,7 +613,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		MaxPredictedObsCost = FMath::Max(MaxPredictedObsCost, Result.PredictedTrajectory[k].ObstacleCost);
 	}
 
-	// EMA 平滑 MaxHorizonObs，滤除 NMPC 求解噪声（alpha=0.3，约 3 帧响应）
+	// EMA 平滑 MaxHorizonObs，系数 0.15 使衰减更慢（约 10 帧响应），减少 NeedsCorr 抖动
 	SmoothedMaxHorizonObs = 0.85f * SmoothedMaxHorizonObs + 0.15f * MaxPredictedObsCost;
 
 	// 纠偏判断：当前位置有障碍物时无条件纠偏；仅预测到障碍物时需要最小位移门槛
@@ -612,16 +622,16 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	const bool bHasMeaningfulCorrection = CorrectionDistance >= Config.MinCorrectionDistance;
 	const bool bRawNeedsCorrection = bCurrentHasObs || (bHorizonHasObs && bHasMeaningfulCorrection);
 
-	// 滞后：触发后保持至少 20 帧（~100ms），Y->N 后冷却 10 帧（~50ms）防止立即重触发
+	// 滞后：触发后保持至少 100 帧（高帧率下约 500ms），Y->N 后冷却 80 帧防止立即重触发
 	if (bRawNeedsCorrection && NeedsCorrectionCooldownCount == 0)
 	{
-		NeedsCorrectionHoldCount = 20;
+		NeedsCorrectionHoldCount = 100;
 	}
 	else if (NeedsCorrectionHoldCount > 0)
 	{
 		--NeedsCorrectionHoldCount;
 		if (NeedsCorrectionHoldCount == 0)
-			NeedsCorrectionCooldownCount = 30;
+			NeedsCorrectionCooldownCount = 80;
 	}
 	else if (NeedsCorrectionCooldownCount > 0)
 	{
@@ -644,11 +654,31 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		bControlSaturated &&
 		CorrectionDistance < Config.MinProgressPerSolve;
 
-	Result.bStuck = bLowControlStuck || bCostRiseStuck;
+	// 位置基准卡死：连续多次求解几乎没移动且附近有障碍物
+	const float DistFromCheck = FVector::Dist(CurrentPosition, StuckCheckPosition);
+	if (DistFromCheck < 30.0f && (bCurrentHasObs || bHorizonHasObs))
+		++SlowProgressCount;
+	else
+	{
+		SlowProgressCount = 0;
+		StuckCheckPosition = CurrentPosition;
+	}
+	const bool bPositionStuck = SlowProgressCount > 15; // ~1.5s at 0.1s interval
+	if (bPositionStuck)
+	{
+		SlowProgressCount = 0;
+		StuckCheckPosition = CurrentPosition;
+	}
+
+	Result.bStuck = bLowControlStuck || bCostRiseStuck || bPositionStuck;
 	const TCHAR* StuckReason = TEXT("None");
 	if (bLowControlStuck)
 	{
 		StuckReason = TEXT("LowControlWithObstacle");
+	}
+	else if (bPositionStuck)
+	{
+		StuckReason = TEXT("PositionStuck");
 	}
 	else if (bCostRiseStuck)
 	{
@@ -666,6 +696,31 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 			NearestObsDist = D;
 			NearestObsDir = (Obs.Center - CurrentPosition).GetSafeNormal();
 		}
+	}
+
+	// 逃逸覆盖：沿参考轨迹方向推进，附加小幅远离障碍物分量
+	if ((bLowControlStuck || bPositionStuck) && NearestObsDist < Config.ObstacleInfluenceDistance)
+	{
+		// 主方向：朝参考轨迹终点
+		FVector EscapeDir = FVector::ZeroVector;
+		if (RefPoints.Num() > 0)
+			EscapeDir = (RefPoints.Last() - CurrentPosition).GetSafeNormal();
+		if (EscapeDir.IsNearlyZero())
+			EscapeDir = FVector::ForwardVector;
+
+		// 附加 30% 远离最近障碍物分量
+		FVector AwayObs = -NearestObsDir;
+		if (!AwayObs.IsNearlyZero())
+			EscapeDir = (EscapeDir * 0.7f + AwayObs * 0.3f).GetSafeNormal();
+
+		// 约束 Z 分量
+		EscapeDir.Z = FMath::Clamp(EscapeDir.Z, -0.2f, 0.2f);
+		EscapeDir.Normalize();
+		Result.OptimalAcceleration = EscapeDir * Config.MaxAcceleration * 0.3f;
+
+		// 强制重置温启动，避免下次继续喂入零控制
+		bHasPreviousControls = false;
+		ConsecutiveCostRiseCount = 0;
 	}
 
 	// 状态转换时用 Log 级别，常规帧用 Verbose 减少噪声

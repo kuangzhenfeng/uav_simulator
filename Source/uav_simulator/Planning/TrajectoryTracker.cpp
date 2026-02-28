@@ -64,6 +64,28 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		return;
 	}
 
+	// 位置兜底完成检查：防止自适应时间缩放导致 TrackingTime 无法到达 TotalDuration
+	// 条件：已进入轨迹后段（>80%）+ UAV 到达终点位置 + 速度足够低
+	if (CurrentTrajectory.bIsValid && CurrentTrajectory.TotalDuration > 0.0f
+		&& TrackingTime >= CurrentTrajectory.TotalDuration * 0.8f
+		&& CurrentTrajectory.Points.Num() > 0 && GetOwner())
+	{
+		FVector CurrentPos = GetOwner()->GetActorLocation();
+		FVector FinalPos = CurrentTrajectory.Points.Last().Position;
+		float Dist = FVector::Dist(CurrentPos, FinalPos);
+		float Speed = GetUAVSpeed(GetOwner());
+		if (Dist <= CompletionRadius && Speed <= CompletionMaxSpeed)
+		{
+			UE_LOG(LogUAVPlanning, Log, TEXT("[Tracker] Completed (position fallback): Dist=%.0f Speed=%.0f TrackTime=%.1f/%.1f"),
+				Dist, Speed, TrackingTime, CurrentTrajectory.TotalDuration);
+			TrackingTime = CurrentTrajectory.TotalDuration;
+			bIsTracking = false;
+			bIsComplete = true;
+			OnTrajectoryCompleted.Broadcast();
+			return;
+		}
+	}
+
 	// 自适应时间缩放：UAV落后时减速/暂停TrackingTime推进
 	// 用前向投影误差（沿轨迹方向的落后量），忽略避障造成的横向偏移
 	float EffectiveTimeScale = TimeScale;
