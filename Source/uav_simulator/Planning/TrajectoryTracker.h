@@ -171,11 +171,11 @@ protected:
 
 	// 完成判定半径 (cm)：时间耗尽后，UAV 须在此距离内才标记完成
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
-	float CompletionRadius = 500.0f;
+	float CompletionRadius = 200.0f;
 
 	// 完成判定最大速度 (cm/s)：速度超过此值时不标记完成，等待减速
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
-	float CompletionMaxSpeed = 300.0f;
+	float CompletionMaxSpeed = 150.0f;
 
 	// 是否在完成时保持最终状态
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trajectory Tracking")

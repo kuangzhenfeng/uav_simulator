@@ -57,11 +57,11 @@ struct FNMPCConfig
 
 	// 障碍物安全距离 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float ObstacleSafeDistance = 300.0f;
+	float ObstacleSafeDistance = 150.0f;
 
 	// 障碍物影响距离 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float ObstacleInfluenceDistance = 2000.0f;
+	float ObstacleInfluenceDistance = 1000.0f;
 
 	// 求解器最大迭代次数
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")

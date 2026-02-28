@@ -51,17 +51,17 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 		return EBTNodeResult::Failed;
 	}
 
+	// 若轨迹已完成，不重复执行（防止BT循环导致无限重启）
+	if (Tracker->IsComplete())
+	{
+		UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Trajectory already completed, task done"));
+		return EBTNodeResult::Succeeded;
+	}
+
 	// 若轨迹已在跟踪中（BTService 已启动），直接复用，避免双重启动
 	if (Tracker->IsTracking())
 	{
 		UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Trajectory already tracking, skipping restart"));
-		return EBTNodeResult::InProgress;
-	}
-
-	// 若 BTService 已启动轨迹跟踪，直接接管，不重复初始化
-	if (Tracker->IsTracking())
-	{
-		UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Trajectory already running, skipping re-init"));
 		return EBTNodeResult::InProgress;
 	}
 
@@ -130,8 +130,36 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 
 		FVector CurrentLocation = UAVPawn->GetActorLocation();
 
+		// 找到最近的未到达航点，避免重规划时倒飞
+		{
+			int32 StartIdx = 0;
+			float MinDist = MAX_FLT;
+			for (int32 i = 0; i < Waypoints.Num(); ++i)
+			{
+				float Dist = FVector::Dist(CurrentLocation, Waypoints[i]);
+				if (Dist < MinDist)
+				{
+					MinDist = Dist;
+					StartIdx = i;
+				}
+			}
+			// 若UAV已经过最近航点（在其前方），则前进到下一个
+			if (StartIdx + 1 < Waypoints.Num())
+			{
+				FVector ToNext = Waypoints[StartIdx + 1] - Waypoints[StartIdx];
+				FVector ToUAV = CurrentLocation - Waypoints[StartIdx];
+				if (FVector::DotProduct(ToUAV, ToNext) > 0)
+					StartIdx++;
+			}
+			if (StartIdx > 0)
+			{
+				UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Skipping %d already-passed waypoints"), StartIdx);
+				Waypoints.RemoveAt(0, StartIdx);
+			}
+		}
+
 		// 如果第一个航点距离当前位置较远，则将当前位置插入到航点数组开头
-		const float InsertThreshold = 100.0f; // 100cm阈值
+		const float InsertThreshold = 100.0f;
 		if (Waypoints.Num() > 0 && FVector::Dist(CurrentLocation, Waypoints[0]) > InsertThreshold)
 		{
 			Waypoints.Insert(CurrentLocation, 0);

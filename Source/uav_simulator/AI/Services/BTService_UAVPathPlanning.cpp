@@ -170,12 +170,16 @@ bool UBTService_UAVPathPlanning::PlanMultiSegmentPath(AUAVPawn* UAVPawn, const T
 		return false;
 	}
 
-	// 获取障碍物
+	// 获取障碍物（过滤超大地形障碍物，extents > 5000cm 视为地面/天花板平面）
 	TArray<FObstacleInfo> Obstacles;
 	UObstacleManager* ObstacleManager = UAVPawn->GetObstacleManager();
 	if (ObstacleManager)
 	{
-		Obstacles = ObstacleManager->GetAllObstacles();
+		for (const FObstacleInfo& Obs : ObstacleManager->GetAllObstacles())
+		{
+			if (Obs.Extents.GetMax() <= 5000.0f)
+				Obstacles.Add(Obs);
+		}
 	}
 
 	UE_LOG(LogUAVPlanning, Warning, TEXT("========== Multi-Segment Path Planning Started =========="));

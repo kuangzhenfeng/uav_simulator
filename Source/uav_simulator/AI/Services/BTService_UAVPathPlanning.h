@@ -48,7 +48,7 @@ protected:
 
 	// 安全边距 (cm)
 	UPROPERTY(EditAnywhere, Category = "Global Planner")
-	float SafetyMargin = 50.0f;
+	float SafetyMargin = 150.0f;
 
 	// 最大速度 (cm/s)
 	UPROPERTY(EditAnywhere, Category = "Global Planner")

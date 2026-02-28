@@ -45,15 +45,19 @@ void UStabilityScorer::UpdateFlightScore(const FUAVState& State, UObstacleManage
 	{
 		FObstacleInfo Nearest;
 		float Dist = ObstacleManager->GetDistanceToNearestObstacle(State.Position, Nearest);
-		RawObsDist = Dist <= 0.f ? 0.f : FMath::Clamp(Dist / SafeDistance * 100.f, 0.f, 100.f);
-		if (Dist < 0.f)
+		// 过滤超大地形障碍物（extents > 5000cm 视为地面/天花板平面，不参与评分）
+		if (Nearest.Extents.GetMax() <= 5000.0f)
 		{
-			const float Now = GetWorld()->GetTimeSeconds();
-			if (Now - LastObstaclePenetrationLogTime > 1.0f)
+			RawObsDist = Dist <= 0.f ? 0.f : FMath::Clamp(Dist / SafeDistance * 100.f, 0.f, 100.f);
+			if (Dist < 0.f)
 			{
-				LastObstaclePenetrationLogTime = Now;
-				UE_LOG(LogUAVPlanning, Error, TEXT("[UAV] Obstacle penetration! ID=%d depth=%.1fcm"),
-					Nearest.ObstacleID, -Dist);
+				const float Now = GetWorld()->GetTimeSeconds();
+				if (Now - LastObstaclePenetrationLogTime > 1.0f)
+				{
+					LastObstaclePenetrationLogTime = Now;
+					UE_LOG(LogUAVPlanning, Error, TEXT("[UAV] Obstacle penetration! ID=%d depth=%.1fcm"),
+						Nearest.ObstacleID, -Dist);
+				}
 			}
 		}
 	}

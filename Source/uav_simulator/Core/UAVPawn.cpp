@@ -274,11 +274,17 @@ void AUAVPawn::UpdateController(float DeltaTime)
 				for (int32 i = 0; i <= N; ++i)
 					ReferencePoints.Add(TrajectoryTrackerComponent->GetDesiredState(CurrentTime + i * Dt).Position);
 
-				// 获取附近障碍物
+				// 获取附近障碍物（过滤超大地形障碍物，extents > 5000cm 视为地面/天花板平面）
 				TArray<FObstacleInfo> NearbyObstacles;
 				if (ObstacleManagerComponent)
-					NearbyObstacles = ObstacleManagerComponent->GetObstaclesInRange(
-						CurrentState.Position, NMPCComponent->Config.ObstacleInfluenceDistance * 2.0f);
+				{
+					for (const FObstacleInfo& Obs : ObstacleManagerComponent->GetObstaclesInRange(
+						CurrentState.Position, NMPCComponent->Config.ObstacleInfluenceDistance * 2.0f))
+					{
+						if (Obs.Extents.GetMax() <= 5000.0f)
+							NearbyObstacles.Add(Obs);
+					}
+				}
 
 				// 参考点退化检测
 				if (ReferencePoints.Num() > 1)
@@ -323,17 +329,24 @@ void AUAVPawn::UpdateController(float DeltaTime)
 				CachedNMPCAcceleration = Result.OptimalAcceleration;
 				bHasCachedNMPC = true;
 				if (Result.bStuck)
-					StuckEscapeCooldown = 0.2f; // 逃逸加速度持续 0.2s
+				{
+					StuckEscapeCooldown = 0.3f;
+					// 沿参考轨迹方向施加逃逸加速度，打破局部最优
+					FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
+					FVector EscapeDir = (DesiredPos - CurrentState.Position).GetSafeNormal();
+					if (!EscapeDir.IsNearlyZero())
+						CachedNMPCAcceleration = EscapeDir * 400.0f;
+				}
 			}
 
-			// 偏差保护：偏离参考轨迹过远时强制飞回
+			// 偏差保护：偏离参考轨迹过远时混合飞回加速度（不完全覆盖 NMPC）
 			{
 				FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
 				float Deviation = FVector::Dist(CurrentState.Position, DesiredPos);
-				if (Deviation > 500.0f)
+				if (Deviation > 2000.0f)
 				{
 					FVector FlyBackDir = (DesiredPos - CurrentState.Position).GetSafeNormal();
-					CachedNMPCAcceleration = FlyBackDir * 400.0f;
+					CachedNMPCAcceleration = FlyBackDir * 200.0f;
 				}
 			}
 
