@@ -68,9 +68,6 @@ private:
 	// 上次目标位置（仅在非预定义航点模式下使用）
 	FVector LastTargetLocation;
 
-	// 上次规划时间
-	float LastPlanningTime;
-
 	// 是否已处理过预定义航点
 	bool bWaypointsProcessed = false;
 
@@ -113,4 +110,9 @@ private:
 
 	// 更新连续卡死计数并判断是否应触发全局重规划。
 	bool UpdateStuckStateAndCheckReplan(bool bIsStuck);
+
+	// ---- 辅助方法 ----
+
+	// 轨迹优化 + 设置 + 启动跟踪 + 可视化（消除重复代码）
+	bool ApplyOptimizedTrajectory(class AUAVPawn* UAVPawn, const TArray<FVector>& Path, class UPlanningVisualizer* Visualizer);
 };

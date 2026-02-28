@@ -210,21 +210,11 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Waypoints", meta = (DeprecatedProperty, DeprecationMessage = "Use MissionComponent instead"))
 	TArray<FVector> Waypoints;
 
-	// 向后兼容：控制模式（已废弃，请使用 ControlMode）
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Control", meta = (DeprecatedProperty, DeprecationMessage = "Use ControlMode instead"))
-	bool bUsePositionControl = true;
-
 	// 设置载荷质量（运行时可变，如喷洒消耗药液）
 	UFUNCTION(BlueprintCallable, Category = "UAV Model")
 	void SetPayloadMass(float NewPayloadMass);
 
 protected:
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Parameters")
-	float Mass = 1.5f; // kg
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Parameters")
-	float ArmLength = 0.225f; // m
-
 	// 型号选择
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Model")
 	EUAVModelID ModelID = EUAVModelID::Agri_AG20;

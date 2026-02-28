@@ -19,12 +19,7 @@ class UAV_SIMULATOR_API UPathPlanner : public UActorComponent
 public:
 	UPathPlanner();
 
-protected:
-	virtual void BeginPlay() override;
-
 public:
-	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
-
 	/**
 	 * 规划从起点到终点的路径
 	 * @param Start 起点位置 (世界坐标系)
@@ -125,10 +120,6 @@ protected:
 	// UAV碰撞半径 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Path Planning")
 	float UAVCollisionRadius = 50.0f;
-
-	// 是否显示调试信息
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
-	bool bShowDebug = false;
 
 protected:
 	/**

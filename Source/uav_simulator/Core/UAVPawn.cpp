@@ -490,9 +490,6 @@ void AUAVPawn::SetControlMode(EUAVControlMode NewMode)
 {
 	ControlMode = NewMode;
 
-	// 同步 bUsePositionControl 以保持向后兼容
-	bUsePositionControl = (NewMode == EUAVControlMode::Position || NewMode == EUAVControlMode::Trajectory);
-
 	// 如果从轨迹模式切换出去，停止轨迹跟踪
 	if (NewMode != EUAVControlMode::Trajectory && TrajectoryTrackerComponent)
 	{

@@ -332,9 +332,6 @@ private:
 	// reset 后剩余免疫帧数
 	int32 WarmStartResetImmunityCount = 0;
 
-	// 输出加速度 EMA 平滑值（减少帧间控制量抖动）
-	FVector SmoothedOutputAccel = FVector::ZeroVector;
-
 	// 上一帧状态 (用于日志状态转换检测)
 	bool bPrevNeedsCorrection = false;
 	bool bPrevStuck = false;

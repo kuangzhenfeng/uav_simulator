@@ -6,18 +6,8 @@
 
 UPathPlanner::UPathPlanner()
 {
-	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bCanEverTick = false;
 	LastPlanningTimeMs = 0.0f;
-}
-
-void UPathPlanner::BeginPlay()
-{
-	Super::BeginPlay();
-}
-
-void UPathPlanner::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
-{
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 }
 
 bool UPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArray<FVector>& OutPath)

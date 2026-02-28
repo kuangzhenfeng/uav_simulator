@@ -154,16 +154,13 @@ float UNMPCAvoidance::ComputeCost(
 		}
 	}
 
-	// 动态权重调整：根据最小障碍物距离渐进降低参考跟踪权重
+	// 动态权重调整：仅当轨迹进入安全距离内才降低参考跟踪权重
 	float RefWeight = Config.WeightReference;
 	float VelWeight = Config.WeightVelocity;
-	if (MinObsDist < Config.ObstacleInfluenceDistance)
+	if (MinObsDist < Config.ObstacleSafeDistance)
 	{
-		// 渐进式：从 InfluenceDistance 到 SafeDistance 线性插值，最低 0.3x
-		float Alpha = FMath::Clamp(
-			(MinObsDist - Config.ObstacleSafeDistance) /
-			(Config.ObstacleInfluenceDistance - Config.ObstacleSafeDistance),
-			0.0f, 1.0f);
+		// 渐进式：从 SafeDistance 到 0 线性插值，最低 0.3x
+		float Alpha = FMath::Clamp(MinObsDist / Config.ObstacleSafeDistance, 0.0f, 1.0f);
 		float Scale = FMath::Lerp(0.3f, 1.0f, Alpha);
 		RefWeight *= Scale;
 		VelWeight *= Scale;

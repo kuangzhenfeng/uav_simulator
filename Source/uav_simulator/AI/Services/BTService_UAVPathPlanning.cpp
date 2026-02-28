@@ -12,7 +12,6 @@
 #include "uav_simulator/Planning/TrajectoryTracker.h"
 #include "uav_simulator/Planning/PlanningVisualizer.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
-#include "uav_simulator/Debug/StabilityScorer.h"
 
 UBTService_UAVPathPlanning::UBTService_UAVPathPlanning()
 {
@@ -21,7 +20,6 @@ UBTService_UAVPathPlanning::UBTService_UAVPathPlanning()
 	RandomDeviation = 0.02f;
 
 	LastTargetLocation = FVector::ZeroVector;
-	LastPlanningTime = 0.0f;
 	bWaypointsProcessed = false;
 	LocalPlannerStuckCount = 0;
 
@@ -336,39 +334,16 @@ void UBTService_UAVPathPlanning::ProcessPresetWaypoints(AUAVPawn* UAVPawn)
 		Visualizer->SetPersistentPath(GlobalPlannedPath);
 	}
 
-	// 轨迹优化
-	UTrajectoryOptimizer* Optimizer = NewObject<UTrajectoryOptimizer>(UAVPawn);
-	if (Optimizer)
+	// 轨迹优化 + 启动跟踪
+	if (ApplyOptimizedTrajectory(UAVPawn, PlannedPath, Visualizer))
 	{
-		FTrajectory Trajectory = Optimizer->OptimizeTrajectory(PlannedPath, MaxVelocity, MaxAcceleration);
-		UE_LOG(LogUAVPlanning, Warning, TEXT("Trajectory optimization: %s, Points: %d, Duration: %.2fs"),
-			Trajectory.bIsValid ? TEXT("VALID") : TEXT("INVALID"),
-			Trajectory.Points.Num(),
-			Trajectory.TotalDuration);
-
-		if (Trajectory.bIsValid)
+		// 启动任务
+		if (MissionComp)
 		{
-			UAVPawn->SetTrajectory(Trajectory);
-			UAVPawn->StartTrajectoryTracking();
-
-			// 可视化轨迹
-			if (Visualizer)
-			{
-				Visualizer->SetPersistentTrajectory(Trajectory);
-			}
-
-			// 启动任务
-			if (MissionComp)
-			{
-				MissionComp->StartMission();
-			}
-
-			UE_LOG(LogUAVPlanning, Warning, TEXT("========== Preset Waypoints Processed, Tracking Started =========="));
+			MissionComp->StartMission();
 		}
-		else
-		{
-			UE_LOG(LogUAVPlanning, Error, TEXT("Trajectory optimization failed!"));
-		}
+
+		UE_LOG(LogUAVPlanning, Warning, TEXT("========== Preset Waypoints Processed, Tracking Started =========="));
 	}
 }
 
@@ -419,27 +394,10 @@ void UBTService_UAVPathPlanning::PerformPathPlanning(AUAVPawn* UAVPawn, const FV
 			Visualizer->SetPersistentPath(GlobalPlannedPath);
 		}
 
-		// 轨迹优化
-		UTrajectoryOptimizer* Optimizer = NewObject<UTrajectoryOptimizer>(UAVPawn);
-		if (Optimizer)
+		// 轨迹优化 + 启动跟踪
+		if (ApplyOptimizedTrajectory(UAVPawn, PlannedPath, Visualizer))
 		{
-			FTrajectory Trajectory = Optimizer->OptimizeTrajectory(PlannedPath, MaxVelocity, MaxAcceleration);
-			if (Trajectory.bIsValid)
-			{
-				UAVPawn->SetTrajectory(Trajectory);
-				UAVPawn->StartTrajectoryTracking();
-
-				if (Visualizer)
-				{
-					Visualizer->SetPersistentTrajectory(Trajectory);
-				}
-
-				UE_LOG(LogUAVPlanning, Warning, TEXT("========== Path Planning Completed, Trajectory Tracking Started =========="));
-			}
-			else
-			{
-				UE_LOG(LogUAVPlanning, Error, TEXT("Trajectory optimization failed!"));
-			}
+			UE_LOG(LogUAVPlanning, Warning, TEXT("========== Path Planning Completed, Trajectory Tracking Started =========="));
 		}
 	}
 	else
@@ -474,6 +432,33 @@ bool UBTService_UAVPathPlanning::UpdateStuckStateAndCheckReplan(bool bIsStuck)
 	// 重规划后设置冷却期（需再累积 threshold 次才能再次触发）
 	LocalPlannerStuckCount = -LocalPlannerFailThreshold;
 	bWasStuckLastFrame = false;
+	return true;
+}
+
+// ========== 轨迹优化 + 设置 + 启动跟踪 + 可视化 ==========
+bool UBTService_UAVPathPlanning::ApplyOptimizedTrajectory(AUAVPawn* UAVPawn, const TArray<FVector>& Path, UPlanningVisualizer* Visualizer)
+{
+	UTrajectoryOptimizer* Optimizer = NewObject<UTrajectoryOptimizer>(UAVPawn);
+	if (!Optimizer)
+	{
+		return false;
+	}
+
+	FTrajectory Trajectory = Optimizer->OptimizeTrajectory(Path, MaxVelocity, MaxAcceleration);
+	if (!Trajectory.bIsValid)
+	{
+		UE_LOG(LogUAVPlanning, Error, TEXT("Trajectory optimization failed!"));
+		return false;
+	}
+
+	UAVPawn->SetTrajectory(Trajectory);
+	UAVPawn->StartTrajectoryTracking();
+
+	if (Visualizer)
+	{
+		Visualizer->SetPersistentTrajectory(Trajectory);
+	}
+
 	return true;
 }
 
@@ -542,22 +527,9 @@ void UBTService_UAVPathPlanning::TriggerGlobalReplan(AUAVPawn* UAVPawn)
 				Visualizer->SetPersistentPath(GlobalPlannedPath);
 			}
 
-			UTrajectoryOptimizer* Optimizer = NewObject<UTrajectoryOptimizer>(UAVPawn);
-			if (Optimizer)
+			if (ApplyOptimizedTrajectory(UAVPawn, NewPath, Visualizer))
 			{
-				FTrajectory Trajectory = Optimizer->OptimizeTrajectory(NewPath, MaxVelocity, MaxAcceleration);
-				if (Trajectory.bIsValid)
-				{
-					UAVPawn->SetTrajectory(Trajectory);
-					UAVPawn->StartTrajectoryTracking();
-
-					if (Visualizer)
-					{
-						Visualizer->SetPersistentTrajectory(Trajectory);
-					}
-
-					UE_LOG(LogUAVPlanning, Warning, TEXT("[GlobalReplan] Replan succeeded, trajectory tracking restarted"));
-				}
+				UE_LOG(LogUAVPlanning, Warning, TEXT("[GlobalReplan] Replan succeeded, trajectory tracking restarted"));
 			}
 		}
 		else
