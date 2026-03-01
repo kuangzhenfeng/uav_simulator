@@ -128,6 +128,7 @@ void UPositionController::Reset()
 	PreviousPositionError = FVector::ZeroVector;
 	VelocityErrorIntegral = FVector::ZeroVector;
 	PreviousVelocityError = FVector::ZeroVector;
+	LastDesiredAttitude = FRotator::ZeroRotator;
 }
 
 void UPositionController::AccelerationToControl(const FVector& DesiredAcceleration, float CurrentYaw,
@@ -158,7 +159,33 @@ void UPositionController::AccelerationToControl(const FVector& DesiredAccelerati
 		DesiredPitch = FMath::Clamp(DesiredPitch, -MaxTiltAngle, MaxTiltAngle);
 		DesiredRoll = FMath::Clamp(DesiredRoll, -MaxTiltAngle, MaxTiltAngle);
 	}
-	OutAttitude = FRotator(DesiredPitch, CurrentYaw, DesiredRoll);
+
+	// 限制姿态变化率，防止目标姿态突变导致控制饱和
+	const float MaxAttitudeRate = 50.0f; // deg/s
+	const float DeltaTime = 0.02f; // 假设 50Hz 控制频率
+	const float MaxDelta = MaxAttitudeRate * DeltaTime; // 每帧最大变化量
+
+	// 计算姿态变化量
+	float RollDelta = DesiredRoll - LastDesiredAttitude.Roll;
+	float PitchDelta = DesiredPitch - LastDesiredAttitude.Pitch;
+
+	// 归一化角度差到 [-180, 180]
+	while (RollDelta > 180.0f) RollDelta -= 360.0f;
+	while (RollDelta < -180.0f) RollDelta += 360.0f;
+	while (PitchDelta > 180.0f) PitchDelta -= 360.0f;
+	while (PitchDelta < -180.0f) PitchDelta += 360.0f;
+
+	// 限制变化率
+	RollDelta = FMath::Clamp(RollDelta, -MaxDelta, MaxDelta);
+	PitchDelta = FMath::Clamp(PitchDelta, -MaxDelta, MaxDelta);
+
+	// 应用限制后的姿态
+	OutAttitude.Roll = LastDesiredAttitude.Roll + RollDelta;
+	OutAttitude.Pitch = LastDesiredAttitude.Pitch + PitchDelta;
+	OutAttitude.Yaw = CurrentYaw;
+
+	// 更新上一次姿态
+	const_cast<UPositionController*>(this)->LastDesiredAttitude = OutAttitude;
 }
 
 void UPositionController::ComputeControlWithAcceleration(const FUAVState& CurrentState, const FVector& InTargetPosition,

@@ -8,12 +8,26 @@
 #include "NMPCAvoidance.generated.h"
 
 /**
+ * MPC类型枚举
+ */
+UENUM(BlueprintType)
+enum class EMPCType : uint8
+{
+	Nonlinear UMETA(DisplayName = "Nonlinear MPC"),
+	Linear UMETA(DisplayName = "Linear MPC")
+};
+
+/**
  * NMPC 配置参数
  */
 USTRUCT(BlueprintType)
 struct FNMPCConfig
 {
 	GENERATED_BODY()
+
+	// MPC类型
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MPC")
+	EMPCType MPCType = EMPCType::Nonlinear;
 
 	// 预测步数 N
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
@@ -121,6 +135,11 @@ struct FNMPCConfig
 
 	// 获取时间步长 dt
 	float GetDt() const { return PredictionHorizon / FMath::Max(PredictionSteps, 1); }
+
+	// 线性MPC权重访问器（复用NMPC权重）
+	float GetPositionWeight() const { return WeightReference; }
+	float GetControlWeight() const { return WeightControl; }
+	float GetObstacleWeight() const { return WeightObstacle; }
 };
 
 /**

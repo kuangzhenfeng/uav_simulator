@@ -18,6 +18,7 @@
 #include "../Debug/StabilityScorer.h"
 #include "../Debug/ControlParameterTuner.h"
 #include "../Planning/NMPCAvoidance.h"
+#include "../Planning/LinearMPCAvoidance.h"
 #include "../Utility/Filter.h"
 #include "../Utility/Debug.h"
 #include "GameFramework/PlayerController.h"
@@ -80,7 +81,7 @@ void AUAVPawn::BeginPlay()
 	// 初始化位置和姿态
 	CurrentState.Position = GetActorLocation();
 	CurrentState.Rotation = GetActorRotation();
-	
+
 	// 设置初始目标位置为当前位置
 	TargetPosition = CurrentState.Position;
 
@@ -106,17 +107,18 @@ void AUAVPawn::BeginPlay()
 	}
 
 	NMPCComponent = NewObject<UNMPCAvoidance>(this);
+	LinearMPCComponent = nullptr;  // 懒加载，仅在需要时创建
 
 	// 同步模型速度限制到 NMPC，并增大参考跟踪权重以限制避障偏差
 	{
 		const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
 		NMPCComponent->Config.MaxVelocity = Spec.MaxVelocity;
-		NMPCComponent->Config.WeightReference = 2.5f;  // 默认 0.5，增大以限制避障偏差
-		NMPCComponent->Config.WeightTerminal = 3.0f;    // 默认 2.0，增大终端代价收敛
-		NMPCComponent->Config.WeightObstacle = 3.0f;    // 增大避障权重，与参考跟踪匹配
-		NMPCComponent->Config.ObstacleSafeDistance = 250.0f;  // 默认 150，增大安全距离缓冲
-		NMPCComponent->Config.ObstacleInfluenceDistance = 1500.0f; // 默认 1000，增大感知范围
-		NMPCComponent->Config.ObstacleAlpha = 0.9f;  // 默认 0.5，增大势垒陡度，安全距离边界处梯度更强
+		NMPCComponent->Config.WeightReference = 2.0f;  // 适度降低参考跟踪权重
+		NMPCComponent->Config.WeightTerminal = 2.5f;    // 适度降低终端代价
+		NMPCComponent->Config.WeightObstacle = 4.0f;    // 增大避障权重，优先保证安全
+		NMPCComponent->Config.ObstacleSafeDistance = 300.0f;  // 增大安全距离到 3m
+		NMPCComponent->Config.ObstacleInfluenceDistance = 1600.0f; // 增大感知范围到 16m
+		NMPCComponent->Config.ObstacleAlpha = 1.0f;  // 增大势垒陡度
 	}
 
 }
@@ -346,8 +348,24 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 
 	FixReferencePointsPenetratingObstacles(ReferencePoints, NearbyObstacles);
 
-	FNMPCAvoidanceResult Result = NMPCComponent->ComputeAvoidance(
-		CurrentState.Position, CurrentState.Velocity, ReferencePoints, NearbyObstacles);
+	// 动态切换MPC类型
+	FNMPCAvoidanceResult Result;
+	if (NMPCComponent->Config.MPCType == EMPCType::Linear)
+	{
+		// 懒加载线性MPC
+		if (!LinearMPCComponent)
+		{
+			LinearMPCComponent = NewObject<ULinearMPCAvoidance>(this);
+			LinearMPCComponent->Config = NMPCComponent->Config;
+		}
+		Result = LinearMPCComponent->ComputeAvoidance(
+			CurrentState.Position, CurrentState.Velocity, ReferencePoints, NearbyObstacles);
+	}
+	else
+	{
+		Result = NMPCComponent->ComputeAvoidance(
+			CurrentState.Position, CurrentState.Velocity, ReferencePoints, NearbyObstacles);
+	}
 
 	bNMPCStuck = Result.bStuck;
 	CachedNMPCAcceleration = Result.OptimalAcceleration;
@@ -620,14 +638,19 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			FVector EffectiveAccel = ApplyDeviationProtection(CachedNMPCAcceleration);
 			EffectiveAccel = ApplyVelocityClamp(EffectiveAccel);
 
+
+			// 计算期望角加速度（用于前馈控制）
+			FRotator DesiredAngularAccel = ComputeAngularAccelerationFromLinearAccel(
+				EffectiveAccel, CurrentState.Rotation.Yaw);
+
 			// 加速度 → 姿态+推力 → 电机
 			FRotator DesiredAttitude;
 			float DesiredThrust;
 			PositionControllerComponent->AccelerationToControl(
 				EffectiveAccel, CurrentState.Rotation.Yaw, DesiredAttitude, DesiredThrust);
 
-			FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
-				CurrentState, DesiredAttitude, DeltaTime);
+			FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControlWithFeedforward(
+				CurrentState, DesiredAttitude, DesiredAngularAccel, DeltaTime);
 
 			float HoverThrust = AttitudeControllerComponent->HoverThrust;
 			for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
@@ -816,6 +839,112 @@ void AUAVPawn::ClearWaypoints()
 		MissionComponent->ClearWaypoints();
 	}
 	Waypoints.Empty();
+}
+
+FRotator AUAVPawn::ComputeAngularAccelerationFromLinearAccel(
+	const FVector& LinearAccel,
+	float CurrentYaw)
+{
+	// Mellinger & Kumar 微分平坦: 用 jerk 解析推导角速度，再数值微分得角加速度
+	// 相比旧方案（双重微分 z_B），只对加速度做一次微分，噪声显著降低
+
+	constexpr float G = 980.0f;
+	constexpr float DegToRad = PI / 180.0f;
+	constexpr float RadToDeg = 180.0f / PI;
+
+	// Step 1: 推力向量 → z_B
+	FVector ThrustVec(LinearAccel.X, LinearAccel.Y, G + LinearAccel.Z);
+	float ThrustMag = ThrustVec.Size();
+
+	if (ThrustMag < 1.0f)
+	{
+		PrevFeedforwardAccel = FVector::ZeroVector;
+		PrevDesiredAngularVel = FVector::ZeroVector;
+		PrevFilteredAngularAccel = FVector::ZeroVector;
+		FeedforwardWarmupCount = 0;
+		return FRotator::ZeroRotator;
+	}
+
+	FVector z_B = ThrustVec / ThrustMag;
+
+	// Step 2: SO(3) 旋转矩阵 [x_B, y_B, z_B]
+	float YawRad = CurrentYaw * DegToRad;
+	FVector x_C(FMath::Cos(YawRad), FMath::Sin(YawRad), 0.0f);
+
+	FVector y_B = FVector::CrossProduct(z_B, x_C);
+	float y_B_Mag = y_B.Size();
+
+	if (y_B_Mag < KINDA_SMALL_NUMBER)
+	{
+		FVector x_C_alt(-FMath::Sin(YawRad), FMath::Cos(YawRad), 0.0f);
+		y_B = FVector::CrossProduct(z_B, x_C_alt).GetSafeNormal();
+	}
+	else
+	{
+		y_B /= y_B_Mag;
+	}
+
+	FVector x_B = FVector::CrossProduct(y_B, z_B);
+
+	float dt = GetWorld()->GetDeltaSeconds();
+	if (dt < KINDA_SMALL_NUMBER)
+	{
+		dt = 0.02f;
+	}
+
+	// Step 3: 预热期 — 前2帧只积累状态，返回零
+	if (FeedforwardWarmupCount < 2)
+	{
+		PrevFeedforwardAccel = LinearAccel;
+		PrevDesiredAngularVel = FVector::ZeroVector;
+		PrevFilteredAngularAccel = FVector::ZeroVector;
+		FeedforwardWarmupCount++;
+		return FRotator::ZeroRotator;
+	}
+
+	// Step 4: jerk = 加速度的数值微分（单次微分，输入是平滑的 NMPC 输出）
+	FVector Jerk = (LinearAccel - PrevFeedforwardAccel) / dt;
+
+	// Step 5: Mellinger 公式 — 从 jerk 解析得到角速度
+	// h_ω = (1/|T|) × (jerk - (z_B·jerk)·z_B)
+	float z_dot_jerk = FVector::DotProduct(z_B, Jerk);
+	FVector h_omega = (Jerk - z_dot_jerk * z_B) / ThrustMag;
+
+	// 投影到体轴: p = -h_ω·y_B, q = h_ω·x_B
+	float p = -FVector::DotProduct(h_omega, y_B);
+	float q =  FVector::DotProduct(h_omega, x_B);
+	FVector DesiredAngVel(p, q, 0.0f);
+
+	// Step 6: 低通滤波角速度 (α=0.3)
+	constexpr float AlphaAngVel = 0.3f;
+	DesiredAngVel = AlphaAngVel * DesiredAngVel
+		+ (1.0f - AlphaAngVel) * PrevDesiredAngularVel;
+
+	// Step 7: 角加速度 = 角速度的数值微分
+	FVector RawAngAccel = (DesiredAngVel - PrevDesiredAngularVel) / dt;
+
+	// Step 8: 低通滤波角加速度 (α=0.2)
+	constexpr float AlphaAngAccel = 0.2f;
+	FVector FilteredAngAccel = AlphaAngAccel * RawAngAccel
+		+ (1.0f - AlphaAngAccel) * PrevFilteredAngularAccel;
+
+	// Step 9: 限幅 ±50 deg/s²（转为 rad/s² 进行限幅）
+	constexpr float MaxAngAccelRad = 50.0f * DegToRad; // ≈0.873 rad/s²
+	FilteredAngAccel.X = FMath::Clamp(FilteredAngAccel.X, -MaxAngAccelRad, MaxAngAccelRad);
+	FilteredAngAccel.Y = FMath::Clamp(FilteredAngAccel.Y, -MaxAngAccelRad, MaxAngAccelRad);
+	FilteredAngAccel.Z = FMath::Clamp(FilteredAngAccel.Z, -MaxAngAccelRad, MaxAngAccelRad);
+
+	// Step 10: 更新历史状态
+	PrevFeedforwardAccel = LinearAccel;
+	PrevDesiredAngularVel = DesiredAngVel;
+	PrevFilteredAngularAccel = FilteredAngAccel;
+
+	// 返回 deg/s²: FRotator(Pitch←q, Yaw←r, Roll←p)
+	return FRotator(
+		FilteredAngAccel.Y * RadToDeg,
+		FilteredAngAccel.Z * RadToDeg,
+		FilteredAngAccel.X * RadToDeg
+	);
 }
 
 

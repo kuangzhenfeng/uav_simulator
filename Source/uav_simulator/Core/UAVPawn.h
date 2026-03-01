@@ -23,6 +23,7 @@ class UObstacleDetector;
 class UStabilityScorer;
 class UControlParameterTuner;
 class UNMPCAvoidance;
+class ULinearMPCAvoidance;
 
 /**
  * 无人机Pawn类
@@ -191,6 +192,10 @@ protected:
 	UPROPERTY()
 	TObjectPtr<UNMPCAvoidance> NMPCComponent;
 
+	// 线性MPC 避障组件（可选，轻量级替代）
+	UPROPERTY()
+	TObjectPtr<ULinearMPCAvoidance> LinearMPCComponent;
+
 	// 当前状态
 	UPROPERTY(BlueprintReadOnly, Category = "UAV State")
 	FUAVState CurrentState;
@@ -279,4 +284,16 @@ private:
 	// 位置保持
 	void ExecutePositionHold();
 	FVector GetTrajectoryEndpointOrTarget();
+
+	// 从线性加速度计算期望角加速度（用于前馈控制）
+	// 基于 Mellinger & Kumar 微分平坦方法，通过 jerk 解析推导角速度，再数值微分得角加速度
+	FRotator ComputeAngularAccelerationFromLinearAccel(
+		const FVector& LinearAccel,
+		float CurrentYaw);
+
+	// 前馈数值微分历史状态
+	FVector PrevFeedforwardAccel = FVector::ZeroVector;     // 上一帧线性加速度
+	FVector PrevDesiredAngularVel = FVector::ZeroVector;    // 上一帧期望角速度 (rad/s)
+	FVector PrevFilteredAngularAccel = FVector::ZeroVector; // 上一帧滤波后角加速度 (rad/s²)
+	int32 FeedforwardWarmupCount = 0;                       // 预热计数器（需2帧积累历史）
 };

@@ -113,6 +113,9 @@ private:
 	FVector VelocityErrorIntegral = FVector::ZeroVector;
 	FVector PreviousVelocityError = FVector::ZeroVector;
 
+	// 上一次期望姿态（用于姿态变化率限制）
+	FRotator LastDesiredAttitude = FRotator::ZeroRotator;
+
 	// 重力常量
 	static constexpr float GravityAcceleration = 980.0f; // cm/s²
 };
