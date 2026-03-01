@@ -3,6 +3,7 @@
 #include "TrajectoryTracker.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Core/UAVPawn.h"
+#include "uav_simulator/Utility/Filter.h"
 
 static float GetUAVSpeed(AActor* Owner)
 {
@@ -31,6 +32,67 @@ void UTrajectoryTracker::BeginPlay()
 	Super::BeginPlay();
 }
 
+// ========== 超时完成检查辅助方法 ==========
+
+bool UTrajectoryTracker::ShouldCheckOvertimeCompletion() const
+{
+	return !bIsTracking && !bIsComplete && CurrentTrajectory.bIsValid
+		&& TrackingTime >= CurrentTrajectory.TotalDuration
+		&& CurrentTrajectory.Points.Num() > 0 && GetOwner();
+}
+
+bool UTrajectoryTracker::IsWithinCompletionCriteria(const FVector& CurrentPos, float CurrentSpeed) const
+{
+	FVector FinalPos = CurrentTrajectory.Points.Last().Position;
+	float Dist = FVector::Dist(CurrentPos, FinalPos);
+	return Dist <= CompletionRadius && CurrentSpeed <= CompletionMaxSpeed;
+}
+
+void UTrajectoryTracker::HandleOvertimeCompletion(float DeltaTime)
+{
+	FVector CurrentPos = GetOwner()->GetActorLocation();
+	float Speed = GetUAVSpeed(GetOwner());
+
+	if (IsWithinCompletionCriteria(CurrentPos, Speed))
+	{
+		FVector FinalPos = CurrentTrajectory.Points.Last().Position;
+		float Dist = FVector::Dist(CurrentPos, FinalPos);
+		UE_LOG(LogUAVPlanning, Log, TEXT("[Tracker] Completed (overtime): Dist=%.0f Speed=%.0f"), Dist, Speed);
+		bIsComplete = true;
+		OvertimeElapsed = 0.0f;
+		OnTrajectoryCompleted.Broadcast();
+		return;
+	}
+
+	OvertimeElapsed += DeltaTime;
+
+	// 主动设置 UAVPawn 目标为轨迹终点，防止被行为树覆盖
+	if (AUAVPawn* Pawn = Cast<AUAVPawn>(GetOwner()))
+	{
+		FVector FinalPos = CurrentTrajectory.Points.Last().Position;
+		Pawn->SetTargetPosition(FinalPos);
+	}
+
+	if (OvertimeElapsed >= OvertimeTimeout)
+	{
+		FVector FinalPos = CurrentTrajectory.Points.Last().Position;
+		float Dist = FVector::Dist(CurrentPos, FinalPos);
+		UE_LOG(LogUAVPlanning, Warning, TEXT("[Tracker] Overtime timeout (%.1fs): Dist=%.0f Speed=%.0f, force completing"),
+			OvertimeElapsed, Dist, Speed);
+		bIsComplete = true;
+		OvertimeElapsed = 0.0f;
+		OnTrajectoryCompleted.Broadcast();
+	}
+	else
+	{
+		FVector FinalPos = CurrentTrajectory.Points.Last().Position;
+		float Dist = FVector::Dist(CurrentPos, FinalPos);
+		UE_LOG_THROTTLE(1.0, LogUAVPlanning, Log,
+			TEXT("[Tracker] Waiting (overtime): Dist=%.0f/%.0f Speed=%.0f/%.0f Elapsed=%.1f/%.1f"),
+			Dist, CompletionRadius, Speed, CompletionMaxSpeed, OvertimeElapsed, OvertimeTimeout);
+	}
+}
+
 void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
@@ -39,23 +101,9 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 	DeltaTime = FMath::Min(DeltaTime, 0.02f);
 
 	// 轨迹时间耗尽后切换为位置控制兜底：持续检测是否到达终点
-	if (!bIsTracking && !bIsComplete && CurrentTrajectory.bIsValid
-		&& TrackingTime >= CurrentTrajectory.TotalDuration
-		&& CurrentTrajectory.Points.Num() > 0 && GetOwner())
+	if (ShouldCheckOvertimeCompletion())
 	{
-		FVector CurrentPos = GetOwner()->GetActorLocation();
-		float Dist1 = FVector::Dist(CurrentPos, CurrentTrajectory.Points.Last().Position);
-		float Speed1 = GetUAVSpeed(GetOwner());
-		if (Dist1 <= CompletionRadius && Speed1 <= CompletionMaxSpeed)
-		{
-			UE_LOG(LogUAVPlanning, Log, TEXT("[Tracker] Completed (overtime): Dist=%.0f Speed=%.0f"), Dist1, Speed1);
-			bIsComplete = true;
-			OnTrajectoryCompleted.Broadcast();
-		}
-		else
-		{
-			UE_LOG(LogUAVPlanning, Log, TEXT("[Tracker] Waiting (overtime): Dist=%.0f/%.0f Speed=%.0f/%.0f"), Dist1, CompletionRadius, Speed1, CompletionMaxSpeed);
-		}
+		HandleOvertimeCompletion(DeltaTime);
 		return;
 	}
 
@@ -114,7 +162,8 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		else if (ForwardError < -ErrorSlowdownStart)
 		{
 			// UAV 超前：加速轨迹时间追上 UAV，减少位置误差和大俯仰角修正
-			float Alpha = FMath::Min(1.0f, (-ForwardError - ErrorSlowdownStart) / (ErrorPauseThreshold - ErrorSlowdownStart));
+			// 上限 4.0 允许最高 5x 加速，防止障碍物区耗时后轨迹时间提前耗尽
+			float Alpha = FMath::Min(4.0f, (-ForwardError - ErrorSlowdownStart) / (ErrorPauseThreshold - ErrorSlowdownStart));
 			EffectiveTimeScale = TimeScale * (1.0f + Alpha);
 		}
 
@@ -209,6 +258,7 @@ void UTrajectoryTracker::Reset()
 	bIsComplete = false;
 	LastProgressUpdateTime = 0.0f;
 	LastProgress = 0.0f;
+	OvertimeElapsed = 0.0f;
 }
 
 FTrajectoryPoint UTrajectoryTracker::GetDesiredState(float CurrentTime) const

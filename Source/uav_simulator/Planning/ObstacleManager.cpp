@@ -287,23 +287,32 @@ int32 UObstacleManager::RegisterPerceivedObstacle(const FObstacleInfo& Obstacle)
 	return RegisterObstacle(NewObstacle);
 }
 
-int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObstacleType Type, float SafetyMargin)
+// ========== 障碍物更新辅助方法 ==========
+
+void UObstacleManager::UpdateObstacleVelocity(
+	FObstacleInfo& Obstacle,
+	const FVector& PrevCenter,
+	float DeltaTime,
+	AActor* Actor)
 {
-	if (!Actor)
+	if (DeltaTime > KINDA_SMALL_NUMBER)
 	{
-		return -1;
+		Obstacle.Velocity = (Obstacle.Center - PrevCenter) / DeltaTime;
 	}
-	if (Actor == GetOwner())
+	else
 	{
-		return -1;
+		Obstacle.Velocity = Actor->GetVelocity();
 	}
-	UE_LOG(LogUAVPlanning, Verbose, TEXT("[ObstacleManager] Registering perceived obstacle from actor: %s"), *Actor->GetName());
+}
 
-	FVector Origin, BoxExtent;
-	Actor->GetActorBounds(false, Origin, BoxExtent);
-	const float CurrentTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
-
-	// 检查是否已注册
+bool UObstacleManager::TryUpdateExistingObstacle(
+	AActor* Actor,
+	EObstacleType Type,
+	const FVector& Origin,
+	const FVector& BoxExtent,
+	float SafetyMargin,
+	float CurrentTime)
+{
 	for (FObstacleInfo& Obstacle : Obstacles)
 	{
 		if (Obstacle.LinkedActor.Get() == Actor)
@@ -321,14 +330,49 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 			Obstacle.bIsDynamic = true;
 			Obstacle.LastPerceivedTime = CurrentTime;
 
-			if (DeltaTime > KINDA_SMALL_NUMBER)
-			{
-				Obstacle.Velocity = (Obstacle.Center - PrevCenter) / DeltaTime;
-			}
-			else
-			{
-				Obstacle.Velocity = Actor->GetVelocity();
-			}
+			UpdateObstacleVelocity(Obstacle, PrevCenter, DeltaTime, Actor);
+
+			UE_LOG(LogUAVPlanning, Log, TEXT("[ObstacleManager] Refreshed perceived obstacle: ID=%d, Center=%s, Extents=%s, Velocity=%s"),
+				Obstacle.ObstacleID, *Obstacle.Center.ToString(), *Obstacle.Extents.ToString(), *Obstacle.Velocity.ToString());
+			return true;
+		}
+	}
+	return false;
+}
+
+int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObstacleType Type, float SafetyMargin)
+{
+	// Early return: 无效Actor
+	if (!Actor || Actor == GetOwner())
+	{
+		return -1;
+	}
+
+	UE_LOG(LogUAVPlanning, Verbose, TEXT("[ObstacleManager] Registering perceived obstacle from actor: %s"), *Actor->GetName());
+
+	FVector Origin, BoxExtent;
+	Actor->GetActorBounds(false, Origin, BoxExtent);
+	const float CurrentTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+
+	// 尝试更新已存在的障碍物，如果找到则返回其ID
+	for (FObstacleInfo& Obstacle : Obstacles)
+	{
+		if (Obstacle.LinkedActor.Get() == Actor)
+		{
+			const FVector PrevCenter = Obstacle.Center;
+			const float PrevTime = Obstacle.LastPerceivedTime;
+			const float DeltaTime = CurrentTime - PrevTime;
+
+			Obstacle.Type = Type;
+			Obstacle.Center = Origin;
+			Obstacle.Rotation = Actor->GetActorRotation();
+			Obstacle.Extents = ComputeObstacleExtentsFromBounds(Type, BoxExtent);
+			Obstacle.SafetyMargin = SafetyMargin;
+			Obstacle.bIsPerceived = true;
+			Obstacle.bIsDynamic = true;
+			Obstacle.LastPerceivedTime = CurrentTime;
+
+			UpdateObstacleVelocity(Obstacle, PrevCenter, DeltaTime, Actor);
 
 			UE_LOG(LogUAVPlanning, Log, TEXT("[ObstacleManager] Refreshed perceived obstacle: ID=%d, Center=%s, Extents=%s, Velocity=%s"),
 				Obstacle.ObstacleID, *Obstacle.Center.ToString(), *Obstacle.Extents.ToString(), *Obstacle.Velocity.ToString());
@@ -336,6 +380,7 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 		}
 	}
 
+	// 添加新障碍物
 	FObstacleInfo Obstacle;
 	Obstacle.Type = Type;
 	Obstacle.Center = Origin;

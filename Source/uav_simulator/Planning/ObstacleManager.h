@@ -221,4 +221,18 @@ private:
 
 	// 绘制障碍物调试信息
 	void DrawDebugObstacles() const;
+
+	// 障碍物更新辅助方法
+	bool TryUpdateExistingObstacle(
+		AActor* Actor,
+		EObstacleType Type,
+		const FVector& Origin,
+		const FVector& BoxExtent,
+		float SafetyMargin,
+		float CurrentTime);
+	void UpdateObstacleVelocity(
+		FObstacleInfo& Obstacle,
+		const FVector& PrevCenter,
+		float DeltaTime,
+		AActor* Actor);
 };

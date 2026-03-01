@@ -33,11 +33,11 @@ struct FNMPCConfig
 
 	// 参考跟踪权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightReference = 0.5f;
+	float WeightReference = 0.3f;
 
 	// 速度跟踪权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightVelocity = 0.3f;
+	float WeightVelocity = 0.2f;
 
 	// 控制输入权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
@@ -90,10 +90,6 @@ struct FNMPCConfig
 	// Stuck 检测: 合力阈值
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
 	float StuckForceThreshold = 1.5f;
-
-	// 到达目标距离阈值 (cm)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float GoalReachedThreshold = 100.0f;
 
 	// 单步障碍物代价上限 (防止 exp 数值爆炸)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
@@ -338,16 +334,39 @@ private:
 
 	// 滞后计数器：NeedsCorrection 触发后最少保持的帧数
 	int32 NeedsCorrectionHoldCount = 0;
-	// 冷却计数器：Y->N 后最少保持 N 的帧数，防止立即重新触发
-	int32 NeedsCorrectionCooldownCount = 0;
 	// MaxHorizonObs EMA 平滑值（滤除 NMPC 求解噪声）
 	float SmoothedMaxHorizonObs = 0.0f;
 	// 位置基准卡死检测
 	FVector StuckCheckPosition = FVector::ZeroVector;
 	int32 SlowProgressCount = 0;
 
-	// 上次周期性日志时间戳（秒）
-	double LastPeriodicLogTime = 0.0;
+	// 振荡卡死检测：长窗口内净位移极小但持续在动
+	FVector OscillationAnchor = FVector::ZeroVector;
+	int32 OscillationSolveCount = 0;
+	float OscillationPathLength = 0.0f;
+	FVector OscillationPrevPos = FVector::ZeroVector;
+	bool bOscillationInitialized = false;
+
+	// WarmStart 初始化
+	void InitializeControls(
+		TArray<FVector>& OutControls,
+		const TArray<FVector>& ReferencePoints);
+	bool ShouldUseWarmStart() const;
+	FVector ComputeInitialControl(const TArray<FVector>& ReferencePoints) const;
+
+	// 振荡卡死检测
+	bool DetectOscillationStuck(const FVector& CurrentPosition, bool bNeedsCorrection);
+	void ResetOscillationDetection(const FVector& CurrentPosition);
+	void UpdateOscillationMetrics(const FVector& CurrentPosition);
+
+	// 卡死检测
+	bool DetectPositionStuck(const FVector& CurrentPosition, bool bNeedsCorrection);
+	void ResetStuckDetection(const FVector& CurrentPosition);
+
+	// 圆柱体距离计算
+	float CalculateCylinderDistance(
+		const FVector& Point,
+		const FObstacleInfo& Obstacle) const;
 
 	/**
 	 * 有限差分计算梯度

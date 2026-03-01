@@ -104,6 +104,9 @@ bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArr
 			break;
 		}
 
+		// 当前节点是否在障碍物内（逃逸模式：允许穿越被阻挡的邻居直到逃出）
+		bool bCurrentBlocked = IsGridBlocked(CurrentNode->GridCoord);
+
 		// 探索邻居
 		TArray<FIntVector> Neighbors = GetNeighbors(CurrentNode->GridCoord);
 		for (const FIntVector& NeighborCoord : Neighbors)
@@ -116,16 +119,18 @@ bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArr
 				continue;
 			}
 
-			// 跳过被阻挡的节点
-			if (IsGridBlocked(NeighborCoord))
+			// 逃逸模式下跳过碰撞检测，正常模式下过滤被阻挡的节点
+			if (!bCurrentBlocked)
 			{
-				continue;
-			}
+				if (IsGridBlocked(NeighborCoord))
+				{
+					continue;
+				}
 
-			// 检查移动路径是否被阻挡
-			if (CheckLineCollision(CurrentNode->WorldPos, GridToWorld(NeighborCoord), 0.0f))
-			{
-				continue;
+				if (CheckLineCollision(CurrentNode->WorldPos, GridToWorld(NeighborCoord), 0.0f))
+				{
+					continue;
+				}
 			}
 
 			// 计算移动代价

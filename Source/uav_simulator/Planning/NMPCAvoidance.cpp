@@ -2,6 +2,7 @@
 
 #include "NMPCAvoidance.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
+#include "uav_simulator/Utility/Filter.h"
 
 UNMPCAvoidance::UNMPCAvoidance()
 {
@@ -32,6 +33,37 @@ void UNMPCAvoidance::ForwardSimulate(
 }
 
 // ========== 点到障碍物距离 ==========
+float UNMPCAvoidance::CalculateCylinderDistance(const FVector& Point, const FObstacleInfo& Obstacle) const
+{
+	FVector LocalPoint = Obstacle.Rotation.UnrotateVector(Point - Obstacle.Center);
+	float HorizontalDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
+	float VerticalDist = FMath::Abs(LocalPoint.Z);
+
+	float HorizontalPen = HorizontalDist - Obstacle.Extents.X;
+	float VerticalPen = VerticalDist - Obstacle.Extents.Z;
+
+	// 两个方向都在内部
+	if (HorizontalPen < 0 && VerticalPen < 0)
+	{
+		return FMath::Max(HorizontalPen, VerticalPen) - Obstacle.SafetyMargin;
+	}
+
+	// 仅水平方向在内部
+	if (HorizontalPen < 0)
+	{
+		return VerticalPen - Obstacle.SafetyMargin;
+	}
+
+	// 仅垂直方向在内部
+	if (VerticalPen < 0)
+	{
+		return HorizontalPen - Obstacle.SafetyMargin;
+	}
+
+	// 两个方向都在外部
+	return FMath::Sqrt(HorizontalPen * HorizontalPen + VerticalPen * VerticalPen) - Obstacle.SafetyMargin;
+}
+
 float UNMPCAvoidance::CalculateDistanceToObstacle(const FVector& Point, const FObstacleInfo& Obstacle) const
 {
 	switch (Obstacle.Type)
@@ -60,31 +92,7 @@ float UNMPCAvoidance::CalculateDistanceToObstacle(const FVector& Point, const FO
 		}
 
 	case EObstacleType::Cylinder:
-		{
-			FVector LocalPoint = Obstacle.Rotation.UnrotateVector(Point - Obstacle.Center);
-			float HorizontalDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
-			float VerticalDist = FMath::Abs(LocalPoint.Z);
-
-			float HorizontalPen = HorizontalDist - Obstacle.Extents.X;
-			float VerticalPen = VerticalDist - Obstacle.Extents.Z;
-
-			if (HorizontalPen < 0 && VerticalPen < 0)
-			{
-				return FMath::Max(HorizontalPen, VerticalPen) - Obstacle.SafetyMargin;
-			}
-			else if (HorizontalPen < 0)
-			{
-				return VerticalPen - Obstacle.SafetyMargin;
-			}
-			else if (VerticalPen < 0)
-			{
-				return HorizontalPen - Obstacle.SafetyMargin;
-			}
-			else
-			{
-				return FMath::Sqrt(HorizontalPen * HorizontalPen + VerticalPen * VerticalPen) - Obstacle.SafetyMargin;
-			}
-		}
+		return CalculateCylinderDistance(Point, Obstacle);
 
 	default:
 		return FVector::Dist(Point, Obstacle.Center) - Obstacle.Extents.GetMax() - Obstacle.SafetyMargin;
@@ -142,55 +150,36 @@ float UNMPCAvoidance::ComputeCost(
 	const float dt = Config.GetDt();
 	float Cost = 0.0f;
 
-	// 检测避障冲突：计算最小障碍物距离
+	// 单次遍历：同时累积参考/速度代价和追踪最小障碍物距离
+	float RefCostAccum = 0.0f;
+	float VelCostAccum = 0.0f;
 	float MinObsDist = MAX_FLT;
-	for (int32 k = 0; k <= N; ++k)
-	{
-		for (const FObstacleInfo& Obstacle : Obstacles)
-		{
-			FObstacleInfo PredObs = PredictObstacle(Obstacle, k * dt);
-			float Dist = CalculateDistanceToObstacle(Positions[k], PredObs);
-			MinObsDist = FMath::Min(MinObsDist, Dist);
-		}
-	}
-
-	// 动态权重调整：仅当轨迹进入安全距离内才降低参考跟踪权重
-	float RefWeight = Config.WeightReference;
-	float VelWeight = Config.WeightVelocity;
-	if (MinObsDist < Config.ObstacleSafeDistance)
-	{
-		// 渐进式：从 SafeDistance 到 0 线性插值，最低 0.3x
-		float Alpha = FMath::Clamp(MinObsDist / Config.ObstacleSafeDistance, 0.0f, 1.0f);
-		float Scale = FMath::Lerp(0.3f, 1.0f, Alpha);
-		RefWeight *= Scale;
-		VelWeight *= Scale;
-	}
 
 	for (int32 k = 0; k < N; ++k)
 	{
-		// 参考跟踪代价
+		// 参考跟踪代价（累积，后置权重修正）
 		if (k < ReferencePoints.Num())
 		{
-			float RefDist = FVector::Dist(Positions[k], ReferencePoints[k]);
-			Cost += RefWeight * RefDist;
+			RefCostAccum += FVector::Dist(Positions[k], ReferencePoints[k]);
 		}
 
-		// 速度跟踪代价: 鼓励沿参考方向运动
+		// 速度跟踪代价（累积，后置权重修正）
 		if (k + 1 < ReferencePoints.Num() && k < ReferencePoints.Num())
 		{
 			FVector DesiredVel = (ReferencePoints[k + 1] - ReferencePoints[k]) / FMath::Max(dt, KINDA_SMALL_NUMBER);
-			float VelDist = FVector::Dist(Velocities[k], DesiredVel);
-			Cost += VelWeight * VelDist;
+			VelCostAccum += FVector::Dist(Velocities[k], DesiredVel);
 		}
 
 		// 控制代价
 		Cost += Config.WeightControl * Controls[k].SizeSquared();
 
-		// 障碍物代价（时间衰减：远期预测步权重更低，避免远处障碍物引起振荡）
-		float TimeDiscount = FMath::Pow(0.7f, (float)k);
+		// 障碍物代价 + 追踪 MinObsDist（合并遍历，避免重复扫描）
+		float TimeDiscount = FMath::Pow(0.85f, (float)k);
 		for (const FObstacleInfo& Obstacle : Obstacles)
 		{
 			FObstacleInfo PredObs = PredictObstacle(Obstacle, k * dt);
+			float Dist = CalculateDistanceToObstacle(Positions[k], PredObs);
+			MinObsDist = FMath::Min(MinObsDist, Dist);
 			Cost += Config.WeightObstacle * TimeDiscount * ComputeObstacleCost(Positions[k], PredObs);
 		}
 	}
@@ -198,17 +187,30 @@ float UNMPCAvoidance::ComputeCost(
 	// 终端代价
 	if (ReferencePoints.Num() > N)
 	{
-		float TermDist = FVector::Dist(Positions[N], ReferencePoints[N]);
-		Cost += Config.WeightTerminal * TermDist;
+		Cost += Config.WeightTerminal * FVector::Dist(Positions[N], ReferencePoints[N]);
 	}
 
-	// 终端障碍物代价（同样应用时间衰减）
-	float TermDiscount = FMath::Pow(0.7f, (float)N);
+	// 终端障碍物代价 + 终端步 MinObsDist
+	float TermDiscount = FMath::Pow(0.85f, (float)N);
 	for (const FObstacleInfo& Obstacle : Obstacles)
 	{
 		FObstacleInfo PredObs = PredictObstacle(Obstacle, N * dt);
+		float Dist = CalculateDistanceToObstacle(Positions[N], PredObs);
+		MinObsDist = FMath::Min(MinObsDist, Dist);
 		Cost += Config.WeightObstacle * TermDiscount * ComputeObstacleCost(Positions[N], PredObs);
 	}
+
+	// 后置动态权重修正：轨迹进入安全距离内时降低参考/速度跟踪权重
+	float RefWeight = Config.WeightReference;
+	float VelWeight = Config.WeightVelocity;
+	if (MinObsDist < Config.ObstacleSafeDistance)
+	{
+		float Alpha = FMath::Clamp(MinObsDist / Config.ObstacleSafeDistance, 0.0f, 1.0f);
+		float Scale = FMath::Lerp(0.3f, 1.0f, Alpha);
+		RefWeight *= Scale;
+		VelWeight *= Scale;
+	}
+	Cost += RefWeight * RefCostAccum + VelWeight * VelCostAccum;
 
 	return Cost;
 }
@@ -286,18 +288,11 @@ void UNMPCAvoidance::ProjectControls(TArray<FVector>& Controls, const FVector& I
 		FVector NextVel = Vel + Controls[k] * dt;
 		float VelMag = NextVel.Size();
 
-		// 动态速度限制：当速度过高时，主动降低限制以增加机动空间
-		float EffectiveMaxVel = Config.MaxVelocity;
-		if (VelMag > Config.MaxVelocity * 1.2f)
-		{
-			// 速度严重超限时，降低目标速度到当前速度的 95%
-			EffectiveMaxVel = VelMag * 0.95f;
-		}
-
-		if (VelMag > EffectiveMaxVel)
+		// 速度硬限制：始终钳位到 MaxVelocity，防止超速累积
+		if (VelMag > Config.MaxVelocity)
 		{
 			// 方法：沿速度方向缩放，保持方向一致性
-			NextVel = NextVel * (EffectiveMaxVel / VelMag);
+			NextVel = NextVel * (Config.MaxVelocity / VelMag);
 
 			// 计算修正后的加速度
 			FVector CorrAccel = (NextVel - Vel) / dt;
@@ -336,27 +331,47 @@ void UNMPCAvoidance::WarmStart()
 	PreviousControls.Last() = FVector::ZeroVector;
 }
 
-// ========== 主求解入口 ==========
-FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
-	const FVector& CurrentPosition,
-	const FVector& CurrentVelocity,
-	const TArray<FVector>& ReferencePoints,
-	const TArray<FObstacleInfo>& Obstacles)
+// ========== WarmStart 初始化辅助方法 ==========
+
+bool UNMPCAvoidance::ShouldUseWarmStart() const
 {
-	FNMPCAvoidanceResult Result;
-	const int32 N = Config.PredictionSteps;
-	const float dt = Config.GetDt();
+	return bHasPreviousControls && PreviousControls.Num() == Config.PredictionSteps
+		&& ConsecutiveCostRiseCount < Config.WarmStartResetThreshold;
+}
 
-	// 初始化控制序列
-	TArray<FVector> Controls;
-	Controls.SetNum(N);
-
-	if (bHasPreviousControls && PreviousControls.Num() == N
-		&& ConsecutiveCostRiseCount < Config.WarmStartResetThreshold)
+FVector UNMPCAvoidance::ComputeInitialControl(const TArray<FVector>& ReferencePoints) const
+{
+	if (ReferencePoints.Num() < 2)
 	{
-		// 温启动
+		return FVector::ZeroVector;
+	}
+
+	FVector RefDir = (ReferencePoints[1] - ReferencePoints[0]).GetSafeNormal();
+	// 参考点退化时（相邻点重合），用终点方向兜底
+	if (RefDir.IsNearlyZero())
+	{
+		RefDir = (ReferencePoints.Last() - ReferencePoints[0]).GetSafeNormal();
+	}
+
+	if (!RefDir.IsNearlyZero())
+	{
+		return RefDir * Config.MaxAcceleration * 0.5f;
+	}
+
+	return FVector::ZeroVector;
+}
+
+void UNMPCAvoidance::InitializeControls(
+	TArray<FVector>& OutControls,
+	const TArray<FVector>& ReferencePoints)
+{
+	const int32 N = Config.PredictionSteps;
+	OutControls.SetNum(N);
+
+	if (ShouldUseWarmStart())
+	{
 		WarmStart();
-		Controls = PreviousControls;
+		OutControls = PreviousControls;
 	}
 	else
 	{
@@ -365,23 +380,118 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 			UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] WarmStart reset: RiseCount=%d >= Threshold=%d"),
 				ConsecutiveCostRiseCount, Config.WarmStartResetThreshold);
 		}
-		FVector InitControl = FVector::ZeroVector;
-		if (ReferencePoints.Num() > 1)
-		{
-			FVector RefDir = (ReferencePoints[1] - ReferencePoints[0]).GetSafeNormal();
-			// 参考点退化时（相邻点重合），用终点方向兜底
-			if (RefDir.IsNearlyZero())
-				RefDir = (ReferencePoints.Last() - ReferencePoints[0]).GetSafeNormal();
-			if (!RefDir.IsNearlyZero())
-				InitControl = RefDir * Config.MaxAcceleration * 0.5f;
-		}
+
+		FVector InitControl = ComputeInitialControl(ReferencePoints);
 		for (int32 k = 0; k < N; ++k)
 		{
-			Controls[k] = InitControl;
+			OutControls[k] = InitControl;
 		}
+
 		ConsecutiveCostRiseCount = 0;
 		WarmStartResetImmunityCount = Config.WarmStartResetImmunity;
 	}
+}
+
+// ========== 卡死检测辅助方法 ==========
+
+void UNMPCAvoidance::ResetStuckDetection(const FVector& CurrentPosition)
+{
+	SlowProgressCount = 0;
+	StuckCheckPosition = CurrentPosition;
+}
+
+bool UNMPCAvoidance::DetectPositionStuck(const FVector& CurrentPosition, bool bNeedsCorrection)
+{
+	const float DistFromCheck = FVector::Dist(CurrentPosition, StuckCheckPosition);
+	const bool bHasObstacles = bNeedsCorrection;
+
+	if (DistFromCheck < 30.0f && bHasObstacles)
+	{
+		++SlowProgressCount;
+	}
+	else
+	{
+		ResetStuckDetection(CurrentPosition);
+	}
+
+	const bool bStuck = SlowProgressCount > 15; // ~1.5s at 0.1s interval
+	if (bStuck)
+	{
+		ResetStuckDetection(CurrentPosition);
+	}
+
+	return bStuck;
+}
+
+void UNMPCAvoidance::ResetOscillationDetection(const FVector& CurrentPosition)
+{
+	bOscillationInitialized = false;
+	OscillationSolveCount = 0;
+	OscillationPathLength = 0.0f;
+	OscillationAnchor = CurrentPosition;
+	OscillationPrevPos = CurrentPosition;
+}
+
+void UNMPCAvoidance::UpdateOscillationMetrics(const FVector& CurrentPosition)
+{
+	OscillationPathLength += FVector::Dist(CurrentPosition, OscillationPrevPos);
+	OscillationPrevPos = CurrentPosition;
+	++OscillationSolveCount;
+}
+
+bool UNMPCAvoidance::DetectOscillationStuck(const FVector& CurrentPosition, bool bNeedsCorrection)
+{
+	if (!bNeedsCorrection)
+	{
+		ResetOscillationDetection(CurrentPosition);
+		return false;
+	}
+
+	if (!bOscillationInitialized)
+	{
+		OscillationAnchor = CurrentPosition;
+		OscillationPrevPos = CurrentPosition;
+		OscillationPathLength = 0.0f;
+		OscillationSolveCount = 0;
+		bOscillationInitialized = true;
+		return false;
+	}
+
+	UpdateOscillationMetrics(CurrentPosition);
+
+	// 每 30 次求解（~3s）评估一次
+	if (OscillationSolveCount >= 30)
+	{
+		const float NetDisplacement = FVector::Dist(CurrentPosition, OscillationAnchor);
+		// 净位移 < 累计路程的 15%，且累计路程足够大（排除静止），判定为振荡
+		const bool bStuck = OscillationPathLength > 300.0f && NetDisplacement < OscillationPathLength * 0.15f;
+
+		// 重置窗口
+		OscillationAnchor = CurrentPosition;
+		OscillationPathLength = 0.0f;
+		OscillationSolveCount = 0;
+
+		return bStuck;
+	}
+
+	return false;
+}
+
+// ========== 主求解入口 ==========
+FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
+	const FVector& CurrentPosition,
+	const FVector& CurrentVelocity,
+	const TArray<FVector>& ReferencePoints,
+	const TArray<FObstacleInfo>& Obstacles)
+{
+	const double SolveStartTime = FPlatformTime::Seconds();
+	FNMPCAvoidanceResult Result;
+	const int32 N = Config.PredictionSteps;
+	const float dt = Config.GetDt();
+
+	// 初始化控制序列
+	TArray<FVector> Controls;
+	InitializeControls(Controls, ReferencePoints);
 
 	// 确保参考点数量足够
 	TArray<FVector> RefPoints = ReferencePoints;
@@ -448,32 +558,32 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		}
 	}
 
+	// 最近障碍物扫描（横向扰动 + 诊断共用）
+	float NearestObsDist = MAX_FLT;
+	FVector NearestObsDir = FVector::ZeroVector;
+	for (const FObstacleInfo& Obs : Obstacles)
+	{
+		float D = CalculateDistanceToObstacle(CurrentPosition, Obs);
+		if (D < NearestObsDist)
+		{
+			NearestObsDist = D;
+			NearestObsDir = (Obs.Center - CurrentPosition).GetSafeNormal();
+		}
+	}
+
 	// 横向扰动: 若代价仍高且有近距障碍物，尝试垂直于障碍物方向的扰动
 	if (Obstacles.Num() > 0)
 	{
-		// 找最近障碍物
-		float MinDist = MAX_FLT;
-		FVector ClosestObsDir = FVector::ZeroVector;
-		for (const FObstacleInfo& Obs : Obstacles)
-		{
-			float D = CalculateDistanceToObstacle(CurrentPosition, Obs);
-			if (D < MinDist)
-			{
-				MinDist = D;
-				ClosestObsDir = (Obs.Center - CurrentPosition).GetSafeNormal();
-			}
-		}
-
-		if (MinDist < Config.ObstacleInfluenceDistance)
+		if (NearestObsDist < Config.ObstacleInfluenceDistance)
 		{
 			// 生成 4 个垂直于障碍物方向的扰动候选
 			FVector Up = FVector::UpVector;
-			FVector Lateral1 = FVector::CrossProduct(ClosestObsDir, Up).GetSafeNormal();
+			FVector Lateral1 = FVector::CrossProduct(NearestObsDir, Up).GetSafeNormal();
 			if (Lateral1.IsNearlyZero())
 			{
-				Lateral1 = FVector::CrossProduct(ClosestObsDir, FVector::RightVector).GetSafeNormal();
+				Lateral1 = FVector::CrossProduct(NearestObsDir, FVector::RightVector).GetSafeNormal();
 			}
-			FVector Lateral2 = FVector::CrossProduct(ClosestObsDir, Lateral1).GetSafeNormal();
+			FVector Lateral2 = FVector::CrossProduct(NearestObsDir, Lateral1).GetSafeNormal();
 
 			FVector Perturbations[4] = { Lateral1, -Lateral1, Lateral2, -Lateral2 };
 
@@ -585,20 +695,14 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	const bool bHasMeaningfulCorrection = CorrectionDistance >= Config.MinCorrectionDistance;
 	const bool bRawNeedsCorrection = bCurrentHasObs || (bHorizonHasObs && bHasMeaningfulCorrection);
 
-	// 滞后：触发后保持至少 100 帧（高帧率下约 500ms），Y->N 后冷却 80 帧防止立即重触发
-	if (bRawNeedsCorrection && NeedsCorrectionCooldownCount == 0)
+	// 滞后：触发后保持至少 100 帧（高帧率下约 500ms）
+	if (bRawNeedsCorrection)
 	{
 		NeedsCorrectionHoldCount = 100;
 	}
 	else if (NeedsCorrectionHoldCount > 0)
 	{
 		--NeedsCorrectionHoldCount;
-		if (NeedsCorrectionHoldCount == 0)
-			NeedsCorrectionCooldownCount = 80;
-	}
-	else if (NeedsCorrectionCooldownCount > 0)
-	{
-		--NeedsCorrectionCooldownCount;
 	}
 	Result.bNeedsCorrection = (NeedsCorrectionHoldCount > 0);
 
@@ -608,23 +712,13 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	const float SaturationRatio =
 		Config.MaxAcceleration > KINDA_SMALL_NUMBER ? (FirstControlMagnitude / Config.MaxAcceleration) : 0.0f;
 
-	// 位置基准卡死：连续多次求解几乎没移动且附近有障碍物
-	const float DistFromCheck = FVector::Dist(CurrentPosition, StuckCheckPosition);
-	if (DistFromCheck < 30.0f && (bCurrentHasObs || bHorizonHasObs))
-		++SlowProgressCount;
-	else
-	{
-		SlowProgressCount = 0;
-		StuckCheckPosition = CurrentPosition;
-	}
-	const bool bPositionStuck = SlowProgressCount > 15; // ~1.5s at 0.1s interval
-	if (bPositionStuck)
-	{
-		SlowProgressCount = 0;
-		StuckCheckPosition = CurrentPosition;
-	}
+	// 位置基准卡死检测
+	const bool bPositionStuck = DetectPositionStuck(CurrentPosition, Result.bNeedsCorrection);
 
-	Result.bStuck = bLowControlStuck || bPositionStuck;
+	// 振荡卡死检测
+	const bool bOscillationStuck = DetectOscillationStuck(CurrentPosition, Result.bNeedsCorrection);
+
+	Result.bStuck = bLowControlStuck || bPositionStuck || bOscillationStuck;
 	const TCHAR* StuckReason = TEXT("None");
 	if (bLowControlStuck)
 	{
@@ -634,26 +728,20 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	{
 		StuckReason = TEXT("PositionStuck");
 	}
-
-	// 最近障碍物诊断
-	float NearestObsDist = MAX_FLT;
-	FVector NearestObsDir = FVector::ZeroVector;
-	for (const FObstacleInfo& Obs : Obstacles)
+	else if (bOscillationStuck)
 	{
-		float D = CalculateDistanceToObstacle(CurrentPosition, Obs);
-		if (D < NearestObsDist)
-		{
-			NearestObsDist = D;
-			NearestObsDir = (Obs.Center - CurrentPosition).GetSafeNormal();
-		}
+		StuckReason = TEXT("OscillationStuck");
 	}
 
 	// 卡死时重置温启动，避免下次继续喂入零控制
-	if ((bLowControlStuck || bPositionStuck) && NearestObsDist < Config.ObstacleInfluenceDistance)
+	if ((bLowControlStuck || bPositionStuck || bOscillationStuck) && NearestObsDist < Config.ObstacleInfluenceDistance)
 	{
 		bHasPreviousControls = false;
 		ConsecutiveCostRiseCount = 0;
 	}
+
+	// 求解耗时 (ms)
+	const double SolveElapsedMs = (FPlatformTime::Seconds() - SolveStartTime) * 1000.0;
 
 	// 状态转换时用 Log 级别，常规帧用 Verbose 减少噪声
 	const bool bStateChanged =
@@ -662,7 +750,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 
 	if (bStateChanged)
 	{
-		UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] >>> State changed: NeedsCorr %s->%s, Stuck %s->%s | Pos=(%.0f,%.0f,%.0f) Speed=%.0f Obs=%d NearDist=%.0f NearDir=(%.2f,%.2f,%.2f) Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Iter=%d Conv=%s Hold=%d Cool=%d Reason=%s"),
+		UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] >>> State changed: NeedsCorr %s->%s, Stuck %s->%s | Pos=(%.0f,%.0f,%.0f) Speed=%.0f Obs=%d NearDist=%.0f NearDir=(%.2f,%.2f,%.2f) Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Iter=%d Conv=%s Hold=%d Reason=%s SolveMs=%.3f"),
 			bPrevNeedsCorrection ? TEXT("Y") : TEXT("N"),
 			Result.bNeedsCorrection ? TEXT("Y") : TEXT("N"),
 			bPrevStuck ? TEXT("Y") : TEXT("N"),
@@ -674,27 +762,24 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 			ConsecutiveCostRiseCount, CorrectionDistance, SaturationRatio,
 			FirstControl.X, FirstControl.Y, FirstControl.Z,
 			FinalIter, bConverged ? TEXT("Y") : TEXT("N"),
-			NeedsCorrectionHoldCount, NeedsCorrectionCooldownCount,
-			StuckReason);
+			NeedsCorrectionHoldCount,
+			StuckReason,
+			SolveElapsedMs);
 	}
 	else
 	{
-		const double Now = FPlatformTime::Seconds();
-		if (Now - LastPeriodicLogTime >= 1.0)
-		{
-			LastPeriodicLogTime = Now;
-			UE_LOG(LogUAVPlanning, Log, TEXT("[NMPC] Pos=(%.0f,%.0f,%.0f) Speed=%.0f Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Iter=%d Conv=%s Hold=%d Cool=%d NeedsCorr=%s Stuck=%s Reason=%s"),
-				CurrentPosition.X, CurrentPosition.Y, CurrentPosition.Z,
-				CurrentVelocity.Size(),
-				CurrentCost, CurrentObstacleCost, MaxPredictedObsCost,
-				ConsecutiveCostRiseCount, CorrectionDistance, SaturationRatio,
-				FirstControl.X, FirstControl.Y, FirstControl.Z,
-				FinalIter, bConverged ? TEXT("Y") : TEXT("N"),
-				NeedsCorrectionHoldCount, NeedsCorrectionCooldownCount,
-				Result.bNeedsCorrection ? TEXT("Y") : TEXT("N"),
-				Result.bStuck ? TEXT("Y") : TEXT("N"),
-				StuckReason);
-		}
+		UE_LOG_THROTTLE(1.0, LogUAVPlanning, Log, TEXT("[NMPC] Pos=(%.0f,%.0f,%.0f) Speed=%.0f Cost=%.1f ObsCost=%.3f MaxHorizonObs=%.3f RiseCount=%d Progress=%.1f SatRatio=%.2f Control0=(%.1f,%.1f,%.1f) Iter=%d Conv=%s Hold=%d NeedsCorr=%s Stuck=%s Reason=%s SolveMs=%.3f"),
+			CurrentPosition.X, CurrentPosition.Y, CurrentPosition.Z,
+			CurrentVelocity.Size(),
+			CurrentCost, CurrentObstacleCost, MaxPredictedObsCost,
+			ConsecutiveCostRiseCount, CorrectionDistance, SaturationRatio,
+			FirstControl.X, FirstControl.Y, FirstControl.Z,
+			FinalIter, bConverged ? TEXT("Y") : TEXT("N"),
+			NeedsCorrectionHoldCount,
+			Result.bNeedsCorrection ? TEXT("Y") : TEXT("N"),
+			Result.bStuck ? TEXT("Y") : TEXT("N"),
+			StuckReason,
+			SolveElapsedMs);
 	}
 
 	bPrevNeedsCorrection = Result.bNeedsCorrection;

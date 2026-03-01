@@ -126,6 +126,19 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Trajectory Tracking")
 	FOnTrajectoryProgress OnTrajectoryProgress;
 
+	// 自适应时间缩放参数（公开以便 UAVPawn 覆盖）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
+	bool bEnableAdaptiveTimeScale = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
+	float ErrorSlowdownStart = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
+	float ErrorPauseThreshold = 300.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking", meta = (ClampMin = "0.01", ClampMax = "1.0"))
+	float MinAdaptiveTimeScale = 0.1f;
+
 protected:
 	// 当前轨迹
 	UPROPERTY(BlueprintReadOnly, Category = "Trajectory Tracking")
@@ -155,20 +168,6 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trajectory Tracking")
 	float SpeedScale = 1.0f;
 
-	// 自适应时间缩放：误差大时自动减速/暂停推进
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
-	bool bEnableAdaptiveTimeScale = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
-	float ErrorSlowdownStart = 100.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
-	float ErrorPauseThreshold = 300.0f;
-
-	// 自适应时间缩放的最小比例（相对 TimeScale），避免 TrackingTime 被完全冻结
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking", meta = (ClampMin = "0.01", ClampMax = "1.0"))
-	float MinAdaptiveTimeScale = 0.1f;
-
 	// 完成判定半径 (cm)：时间耗尽后，UAV 须在此距离内才标记完成
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
 	float CompletionRadius = 200.0f;
@@ -176,6 +175,10 @@ protected:
 	// 完成判定最大速度 (cm/s)：速度超过此值时不标记完成，等待减速
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
 	float CompletionMaxSpeed = 150.0f;
+
+	// overtime 超时时间 (秒)：超时后强制完成，防止死锁
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
+	float OvertimeTimeout = 10.0f;
 
 	// 是否在完成时保持最终状态
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trajectory Tracking")
@@ -192,6 +195,14 @@ private:
 	// 上次进度值
 	float LastProgress;
 
+	// overtime 累计时间
+	float OvertimeElapsed = 0.0f;
+
 	// 从轨迹采样点进行插值
 	FTrajectoryPoint InterpolateTrajectory(float Time) const;
+
+	// 超时完成检查辅助方法
+	bool ShouldCheckOvertimeCompletion() const;
+	void HandleOvertimeCompletion(float DeltaTime);
+	bool IsWithinCompletionCriteria(const FVector& CurrentPos, float CurrentSpeed) const;
 };

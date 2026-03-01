@@ -52,8 +52,8 @@ FMotorOutput UAttitudeController::ComputeControl(const FUAVState& CurrentState, 
 	float YawP = YawPID.Kp * YawError;
 
 	// 计算角速度阻尼（使用角速度反馈代替误差微分）
-	// 减小阻尼系数，确保比例项主导控制方向
-	const float AngularDamping = 0.0006f;
+	// 平衡响应速度和稳定性
+	const float AngularDamping = 0.002f;
 	float RollD = -AngularDamping * AngularVelDeg.X;
 	float PitchD = -AngularDamping * AngularVelDeg.Y;
 	float YawD = -AngularDamping * 0.5f * AngularVelDeg.Z;

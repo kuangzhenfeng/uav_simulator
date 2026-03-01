@@ -6,6 +6,7 @@
 #include "GameFramework/Pawn.h"
 #include "UAVTypes.h"
 #include "UAVProductTypes.h"
+#include "../Planning/NMPCAvoidance.h"
 #include "UAVPawn.generated.h"
 
 class UUAVDynamics;
@@ -233,6 +234,13 @@ private:
 	// stuck 逃逸冷却：stuck 时延长不求解时间，让逃逸加速度持续生效
 	float StuckEscapeCooldown = 0.0f;
 
+	// 缓存最近障碍物距离（cm），用于偏差保护和减速决策
+	float CachedNearestObsDist = MAX_FLT;
+
+	// 缓存 NMPC 修正目标位置，用于障碍物感知偏差计算
+	FVector CachedNMPCCorrectedTarget = FVector::ZeroVector;
+	bool bHasCachedNMPCTarget = false;
+
 	// 更新传感器数据
 	void UpdateSensors(float DeltaTime);
 
@@ -241,4 +249,34 @@ private:
 
 	// 更新物理模型
 	void UpdatePhysics(float DeltaTime);
+
+	// NMPC 求解相关
+	bool ShouldSolveNMPC(float DeltaTime);
+	void SolveNMPCAvoidance(float DeltaTime);
+	void PrepareReferencePoints(TArray<FVector>& OutReferencePoints);
+	void FilterNearbyObstacles(TArray<FObstacleInfo>& OutObstacles);
+	void FixReferencePointsPenetratingObstacles(
+		TArray<FVector>& ReferencePoints,
+		const TArray<FObstacleInfo>& Obstacles);
+
+	// 逃逸逻辑
+	void HandleStuckEscape(
+		const FNMPCAvoidanceResult& Result,
+		const TArray<FObstacleInfo>& NearbyObstacles);
+	FVector CalculateEscapeDirection(const TArray<FObstacleInfo>& NearbyObstacles);
+	float CalculateEscapeAcceleration(float NearestObsDist);
+
+	// 偏差保护
+	FVector ApplyDeviationProtection(const FVector& NMPCAcceleration);
+	FVector LimitLateralAcceleration(const FVector& Acceleration);
+	FVector ApplyPDCorrection(const FVector& Acceleration);
+	FVector ApplyHardLimitCorrection(const FVector& Acceleration, float CrossTrackDev);
+	void UpdateSpeedScaleForObstacles();
+
+	// 速度钳位
+	FVector ApplyVelocityClamp(const FVector& Acceleration);
+
+	// 位置保持
+	void ExecutePositionHold();
+	FVector GetTrajectoryEndpointOrTarget();
 };

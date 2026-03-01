@@ -2,6 +2,7 @@
 
 #include "PositionController.h"
 #include "../Debug/UAVLogConfig.h"
+#include "../Utility/Filter.h"
 
 UPositionController::UPositionController()
 {
@@ -68,8 +69,8 @@ void UPositionController::ComputeControl(const FUAVState& CurrentState, const FV
 	}
 	OutThrust = FMath::Clamp(RawThrust, MinThrust, MaxThrust);
 
-	// 调试日志：输出推力计算详情
-	UE_LOG(LogUAVPosition, Log, TEXT("Thrust: DesiredAccel: (%.1f,%.1f,%.1f) | RequiredThrustN: %.1f | RawThrust: %.3f | ClampedThrust: %.3f"),
+	// 调试日志：输出推力计算详情（每秒1次）
+	UE_LOG_THROTTLE(1.0, LogUAVPosition, Log, TEXT("Thrust: DesiredAccel: (%.1f,%.1f,%.1f) | RequiredThrustN: %.1f | RawThrust: %.3f | ClampedThrust: %.3f"),
 		DesiredAcceleration.X, DesiredAcceleration.Y, DesiredAcceleration.Z,
 		RequiredThrustN, RawThrust, OutThrust);
 
@@ -90,18 +91,18 @@ void UPositionController::ComputeControl(const FUAVState& CurrentState, const FV
 
 	OutDesiredAttitude = FRotator(DesiredPitch, DesiredYaw, DesiredRoll);
 
-	// 调试日志：输出位置控制信息
-	UE_LOG(LogUAVPosition, Log, TEXT("Target: (%.1f,%.1f,%.1f) | Current: (%.1f,%.1f,%.1f) | Error: (%.1f,%.1f,%.1f)"),
+	// 调试日志：输出位置控制信息（每10帧1次）
+	UE_LOG_EVERY_N(10, LogUAVPosition, Verbose, TEXT("Target: (%.1f,%.1f,%.1f) | Current: (%.1f,%.1f,%.1f) | Error: (%.1f,%.1f,%.1f)"),
 		InTargetPosition.X, InTargetPosition.Y, InTargetPosition.Z,
 		CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
 		PositionError.X, PositionError.Y, PositionError.Z);
 
-	UE_LOG(LogUAVPosition, Log, TEXT("Velocity: Desired: (%.1f,%.1f,%.1f) | Current: (%.1f,%.1f,%.1f) | Error: (%.1f,%.1f,%.1f)"),
+	UE_LOG_EVERY_N(10, LogUAVPosition, Verbose, TEXT("Velocity: Desired: (%.1f,%.1f,%.1f) | Current: (%.1f,%.1f,%.1f) | Error: (%.1f,%.1f,%.1f)"),
 		DesiredVelocity.X, DesiredVelocity.Y, DesiredVelocity.Z,
 		CurrentState.Velocity.X, CurrentState.Velocity.Y, CurrentState.Velocity.Z,
 		VelocityError.X, VelocityError.Y, VelocityError.Z);
 
-	UE_LOG(LogUAVPosition, Log, TEXT("Output: Thrust: %.3f | Attitude: R=%.2f P=%.2f Y=%.2f"),
+	UE_LOG_EVERY_N(10, LogUAVPosition, Verbose, TEXT("Output: Thrust: %.3f | Attitude: R=%.2f P=%.2f Y=%.2f"),
 		OutThrust, DesiredRoll, DesiredPitch, DesiredYaw);
 
 	// 更新积分项（抗饱和）
