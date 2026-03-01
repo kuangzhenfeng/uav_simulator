@@ -46,6 +46,13 @@ public:
 	{
 		Mass = InMass; ArmLength = InArmLength;
 		MomentOfInertia = InMomentOfInertia; MaxThrust = InMaxThrust;
+
+		// 根据最大推力和最大转速计算推力系数
+		// T = k_t * ω²  =>  k_t = T_max / ω_max²
+		ThrustCoefficient = MaxThrust / (MaxMotorSpeed * MaxMotorSpeed);
+
+		// 反扭矩系数通常是推力系数的 1.5-2% (经验值)
+		TorqueCoefficient = ThrustCoefficient * 0.016f;
 	}
 
 protected:
