@@ -64,10 +64,24 @@ protected:
 	float MeasurementNoiseVelocity = 0.1f;
 
 private:
-	// 状态协方差矩阵（简化为对角矩阵）
-	FVector CovariancePosition = FVector(1.0f, 1.0f, 1.0f);
-	FVector CovarianceVelocity = FVector(1.0f, 1.0f, 1.0f);
-	FVector CovarianceAttitude = FVector(0.1f, 0.1f, 0.1f);
+	// 状态协方差矩阵（完整 6×6 矩阵：位置3 + 速度3）
+	// 使用行优先存储：P[i*6 + j] 表示第 i 行第 j 列
+	TArray<float> CovarianceMatrix;
+
+	// 过程噪声协方差矩阵 Q (6×6)
+	TArray<float> ProcessNoiseMatrix;
+
+	// 测量噪声协方差矩阵 R (6×6)
+	TArray<float> MeasurementNoiseMatrix;
+
+	// 矩阵辅助函数
+	void InitializeMatrices();
+	void MatrixMultiply(const TArray<float>& A, const TArray<float>& B, TArray<float>& Result, int M, int N, int P) const;
+	void MatrixTranspose(const TArray<float>& A, TArray<float>& Result, int Rows, int Cols) const;
+	void MatrixAdd(const TArray<float>& A, const TArray<float>& B, TArray<float>& Result, int Size) const;
+	bool MatrixInverse(const TArray<float>& A, TArray<float>& Result, int N) const;
+	void ComputeJacobianF(TArray<float>& F, float DeltaTime) const;
+	void ComputeJacobianH(TArray<float>& H) const;
 
 	// 重力常量
 	static constexpr float GravityAcceleration = 980.0f; // cm/s²

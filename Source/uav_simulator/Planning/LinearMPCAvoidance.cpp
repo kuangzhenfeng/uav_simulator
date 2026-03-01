@@ -168,29 +168,93 @@ void ULinearMPCAvoidance::ComputeAnalyticGradient(
 	const int32 N = Config.PredictionSteps;
 	OutGradU.SetNum(N);
 
-	// 简化梯度计算：∇J_u = 2*R*u
-	// 忽略状态项的梯度（需要反向传播，计算复杂）
+	// 完整梯度计算：使用伴随法（Adjoint Method）
+	// 代价函数：J = Σ Q*||x-xref||² + Σ R*||u||² + Σ obstacle_cost
+	// 梯度：∇J/∂u[k] = ∂L/∂u[k] + B^T * λ[k+1]
+	// 其中 λ 是伴随变量，通过反向传播计算
+
+	const float Q = Config.GetPositionWeight();
 	const float R = Config.GetControlWeight();
+	const float Dt = Config.GetDt();
 
-	for (int32 i = 0; i < N; ++i)
+	// 1. 计算伴随变量 λ（反向传播）
+	// λ[N] = ∂J/∂x[N] = 2*Q*(x[N] - xref[N])
+	// λ[k] = ∂J/∂x[k] + A^T * λ[k+1]
+
+	TArray<FVector> Lambda;  // 伴随变量（位置部分）
+	TArray<FVector> LambdaV; // 伴随变量（速度部分）
+	Lambda.SetNum(N + 1);
+	LambdaV.SetNum(N + 1);
+
+	// 终端条件：λ[N] = ∂J/∂x[N]
+	if (N < X.Num() && N < Xref.Num())
 	{
-		// 控制代价梯度
-		OutGradU[i] = 2.0f * R * U[i];
+		Lambda[N] = 2.0f * Q * (X[N] - Xref[N]);
+		LambdaV[N] = FVector::ZeroVector; // 终端速度代价为0
+	}
+	else
+	{
+		Lambda[N] = FVector::ZeroVector;
+		LambdaV[N] = FVector::ZeroVector;
+	}
 
-		// 障碍物代价梯度（简化：基于当前位置）
-		if (i < X.Num())
+	// 反向传播计算伴随变量
+	for (int32 k = N - 1; k >= 0; --k)
+	{
+		// 计算当前步的状态代价梯度
+		FVector dLdx = FVector::ZeroVector;
+		FVector dLdv = FVector::ZeroVector;
+
+		if (k < X.Num() && k < Xref.Num())
 		{
+			// 跟踪代价梯度
+			dLdx = 2.0f * Q * (X[k] - Xref[k]);
+
+			// 障碍物代价梯度
 			for (const FObstacleInfo& Obs : Obstacles)
 			{
-				float Dist = CalculateDistanceToObstacle(X[i], Obs);
+				float Dist = CalculateDistanceToObstacle(X[k], Obs);
 				if (Dist < Config.ObstacleInfluenceDistance)
 				{
-					FVector GradDir = (X[i] - Obs.Center).GetSafeNormal();
+					FVector GradDir = (X[k] - Obs.Center).GetSafeNormal();
 					float Penalty = Config.GetObstacleWeight() * FMath::Exp(-Dist / Config.ObstacleSafeDistance);
-					OutGradU[i] += Penalty * GradDir;
+					float dPenalty_dDist = -Penalty / Config.ObstacleSafeDistance;
+					dLdx += dPenalty_dDist * GradDir;
 				}
 			}
 		}
+
+		// 状态转移矩阵 A 的转置乘以 λ[k+1]
+		// A = [I3  dt*I3]  =>  A^T = [I3   0  ]
+		//     [0   I3   ]            [dt*I3 I3 ]
+		//
+		// A^T * [λ_p[k+1]] = [λ_p[k+1] + dt*λ_v[k+1]]
+		//       [λ_v[k+1]]   [λ_v[k+1]              ]
+
+		Lambda[k] = dLdx + Lambda[k + 1] + Dt * LambdaV[k + 1];
+		LambdaV[k] = dLdv + LambdaV[k + 1];
+	}
+
+	// 2. 计算控制梯度
+	// ∇J/∂u[k] = ∂L/∂u[k] + B^T * λ[k+1]
+	// 其中 B = [0.5*dt²*I3]  =>  B^T = [0.5*dt²*I3  dt*I3]
+	//          [dt*I3      ]
+	//
+	// B^T * [λ_p[k+1]] = 0.5*dt²*λ_p[k+1] + dt*λ_v[k+1]
+	//       [λ_v[k+1]]
+
+	const float Dt2 = 0.5f * Dt * Dt;
+
+	for (int32 k = 0; k < N; ++k)
+	{
+		// 控制代价梯度：∂L/∂u[k] = 2*R*u[k]
+		FVector dLdu = 2.0f * R * U[k];
+
+		// 状态转移梯度：B^T * λ[k+1]
+		FVector BTLambda = Dt2 * Lambda[k + 1] + Dt * LambdaV[k + 1];
+
+		// 总梯度
+		OutGradU[k] = dLdu + BTLambda;
 	}
 }
 

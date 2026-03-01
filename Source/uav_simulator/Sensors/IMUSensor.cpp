@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "IMUSensor.h"
+#include "../Physics/UAVDynamics.h"
 
 UIMUSensor::UIMUSensor()
 {
@@ -28,9 +29,18 @@ void UIMUSensor::UpdateSensor(const FUAVState& TrueState, float DeltaTime)
 	FVector GravityWorld(0.0f, 0.0f, -9.8f); // 世界坐标系中的重力 (m/s²)
 	FVector GravityBody = Orientation.Inverse().RotateVector(GravityWorld);
 
-	// 线性加速度（从速度变化率计算，简化模型）
-	// 实际应该从动力学模型获取
-	FVector LinearAccel = FVector::ZeroVector; // 简化：假设匀速运动
+	// 获取真实线性加速度（机体坐标系）
+	// 从 UAVDynamics 组件获取
+	FVector LinearAccel = FVector::ZeroVector;
+	AActor* Owner = GetOwner();
+	if (Owner)
+	{
+		UUAVDynamics* Dynamics = Owner->FindComponentByClass<UUAVDynamics>();
+		if (Dynamics)
+		{
+			LinearAccel = Dynamics->GetLinearAcceleration();
+		}
+	}
 
 	// 加速度计测量 = 线性加速度 - 重力（机体坐标系）
 	CurrentData.Accelerometer.X = AddGaussianNoise(LinearAccel.X - GravityBody.X, AccelNoiseStdDev) + AccelBias.X;

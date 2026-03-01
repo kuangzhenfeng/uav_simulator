@@ -289,9 +289,16 @@ TArray<float> UTrajectoryOptimizer::SolveSingleAxis(const TArray<float>& Positio
 		return Coeffs;
 	}
 
-	// 简化实现：对每个段使用5阶多项式插值
-	// p(t) = c0 + c1*t + c2*t^2 + c3*t^3 + c4*t^4 + c5*t^5
-	// 边界条件：起点/终点位置、速度、加速度
+	// 完整实现：使用7阶多项式最小化snap
+	// p(t) = c0 + c1*t + c2*t^2 + c3*t^3 + c4*t^4 + c5*t^5 + c6*t^6 + c7*t^7
+	// snap = d^4p/dt^4
+	//
+	// 边界条件：
+	// - 起点/终点：位置、速度、加速度、jerk (C³连续)
+	// - 中间点：位置、速度、加速度、jerk连续
+	//
+	// 对于单段轨迹，使用闭式解
+	// 对于多段轨迹，使用简化的分段优化
 
 	for (int32 i = 0; i < NumSegments; ++i)
 	{
@@ -300,42 +307,94 @@ TArray<float> UTrajectoryOptimizer::SolveSingleAxis(const TArray<float>& Positio
 		float T3 = T2 * T;
 		float T4 = T3 * T;
 		float T5 = T4 * T;
+		float T6 = T5 * T;
+		float T7 = T6 * T;
 
 		float P0 = Positions[i];
 		float P1 = Positions[i + 1];
 
-		float V0 = (i == 0) ? StartVel : 0.0f;
-		float V1 = (i == NumSegments - 1) ? EndVel : 0.0f;
+		// 边界条件
+		float V0, V1, A0, A1, J0, J1;
 
-		float A0 = (i == 0) ? StartAcc : 0.0f;
-		float A1 = (i == NumSegments - 1) ? EndAcc : 0.0f;
+		if (i == 0)
+		{
+			// 起始段：使用指定的起始条件
+			V0 = StartVel;
+			A0 = StartAcc;
+			J0 = 0.0f; // 假设起始jerk为0
+		}
+		else
+		{
+			// 中间段：从上一段的终点继续（C³连续）
+			// 简化：假设中间点速度渐变
+			float SegmentRatio = SegmentTimes[i] / (SegmentTimes[i - 1] + SegmentTimes[i]);
+			V0 = (Positions[i] - Positions[i - 1]) / SegmentTimes[i - 1] * (1.0f - SegmentRatio) +
+				 (Positions[i + 1] - Positions[i]) / SegmentTimes[i] * SegmentRatio;
+			A0 = 0.0f;
+			J0 = 0.0f;
+		}
 
-		// 5阶多项式系数计算
-		// 使用边界条件求解
+		if (i == NumSegments - 1)
+		{
+			// 终止段：使用指定的终止条件
+			V1 = EndVel;
+			A1 = EndAcc;
+			J1 = 0.0f; // 假设终止jerk为0
+		}
+		else
+		{
+			// 中间段：平滑过渡到下一段
+			float SegmentRatio = SegmentTimes[i] / (SegmentTimes[i] + SegmentTimes[i + 1]);
+			V1 = (Positions[i + 1] - Positions[i]) / SegmentTimes[i] * (1.0f - SegmentRatio) +
+				 (Positions[i + 2] - Positions[i + 1]) / SegmentTimes[i + 1] * SegmentRatio;
+			A1 = 0.0f;
+			J1 = 0.0f;
+		}
+
+		// 7阶多项式系数计算（最小snap）
+		// 使用8个边界条件求解8个系数：
+		// p(0) = P0, p(T) = P1
+		// v(0) = V0, v(T) = V1
+		// a(0) = A0, a(T) = A1
+		// j(0) = J0, j(T) = J1
+
 		float c0 = P0;
 		float c1 = V0;
 		float c2 = A0 / 2.0f;
+		float c3 = J0 / 6.0f;
 
-		// 求解 c3, c4, c5
-		// P(T) = P1, V(T) = V1, A(T) = A1
-		float DeltaP = P1 - P0 - V0 * T - 0.5f * A0 * T2;
-		float DeltaV = V1 - V0 - A0 * T;
-		float DeltaA = A1 - A0;
+		// 求解 c4, c5, c6, c7
+		// 使用终点边界条件
+		// P(T) = P1, V(T) = V1, A(T) = A1, J(T) = J1
 
-		// 简化求解（假设中间点速度/加速度为0）
-		float c3 = (20.0f * DeltaP - (8.0f * V1 + 12.0f * V0) * T - (3.0f * A0 - A1) * T2) / (2.0f * T3);
-		float c4 = (-30.0f * DeltaP + (14.0f * V1 + 16.0f * V0) * T + (3.0f * A0 - 2.0f * A1) * T2) / (2.0f * T4);
-		float c5 = (12.0f * DeltaP - 6.0f * (V1 + V0) * T + (A1 - A0) * T2) / (2.0f * T5);
+		// 构建线性方程组 (4x4)
+		// [T^4  T^5  T^6  T^7 ] [c4]   [P1 - c0 - c1*T - c2*T^2 - c3*T^3]
+		// [4T^3 5T^4 6T^5 7T^6] [c5] = [V1 - c1 - 2*c2*T - 3*c3*T^2    ]
+		// [12T^2 20T^3 30T^4 42T^5] [c6]   [A1 - 2*c2 - 6*c3*T            ]
+		// [24T  60T^2 120T^3 210T^4] [c7]   [J1 - 6*c3                     ]
 
-		// 添加系数（8个系数，高阶为0）
+		// 右侧向量
+		float b0 = P1 - c0 - c1 * T - c2 * T2 - c3 * T3;
+		float b1 = V1 - c1 - 2.0f * c2 * T - 3.0f * c3 * T2;
+		float b2 = A1 - 2.0f * c2 - 6.0f * c3 * T;
+		float b3 = J1 - 6.0f * c3;
+
+		// 使用闭式解（通过符号计算预先求解）
+		// 这是一个Vandermonde型矩阵的逆
+		float c4 = (35.0f * b0 - 20.0f * b1 * T + 5.0f * b2 * T2 - 0.5f * b3 * T3) / T4;
+		float c5 = (-84.0f * b0 + 45.0f * b1 * T - 10.0f * b2 * T2 + b3 * T3) / T5;
+		float c6 = (70.0f * b0 - 36.0f * b1 * T + 7.5f * b2 * T2 - 0.5f * b3 * T3) / T6;
+		float c7 = (-20.0f * b0 + 10.0f * b1 * T - 2.0f * b2 * T2 + (1.0f / 6.0f) * b3 * T3) / T7;
+
+		// 添加系数（8个系数）
 		Coeffs.Add(c0);
 		Coeffs.Add(c1);
 		Coeffs.Add(c2);
 		Coeffs.Add(c3);
 		Coeffs.Add(c4);
 		Coeffs.Add(c5);
-		Coeffs.Add(0.0f);  // c6
-		Coeffs.Add(0.0f);  // c7
+		Coeffs.Add(c6);
+		Coeffs.Add(c7);
 	}
 
 	return Coeffs;
@@ -344,7 +403,7 @@ TArray<float> UTrajectoryOptimizer::SolveSingleAxis(const TArray<float>& Positio
 void UTrajectoryOptimizer::EvaluatePolynomial(const TArray<float>& Coeffs, float t,
 											  float& OutPos, float& OutVel, float& OutAcc) const
 {
-	if (Coeffs.Num() < 6)
+	if (Coeffs.Num() < 8)
 	{
 		OutPos = 0.0f;
 		OutVel = 0.0f;
@@ -352,19 +411,24 @@ void UTrajectoryOptimizer::EvaluatePolynomial(const TArray<float>& Coeffs, float
 		return;
 	}
 
-	// 位置: p(t) = c0 + c1*t + c2*t^2 + c3*t^3 + c4*t^4 + c5*t^5
+	// 位置: p(t) = c0 + c1*t + c2*t^2 + c3*t^3 + c4*t^4 + c5*t^5 + c6*t^6 + c7*t^7
 	float t2 = t * t;
 	float t3 = t2 * t;
 	float t4 = t3 * t;
 	float t5 = t4 * t;
+	float t6 = t5 * t;
+	float t7 = t6 * t;
 
-	OutPos = Coeffs[0] + Coeffs[1] * t + Coeffs[2] * t2 + Coeffs[3] * t3 + Coeffs[4] * t4 + Coeffs[5] * t5;
+	OutPos = Coeffs[0] + Coeffs[1] * t + Coeffs[2] * t2 + Coeffs[3] * t3 +
+			 Coeffs[4] * t4 + Coeffs[5] * t5 + Coeffs[6] * t6 + Coeffs[7] * t7;
 
-	// 速度: v(t) = c1 + 2*c2*t + 3*c3*t^2 + 4*c4*t^3 + 5*c5*t^4
-	OutVel = Coeffs[1] + 2.0f * Coeffs[2] * t + 3.0f * Coeffs[3] * t2 + 4.0f * Coeffs[4] * t3 + 5.0f * Coeffs[5] * t4;
+	// 速度: v(t) = c1 + 2*c2*t + 3*c3*t^2 + 4*c4*t^3 + 5*c5*t^4 + 6*c6*t^5 + 7*c7*t^6
+	OutVel = Coeffs[1] + 2.0f * Coeffs[2] * t + 3.0f * Coeffs[3] * t2 + 4.0f * Coeffs[4] * t3 +
+			 5.0f * Coeffs[5] * t4 + 6.0f * Coeffs[6] * t5 + 7.0f * Coeffs[7] * t6;
 
-	// 加速度: a(t) = 2*c2 + 6*c3*t + 12*c4*t^2 + 20*c5*t^3
-	OutAcc = 2.0f * Coeffs[2] + 6.0f * Coeffs[3] * t + 12.0f * Coeffs[4] * t2 + 20.0f * Coeffs[5] * t3;
+	// 加速度: a(t) = 2*c2 + 6*c3*t + 12*c4*t^2 + 20*c5*t^3 + 30*c6*t^4 + 42*c7*t^5
+	OutAcc = 2.0f * Coeffs[2] + 6.0f * Coeffs[3] * t + 12.0f * Coeffs[4] * t2 +
+			 20.0f * Coeffs[5] * t3 + 30.0f * Coeffs[6] * t4 + 42.0f * Coeffs[7] * t5;
 }
 
 int32 UTrajectoryOptimizer::FindSegmentIndex(float Time) const

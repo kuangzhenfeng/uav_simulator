@@ -7,8 +7,9 @@ UUAVDynamics::UUAVDynamics()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 
-	// 初始化4个电机推力为0
+	// 初始化4个电机推力和转速为0
 	MotorThrusts.Init(0.0f, 4);
+	MotorSpeeds.Init(0.0f, 4);
 }
 
 void UUAVDynamics::BeginPlay()
@@ -23,6 +24,9 @@ void UUAVDynamics::TickComponent(float DeltaTime, ELevelTick TickType, FActorCom
 
 FUAVState UUAVDynamics::UpdateDynamics(const FUAVState& CurrentState, float DeltaTime)
 {
+	// 更新电机动力学（一阶惯性环节）
+	UpdateMotorDynamics(DeltaTime);
+
 	// 使用RK4积分器提高数值精度和稳定性
 	return IntegrateRK4(CurrentState, DeltaTime);
 }
@@ -75,8 +79,13 @@ FUAVState UUAVDynamics::ComputeDerivative(const FUAVState& State, float Time)
 	// 位置导数 = 速度
 	Derivative.Position = State.Velocity;
 
-	// 速度导数 = 加速度
-	Derivative.Velocity = WorldForce / Mass;
+	// 速度导数 = 加速度（世界坐标系）
+	FVector WorldAcceleration = WorldForce / Mass;
+	Derivative.Velocity = WorldAcceleration;
+
+	// 保存线性加速度（转换到机体坐标系，用于 IMU 仿真）
+	// IMU 测量的是机体坐标系中的加速度
+	LinearAcceleration = Orientation.Inverse().RotateVector(WorldAcceleration);
 
 	// 角速度导数 = 角加速度 (包含陀螺效应)
 	FVector AngularAcceleration = ComputeAngularAcceleration(TotalTorque, State.AngularVelocity);
@@ -156,11 +165,15 @@ void UUAVDynamics::ComputeForcesAndTorques(FVector& OutForce, FVector& OutTorque
 	//       |
 	//     2(CW)
 
+	// 使用完整电机动力学模型
+	// 推力: T = k_t * ω²
+	// 反扭矩: τ = k_m * ω²
+
 	// 计算每个电机的实际推力 (N)
-	float T0 = MotorThrusts[0] * MaxThrust;
-	float T1 = MotorThrusts[1] * MaxThrust;
-	float T2 = MotorThrusts[2] * MaxThrust;
-	float T3 = MotorThrusts[3] * MaxThrust;
+	float T0 = ThrustCoefficient * MotorSpeeds[0] * MotorSpeeds[0];
+	float T1 = ThrustCoefficient * MotorSpeeds[1] * MotorSpeeds[1];
+	float T2 = ThrustCoefficient * MotorSpeeds[2] * MotorSpeeds[2];
+	float T3 = ThrustCoefficient * MotorSpeeds[3] * MotorSpeeds[3];
 
 	// 总推力 (机体坐标系，Z轴向上)
 	// UE5使用cm，需要转换: 1N = 100 g·cm/s² / 1000g = 0.1 kg·cm/s²
@@ -175,10 +188,14 @@ void UUAVDynamics::ComputeForcesAndTorques(FVector& OutForce, FVector& OutTorque
 	float PitchTorque = (T2 + T3 - T0 - T1) * ArmLength * 0.707f;
 
 	// Yaw力矩 (绕Z轴): 由电机反扭矩产生
-	// 基于物理参数计算: τ_yaw = k_m * (ω0² - ω1² + ω2² - ω3²)
-	// 简化为: τ_yaw = k_m * (T0 - T1 + T2 - T3)
-	// 其中 k_m 是电机扭矩系数，与推力系数的比值
-	float YawTorque = (T0 - T1 + T2 - T3) * MotorTorqueCoefficient;
+	// 完整模型: τ_yaw = k_m * (ω0² - ω1² + ω2² - ω3²)
+	// 其中 CW 电机 (0, 2) 产生正扭矩，CCW 电机 (1, 3) 产生负扭矩
+	float YawTorque = TorqueCoefficient * (
+		MotorSpeeds[0] * MotorSpeeds[0] -
+		MotorSpeeds[1] * MotorSpeeds[1] +
+		MotorSpeeds[2] * MotorSpeeds[2] -
+		MotorSpeeds[3] * MotorSpeeds[3]
+	);
 
 	// 保持为N·m单位，不转换（与转动惯量单位kg·m²匹配）
 	OutTorque = FVector(
@@ -186,4 +203,44 @@ void UUAVDynamics::ComputeForcesAndTorques(FVector& OutForce, FVector& OutTorque
 		PitchTorque,
 		YawTorque
 	);
+}
+
+void UUAVDynamics::UpdateMotorDynamics(float DeltaTime)
+{
+	// 电机动力学：一阶惯性环节
+	// dω/dt = (ω_desired - ω) / τ_motor
+	// 其中 ω_desired 由期望推力反解得到
+
+	for (int32 i = 0; i < 4; ++i)
+	{
+		// 从归一化推力计算期望推力 (N)
+		float DesiredThrust = MotorThrusts[i] * MaxThrust;
+
+		// 从期望推力反解期望转速
+		float DesiredSpeed = SolveMotorSpeedFromThrust(DesiredThrust);
+
+		// 一阶惯性环节更新
+		// ω[k+1] = ω[k] + (ω_desired - ω[k]) * dt / τ
+		float SpeedError = DesiredSpeed - MotorSpeeds[i];
+		MotorSpeeds[i] += SpeedError * DeltaTime / MotorTimeConstant;
+
+		// 限制转速范围
+		MotorSpeeds[i] = FMath::Clamp(MotorSpeeds[i], MinMotorSpeed, MaxMotorSpeed);
+	}
+}
+
+float UUAVDynamics::SolveMotorSpeedFromThrust(float DesiredThrust) const
+{
+	// 从推力公式反解转速: T = k_t * ω²
+	// ω = sqrt(T / k_t)
+
+	if (DesiredThrust <= 0.0f || ThrustCoefficient <= 0.0f)
+	{
+		return MinMotorSpeed;
+	}
+
+	float Speed = FMath::Sqrt(DesiredThrust / ThrustCoefficient);
+
+	// 限制转速范围
+	return FMath::Clamp(Speed, MinMotorSpeed, MaxMotorSpeed);
 }

@@ -37,6 +37,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
 	TArray<float> GetMotorThrusts() const { return MotorThrusts; }
 
+	// 获取线性加速度（机体坐标系，用于 IMU 仿真）
+	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
+	FVector GetLinearAcceleration() const { return LinearAcceleration; }
+
 	// 批量设置物理参数（供型号注册表调用）
 	void SetPhysicsParams(float InMass, float InArmLength, const FVector& InMomentOfInertia, float InMaxThrust)
 	{
@@ -67,13 +71,42 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics Parameters")
 	float MotorTorqueCoefficient = 0.0045f; // 电机扭矩系数 (N·m / N)
 
+	// 电机动力学参数
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Motor Parameters")
+	float ThrustCoefficient = 1.0e-5f; // 推力系数 k_t (N / (rad/s)²)
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Motor Parameters")
+	float TorqueCoefficient = 1.6e-7f; // 反扭矩系数 k_m (N·m / (rad/s)²)
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Motor Parameters")
+	float MotorTimeConstant = 0.02f; // 电机时间常数 (s)
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Motor Parameters")
+	float MaxMotorSpeed = 838.0f; // 最大电机转速 (rad/s, ~8000 RPM)
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Motor Parameters")
+	float MinMotorSpeed = 100.0f; // 最小电机转速 (rad/s, ~955 RPM)
+
 	// 电机推力 (0-1归一化)
 	UPROPERTY(BlueprintReadOnly, Category = "Motor State")
 	TArray<float> MotorThrusts;
 
+	// 电机转速 (rad/s)
+	UPROPERTY(BlueprintReadOnly, Category = "Motor State")
+	TArray<float> MotorSpeeds;
+
+	// 线性加速度（机体坐标系，用于 IMU 仿真）
+	FVector LinearAcceleration = FVector::ZeroVector;
+
 private:
 	// 计算总推力和力矩
 	void ComputeForcesAndTorques(FVector& OutForce, FVector& OutTorque) const;
+
+	// 更新电机动力学（一阶惯性环节）
+	void UpdateMotorDynamics(float DeltaTime);
+
+	// 从期望推力反解电机转速
+	float SolveMotorSpeedFromThrust(float DesiredThrust) const;
 
 	// RK4积分器
 	FUAVState IntegrateRK4(const FUAVState& State, float DeltaTime);
