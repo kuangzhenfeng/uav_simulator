@@ -10,20 +10,31 @@
 
 ## 执行流程
 
-1. **运行仿真**
-   - Windows: `cmd //c "Script\\sim.bat 120"`
-   - macOS/Linux: `bash Script/sim.sh 120`
+1. **并行执行**：
+   - **后台运行仿真**（使用 `run_in_background: true`）：
+     - Windows: `cmd //c "Script\\sim.bat 120"`
+     - macOS/Linux: `bash Script/sim.sh 120`
+   - **同时读取代码**：
+     - 先读取核心代码文件：
+       - `Source\uav_simulator\Core\UAVPawn.cpp/h`
+       - `Source\uav_simulator\Planning/PathPlanner.cpp/h`
+       - `Source\uav_simulator\Planning\NMPCAvoidance.cpp/h`
+     - 根据用户输入的问题，读取其他相关代码文件
+     - 根据项目结构和已读代码，分析还有哪些代码值得读取（如依赖的类、调用的函数等），并读取这些文件
+     - **重点关注日志输出相关代码**：理解各个日志的含义、输出位置、关键变量，为后续日志分析做准备
 
-2. **读取日志**: `Logs/uav.log`
+2. **等待仿真完成并读取日志**: `Logs/uav.log`
 
-3. **分析日志**，结合源码，从以下维度评估：
+3. **分析日志并深入读取代码**，结合源码，从以下维度评估：
+   - 根据日志中发现的具体问题，进一步读取或重新读取相关源码文件
+   - 评估维度：
    - **速度**：巡航速度是否达标，避障时速度损失是否合理
    - **稳定性**：姿态/速度是否震荡，控制输出是否平滑
    - **避障轨迹**：绕障路径是否流畅，有无不必要的大幅偏转或原地徘徊
    - **轨迹跟踪偏差**：所有 UAV 偏差是否在 3m 以内
 
 4. **若发现问题**：
-   - 定位根本原因（读取相关源码）
+   - 定位根本原因（读取相关源码，如果之前未读取）
    - 实施修复
    - 编译：
      - Windows: `cmd //c "Script\\build.bat"`

@@ -109,16 +109,20 @@ void AUAVPawn::BeginPlay()
 	NMPCComponent = NewObject<UNMPCAvoidance>(this);
 	LinearMPCComponent = nullptr;  // 懒加载，仅在需要时创建
 
-	// 同步模型速度限制到 NMPC，并增大参考跟踪权重以限制避障偏差
+	// 同步模型速度限制到 NMPC，优化权重配置实现快速安全飞行
 	{
 		const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
 		NMPCComponent->Config.MaxVelocity = Spec.MaxVelocity;
-		NMPCComponent->Config.WeightReference = 2.0f;  // 适度降低参考跟踪权重
-		NMPCComponent->Config.WeightTerminal = 2.5f;    // 适度降低终端代价
-		NMPCComponent->Config.WeightObstacle = 4.0f;    // 增大避障权重，优先保证安全
-		NMPCComponent->Config.ObstacleSafeDistance = 300.0f;  // 增大安全距离到 3m
-		NMPCComponent->Config.ObstacleInfluenceDistance = 1600.0f; // 增大感知范围到 16m
-		NMPCComponent->Config.ObstacleAlpha = 1.0f;  // 增大势垒陡度
+		NMPCComponent->Config.PredictionHorizon = 3.0f;        // 预测时域 3s，覆盖 24m
+		NMPCComponent->Config.PredictionSteps = 15;            // 提高分辨率到 15 步
+		NMPCComponent->Config.WeightReference = 0.5f;          // 降低参考跟踪权重，让障碍物主导
+		NMPCComponent->Config.WeightVelocity = 0.1f;           // 降低速度跟踪权重
+		NMPCComponent->Config.WeightTerminal = 0.8f;           // 终端代价保持不变
+		NMPCComponent->Config.WeightObstacle = 80.0f;          // 大幅提高障碍物权重，确保安全优先
+		NMPCComponent->Config.ObstacleSafeDistance = 300.0f;   // 安全距离设置为 3m
+		NMPCComponent->Config.ObstacleInfluenceDistance = 2500.0f; // 感知范围 25m，更早开始避障
+		NMPCComponent->Config.ObstacleAlpha = 0.15f;           // 提高衰减系数，增强梯度 18 倍
+		NMPCComponent->Config.MaxObstacleCostPerStep = 1500.0f; // 提高单步障碍物代价上限
 	}
 
 }
@@ -245,7 +249,7 @@ void AUAVPawn::UpdateSensors(float DeltaTime)
 
 bool AUAVPawn::ShouldSolveNMPC(float DeltaTime)
 {
-	const float NMPCSolveInterval = 0.1f;
+	const float NMPCSolveInterval = 0.05f;  // 20 Hz (提升避障响应速度)
 	NMPCSolveAccumulator += DeltaTime;
 
 	if (StuckEscapeCooldown > 0.0f)
@@ -509,17 +513,67 @@ FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float Cr
 
 void AUAVPawn::UpdateSpeedScaleForObstacles()
 {
-	const float ObsSafe = NMPCComponent->Config.ObstacleSafeDistance;
-	const float ObsInfluence = NMPCComponent->Config.ObstacleInfluenceDistance;
+	const float ObsSafe = 300.0f;      // 安全距离 3m
+	const float ObsInfluence = 2000.0f; // 影响范围 20m，更早减速
 	float SpeedScale = 1.0f;
 
 	if (CachedNearestObsDist < ObsInfluence)
 	{
-		SpeedScale = FMath::Lerp(0.35f, 1.0f,
-			FMath::Clamp((CachedNearestObsDist - ObsSafe) / (ObsInfluence - ObsSafe), 0.0f, 1.0f));
+		// 分段减速策略：<6m 激进减速至 20%，6-20m 渐进减速至 50%
+		if (CachedNearestObsDist < ObsSafe * 2.0f) // <6m: 激进减速至 20%
+		{
+			SpeedScale = FMath::Lerp(0.20f, 0.50f,
+				FMath::Clamp((CachedNearestObsDist - ObsSafe) / ObsSafe, 0.0f, 1.0f));
+		}
+		else // 6-20m: 渐进减速至 50%
+		{
+			SpeedScale = FMath::Lerp(0.50f, 1.0f,
+				FMath::Clamp((CachedNearestObsDist - ObsSafe * 2.0f) / (ObsInfluence - ObsSafe * 2.0f), 0.0f, 1.0f));
+		}
 	}
 
 	TrajectoryTrackerComponent->SetSpeedScale(SpeedScale);
+}
+
+FVector AUAVPawn::ApplyEmergencyBraking(const FVector& Acceleration)
+{
+	if (CachedNearestObsDist >= 1000.0f) // >10m: 无需干预
+		return Acceleration;
+
+	float CurrentSpeed = CurrentState.Velocity.Size();
+	if (CurrentSpeed < 100.0f) // 已经很慢，无需制动
+		return Acceleration;
+
+	// 计算理论制动距离: d = v²/(2a)
+	const float MaxDecel = 400.0f; // cm/s²
+	float BrakingDist = (CurrentSpeed * CurrentSpeed) / (2.0f * MaxDecel);
+
+	// 安全裕度: 1.5倍制动距离 + 3m安全距离
+	float RequiredDist = BrakingDist * 1.5f + 300.0f;
+
+	if (CachedNearestObsDist < RequiredDist)
+	{
+		// 触发紧急制动: 沿速度反方向施加最大减速度
+		FVector VelDir = CurrentState.Velocity.GetSafeNormal();
+		float BrakeIntensity = FMath::Clamp(
+			1.0f - CachedNearestObsDist / RequiredDist, 0.0f, 1.0f);
+
+		FVector BrakeAccel = -VelDir * MaxDecel * BrakeIntensity;
+
+		// 与NMPC加速度混合: 距离越近，制动权重越高
+		float BrakeWeight = FMath::Clamp(
+			(RequiredDist - CachedNearestObsDist) / RequiredDist, 0.0f, 1.0f);
+
+		FVector Result = Acceleration * (1.0f - BrakeWeight) + BrakeAccel * BrakeWeight;
+
+		UE_LOG_THROTTLE(0.2, LogUAVActor, Warning,
+			TEXT("[EmergencyBrake] Triggered! Dist=%.0fcm Speed=%.0fcm/s BrakeDist=%.0fcm Weight=%.2f"),
+			CachedNearestObsDist, CurrentSpeed, BrakingDist, BrakeWeight);
+
+		return Result;
+	}
+
+	return Acceleration;
 }
 
 FVector AUAVPawn::ApplyDeviationProtection(const FVector& NMPCAcceleration)
@@ -530,21 +584,33 @@ FVector AUAVPawn::ApplyDeviationProtection(const FVector& NMPCAcceleration)
 	float ZError = DesiredPos.Z - CurrentState.Position.Z;
 	float CrossTrackDev = FMath::Sqrt(YError * YError + ZError * ZError);
 
-	if (CrossTrackDev > 300.0f)
+	// 仅在极端偏差时记录警告（阈值提高到 5m）
+	if (CrossTrackDev > 500.0f)
 	{
 		UE_LOG_THROTTLE(0.5, LogUAVActor, Warning,
-			TEXT("[DevTrack] Cross=%.0f Pos=(%d,%d,%d)"),
+			TEXT("[DevTrack] Large deviation: %.0f cm at Pos=(%d,%d,%d)"),
 			CrossTrackDev,
 			(int)CurrentState.Position.X, (int)CurrentState.Position.Y, (int)CurrentState.Position.Z);
 	}
 
-	FVector EffectiveAccel = LimitLateralAcceleration(NMPCAcceleration);
-	EffectiveAccel = ApplyPDCorrection(EffectiveAccel);
-	EffectiveAccel = ApplyHardLimitCorrection(EffectiveAccel, CrossTrackDev);
-
+	// 更新速度缩放（基于障碍物距离）
 	UpdateSpeedScaleForObstacles();
 
-	return EffectiveAccel;
+	// 偏差保护：当偏差超过 2m 时，叠加 PD 纠偏，防止 NMPC 陷入局部最优
+	// 降低阈值以更早介入，特别是在高速飞行时
+	FVector Result = NMPCAcceleration;
+	if (CrossTrackDev > 200.0f)
+	{
+		Result = ApplyPDCorrection(Result);
+
+		// 硬限制：偏差超过 3m 时强制纠偏
+		if (CrossTrackDev > 300.0f)
+		{
+			Result = ApplyHardLimitCorrection(Result, CrossTrackDev);
+		}
+	}
+
+	return Result;
 }
 
 // ========== 速度钳位辅助方法 ==========
@@ -620,9 +686,18 @@ void AUAVPawn::UpdateController(float DeltaTime)
 	{
 	case EUAVControlMode::Trajectory:
 		{
-			// Early return: 组件未就绪或未跟踪
-			if (!TrajectoryTrackerComponent || !TrajectoryTrackerComponent->IsTracking()
-				|| !PositionControllerComponent || !AttitudeControllerComponent || !NMPCComponent)
+			// Early return: 组件未就绪
+			if (!TrajectoryTrackerComponent || !PositionControllerComponent
+				|| !AttitudeControllerComponent || !NMPCComponent)
+			{
+				ExecutePositionHold();
+				break;
+			}
+
+			// 轨迹完成检查：IsComplete() 为 true 且速度足够低时才切换到位置保持
+			const bool bTrajectoryDone = TrajectoryTrackerComponent->IsComplete();
+			const float CurrentSpeed = CurrentState.Velocity.Size();
+			if (bTrajectoryDone && CurrentSpeed < 150.0f)
 			{
 				ExecutePositionHold();
 				break;
@@ -634,10 +709,20 @@ void AUAVPawn::UpdateController(float DeltaTime)
 				SolveNMPCAvoidance(DeltaTime);
 			}
 
-			// 应用偏差保护和速度钳位
-			FVector EffectiveAccel = ApplyDeviationProtection(CachedNMPCAcceleration);
+			// 应用偏差保护和速度钳位：卡死时跳过EMA，直接使用原始控制量
+			if (bNMPCStuck)
+			{
+				SmoothedNMPCAcceleration = CachedNMPCAcceleration;
+			}
+			else
+			{
+				SmoothedNMPCAcceleration = SmoothedNMPCAcceleration * 0.75f + CachedNMPCAcceleration * 0.25f;
+			}
+			FVector EffectiveAccel = ApplyDeviationProtection(SmoothedNMPCAcceleration);
 			EffectiveAccel = ApplyVelocityClamp(EffectiveAccel);
 
+			// 紧急制动层：基于物理制动距离的最后防线
+			EffectiveAccel = ApplyEmergencyBraking(EffectiveAccel);
 
 			// 计算期望角加速度（用于前馈控制）
 			FRotator DesiredAngularAccel = ComputeAngularAccelerationFromLinearAccel(
@@ -915,21 +1000,21 @@ FRotator AUAVPawn::ComputeAngularAccelerationFromLinearAccel(
 	float q =  FVector::DotProduct(h_omega, x_B);
 	FVector DesiredAngVel(p, q, 0.0f);
 
-	// Step 6: 低通滤波角速度 (α=0.3)
-	constexpr float AlphaAngVel = 0.3f;
+	// Step 6: 低通滤波角速度 (α=0.2，降低滤波系数以减少相位滞后)
+	constexpr float AlphaAngVel = 0.2f;
 	DesiredAngVel = AlphaAngVel * DesiredAngVel
 		+ (1.0f - AlphaAngVel) * PrevDesiredAngularVel;
 
 	// Step 7: 角加速度 = 角速度的数值微分
 	FVector RawAngAccel = (DesiredAngVel - PrevDesiredAngularVel) / dt;
 
-	// Step 8: 低通滤波角加速度 (α=0.2)
-	constexpr float AlphaAngAccel = 0.2f;
+	// Step 8: 低通滤波角加速度 (α=0.15，进一步降低以抑制高频噪声)
+	constexpr float AlphaAngAccel = 0.15f;
 	FVector FilteredAngAccel = AlphaAngAccel * RawAngAccel
 		+ (1.0f - AlphaAngAccel) * PrevFilteredAngularAccel;
 
-	// Step 9: 限幅 ±50 deg/s²（转为 rad/s² 进行限幅）
-	constexpr float MaxAngAccelRad = 50.0f * DegToRad; // ≈0.873 rad/s²
+	// Step 9: 限幅 ±30 deg/s²（降低限幅，防止过度前馈导致震荡）
+	constexpr float MaxAngAccelRad = 30.0f * DegToRad; // ≈0.524 rad/s²
 	FilteredAngAccel.X = FMath::Clamp(FilteredAngAccel.X, -MaxAngAccelRad, MaxAngAccelRad);
 	FilteredAngAccel.Y = FMath::Clamp(FilteredAngAccel.Y, -MaxAngAccelRad, MaxAngAccelRad);
 	FilteredAngAccel.Z = FMath::Clamp(FilteredAngAccel.Z, -MaxAngAccelRad, MaxAngAccelRad);

@@ -41,6 +41,11 @@ bool UPathPlanner::CheckCollision(const FVector& Point, float Radius) const
 
 	for (const FObstacleInfo& Obstacle : Obstacles)
 	{
+		// 跳过超大地形/边界障碍物（extents > 5000cm 视为世界边界，不参与路径规划碰撞检测）
+		if (Obstacle.Extents.GetMax() > 5000.0f)
+		{
+			continue;
+		}
 		if (IsPointInObstacle(Point, Obstacle, TotalRadius))
 		{
 			return true;

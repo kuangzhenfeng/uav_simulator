@@ -173,14 +173,21 @@ float UNMPCAvoidance::ComputeCost(
 		// 控制代价
 		Cost += Config.WeightControl * Controls[k].SizeSquared();
 
-		// 障碍物代价 + 追踪 MinObsDist（合并遍历，避免重复扫描）
+		// 时序一致性代价：逃逸模式下禁用，避免锁死在零控制
+		if (StuckEscapeCount <= 0 && bHasPreviousControls && k < PreviousControls.Num())
+		{
+			Cost += Config.WeightTemporalConsistency * (Controls[k] - PreviousControls[k]).SizeSquared();
+		}
+
+		// 障碍物代价：逃逸模式下降权，但保持足够高以避免穿透
+		const float EscapeObsScale = (StuckEscapeCount > 0) ? 0.6f : 1.0f;
 		float TimeDiscount = FMath::Pow(0.85f, (float)k);
 		for (const FObstacleInfo& Obstacle : Obstacles)
 		{
 			FObstacleInfo PredObs = PredictObstacle(Obstacle, k * dt);
 			float Dist = CalculateDistanceToObstacle(Positions[k], PredObs);
 			MinObsDist = FMath::Min(MinObsDist, Dist);
-			Cost += Config.WeightObstacle * TimeDiscount * ComputeObstacleCost(Positions[k], PredObs);
+			Cost += Config.WeightObstacle * EscapeObsScale * TimeDiscount * ComputeObstacleCost(Positions[k], PredObs);
 		}
 	}
 
@@ -191,25 +198,34 @@ float UNMPCAvoidance::ComputeCost(
 	}
 
 	// 终端障碍物代价 + 终端步 MinObsDist
+	const float TermEscapeObsScale = (StuckEscapeCount > 0) ? 0.6f : 1.0f;
 	float TermDiscount = FMath::Pow(0.85f, (float)N);
 	for (const FObstacleInfo& Obstacle : Obstacles)
 	{
 		FObstacleInfo PredObs = PredictObstacle(Obstacle, N * dt);
 		float Dist = CalculateDistanceToObstacle(Positions[N], PredObs);
 		MinObsDist = FMath::Min(MinObsDist, Dist);
-		Cost += Config.WeightObstacle * TermDiscount * ComputeObstacleCost(Positions[N], PredObs);
+		Cost += Config.WeightObstacle * TermEscapeObsScale * TermDiscount * ComputeObstacleCost(Positions[N], PredObs);
 	}
 
 	// 后置动态权重修正：轨迹进入安全距离内时降低参考/速度跟踪权重
 	float RefWeight = Config.WeightReference;
 	float VelWeight = Config.WeightVelocity;
-	if (MinObsDist < Config.ObstacleSafeDistance)
+
+	// 逃逸模式：强化参考跟踪，强制沿路径突破
+	if (StuckEscapeCount > 0)
 	{
-		float Alpha = FMath::Clamp(MinObsDist / Config.ObstacleSafeDistance, 0.0f, 1.0f);
-		float Scale = FMath::Lerp(0.3f, 1.0f, Alpha);
-		RefWeight *= Scale;
-		VelWeight *= Scale;
+		RefWeight *= 3.0f;
 	}
+
+	// 禁用动态权重降低：接近障碍物时保持固定权重，让障碍物代价主导优化
+	// if (MinObsDist < Config.ObstacleSafeDistance)
+	// {
+	// 	float Alpha = FMath::Clamp(MinObsDist / Config.ObstacleSafeDistance, 0.0f, 1.0f);
+	// 	float Scale = FMath::Lerp(0.3f, 1.0f, Alpha);
+	// 	RefWeight *= Scale;
+	// 	VelWeight *= Scale;
+	// }
 	Cost += RefWeight * RefCostAccum + VelWeight * VelCostAccum;
 
 	return Cost;
@@ -283,32 +299,17 @@ void UNMPCAvoidance::ProjectControls(TArray<FVector>& Controls, const FVector& I
 			Controls[k] = Controls[k] * (Config.MaxAcceleration / AccMag);
 		}
 
-		// 速度约束: ||v|| ≤ MaxVelocity
-		// 采用投影方法：将速度投影到可行域，而非直接修正加速度
+		// 速度约束: ||v|| ≤ MaxVelocity (优先级高于加速度约束)
 		FVector NextVel = Vel + Controls[k] * dt;
 		float VelMag = NextVel.Size();
 
 		// 速度硬限制：始终钳位到 MaxVelocity，防止超速累积
 		if (VelMag > Config.MaxVelocity)
 		{
-			// 方法：沿速度方向缩放，保持方向一致性
+			// 沿速度方向缩放到最大速度
 			NextVel = NextVel * (Config.MaxVelocity / VelMag);
-
-			// 计算修正后的加速度
-			FVector CorrAccel = (NextVel - Vel) / dt;
-			float CorrAccMag = CorrAccel.Size();
-
-			// 如果修正加速度仍超限，则采用混合策略：
-			// 优先保证加速度约束，允许速度略微超限（由下一步迭代修正）
-			if (CorrAccMag > Config.MaxAcceleration)
-			{
-				// 限制加速度大小
-				CorrAccel = CorrAccel * (Config.MaxAcceleration / CorrAccMag);
-				// 更新速度为加速度约束下的最大速度
-				NextVel = Vel + CorrAccel * dt;
-			}
-
-			Controls[k] = CorrAccel;
+			// 反推加速度，速度约束优先，不再检查加速度约束
+			Controls[k] = (NextVel - Vel) / dt;
 		}
 
 		Vel = Vel + Controls[k] * dt;
@@ -405,7 +406,8 @@ bool UNMPCAvoidance::DetectPositionStuck(const FVector& CurrentPosition, bool bN
 	const float DistFromCheck = FVector::Dist(CurrentPosition, StuckCheckPosition);
 	const bool bHasObstacles = bNeedsCorrection;
 
-	if (DistFromCheck < 30.0f && bHasObstacles)
+	// 降低位移阈值到10cm,延长时间窗口到50帧(~5s),避免误判正常减速避障
+	if (DistFromCheck < 10.0f && bHasObstacles)
 	{
 		++SlowProgressCount;
 	}
@@ -414,7 +416,7 @@ bool UNMPCAvoidance::DetectPositionStuck(const FVector& CurrentPosition, bool bN
 		ResetStuckDetection(CurrentPosition);
 	}
 
-	const bool bStuck = SlowProgressCount > 15; // ~1.5s at 0.1s interval
+	const bool bStuck = SlowProgressCount > 50; // ~5s at 0.1s interval
 	if (bStuck)
 	{
 		ResetStuckDetection(CurrentPosition);
@@ -459,12 +461,13 @@ bool UNMPCAvoidance::DetectOscillationStuck(const FVector& CurrentPosition, bool
 
 	UpdateOscillationMetrics(CurrentPosition);
 
-	// 每 30 次求解（~3s）评估一次
-	if (OscillationSolveCount >= 30)
+	// 每 50 次求解（~5s）评估一次,延长窗口减少误判
+	if (OscillationSolveCount >= 50)
 	{
 		const float NetDisplacement = FVector::Dist(CurrentPosition, OscillationAnchor);
-		// 净位移 < 累计路程的 15%，且累计路程足够大（排除静止），判定为振荡
-		const bool bStuck = OscillationPathLength > 300.0f && NetDisplacement < OscillationPathLength * 0.15f;
+		// 净位移 < 累计路程的 8%，且累计路程足够大（排除静止），判定为振荡
+		// 降低比例阈值,允许更大的绕行路径
+		const bool bStuck = OscillationPathLength > 500.0f && NetDisplacement < OscillationPathLength * 0.08f;
 
 		// 重置窗口
 		OscillationAnchor = CurrentPosition;
@@ -492,6 +495,12 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	// 初始化控制序列
 	TArray<FVector> Controls;
 	InitializeControls(Controls, ReferencePoints);
+
+	// 逃逸模式递减
+	if (StuckEscapeCount > 0)
+	{
+		--StuckEscapeCount;
+	}
 
 	// 确保参考点数量足够
 	TArray<FVector> RefPoints = ReferencePoints;
@@ -601,7 +610,9 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 				ForwardSimulate(CurrentPosition, CurrentVelocity, PertControls, PertPos, PertVel);
 				float PertCost = ComputeCost(PertPos, PertVel, PertControls, RefPoints, Obstacles);
 
-				if (PertCost < CurrentCost)
+				// 逃逸模式下放宽接受门槛，正常模式需显著改善
+				const float PertThreshold = (StuckEscapeCount > 0) ? 0.98f : 0.85f;
+				if (PertCost < CurrentCost * PertThreshold)
 				{
 					Controls = PertControls;
 					CurrentCost = PertCost;
@@ -629,9 +640,12 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	}
 	PreviousTotalCost = CurrentCost;
 
-	// 保存控制序列 (温启动)
-	PreviousControls = Controls;
-	bHasPreviousControls = true;
+	// 保存控制序列 (温启动)：逃逸期间禁用，每帧重新求解
+	if (StuckEscapeCount <= 0)
+	{
+		PreviousControls = Controls;
+		bHasPreviousControls = true;
+	}
 
 	// 最终前向仿真得到预测轨迹
 	TArray<FVector> FinalPositions, FinalVelocities;
@@ -733,11 +747,12 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		StuckReason = TEXT("OscillationStuck");
 	}
 
-	// 卡死时重置温启动，避免下次继续喂入零控制
+	// 卡死时重置温启动并进入逃逸模式
 	if ((bLowControlStuck || bPositionStuck || bOscillationStuck) && NearestObsDist < Config.ObstacleInfluenceDistance)
 	{
 		bHasPreviousControls = false;
 		ConsecutiveCostRiseCount = 0;
+		StuckEscapeCount = 50;  // 延长逃逸时间到 50 帧 (~5s)
 	}
 
 	// 求解耗时 (ms)

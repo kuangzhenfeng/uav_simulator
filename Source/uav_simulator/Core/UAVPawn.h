@@ -234,6 +234,7 @@ private:
 	// NMPC 调用节流：缓存上次结果，避免每个子步都调用
 	float NMPCSolveAccumulator = 0.0f;
 	FVector CachedNMPCAcceleration = FVector::ZeroVector;
+	FVector SmoothedNMPCAcceleration = FVector::ZeroVector;
 	bool bHasCachedNMPC = false;
 
 	// stuck 逃逸冷却：stuck 时延长不求解时间，让逃逸加速度持续生效
@@ -277,6 +278,9 @@ private:
 	FVector ApplyPDCorrection(const FVector& Acceleration);
 	FVector ApplyHardLimitCorrection(const FVector& Acceleration, float CrossTrackDev);
 	void UpdateSpeedScaleForObstacles();
+
+	// 紧急制动
+	FVector ApplyEmergencyBraking(const FVector& Acceleration);
 
 	// 速度钳位
 	FVector ApplyVelocityClamp(const FVector& Acceleration);

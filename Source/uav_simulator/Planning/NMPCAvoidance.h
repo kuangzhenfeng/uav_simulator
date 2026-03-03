@@ -39,7 +39,7 @@ struct FNMPCConfig
 
 	// 最大加速度 (cm/s²)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float MaxAcceleration = 800.0f;
+	float MaxAcceleration = 400.0f;
 
 	// 最大速度 (cm/s)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
@@ -57,9 +57,13 @@ struct FNMPCConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
 	float WeightControl = 0.001f;
 
+	// 时序一致性权重：惩罚与上一帧解的偏差，抑制帧间振荡
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
+	float WeightTemporalConsistency = 0.01f;
+
 	// 障碍物代价权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightObstacle = 1.5f;
+	float WeightObstacle = 3.0f;
 
 	// 终端代价权重
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
@@ -71,7 +75,7 @@ struct FNMPCConfig
 
 	// 障碍物安全距离 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float ObstacleSafeDistance = 150.0f;
+	float ObstacleSafeDistance = 300.0f;
 
 	// 障碍物影响距离 (cm)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
@@ -115,7 +119,7 @@ struct FNMPCConfig
 
 	// 连续代价上升次数阈值，超过后重置温启动
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	int32 WarmStartResetThreshold = 20;
+	int32 WarmStartResetThreshold = 30;
 
 	// reset 后免疫帧数，防止立即重触发（~150ms）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -355,6 +359,9 @@ private:
 	int32 NeedsCorrectionHoldCount = 0;
 	// MaxHorizonObs EMA 平滑值（滤除 NMPC 求解噪声）
 	float SmoothedMaxHorizonObs = 0.0f;
+	// 卡死逃逸模式：触发后持续多帧强制突破
+	int32 StuckEscapeCount = 0;
+
 	// 位置基准卡死检测
 	FVector StuckCheckPosition = FVector::ZeroVector;
 	int32 SlowProgressCount = 0;
