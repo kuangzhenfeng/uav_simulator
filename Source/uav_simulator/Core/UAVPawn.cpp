@@ -114,15 +114,15 @@ void AUAVPawn::BeginPlay()
 		const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
 		NMPCComponent->Config.MaxVelocity = Spec.MaxVelocity;
 		NMPCComponent->Config.PredictionHorizon = 3.0f;        // 预测时域 3s，覆盖 24m
-		NMPCComponent->Config.PredictionSteps = 15;            // 提高分辨率到 15 步
-		NMPCComponent->Config.WeightReference = 0.5f;          // 降低参考跟踪权重，让障碍物主导
-		NMPCComponent->Config.WeightVelocity = 0.1f;           // 降低速度跟踪权重
+		NMPCComponent->Config.PredictionSteps = 12;            // 降低到 12 步，平衡性能与精度
+		NMPCComponent->Config.WeightReference = 0.4f;          // 降低参考跟踪权重
+		NMPCComponent->Config.WeightVelocity = 0.08f;          // 降低速度跟踪权重
 		NMPCComponent->Config.WeightTerminal = 0.8f;           // 终端代价保持不变
-		NMPCComponent->Config.WeightObstacle = 80.0f;          // 大幅提高障碍物权重，确保安全优先
+		NMPCComponent->Config.WeightObstacle = 100.0f;         // 提高障碍物权重
 		NMPCComponent->Config.ObstacleSafeDistance = 300.0f;   // 安全距离设置为 3m
-		NMPCComponent->Config.ObstacleInfluenceDistance = 2500.0f; // 感知范围 25m，更早开始避障
-		NMPCComponent->Config.ObstacleAlpha = 0.15f;           // 提高衰减系数，增强梯度 18 倍
-		NMPCComponent->Config.MaxObstacleCostPerStep = 1500.0f; // 提高单步障碍物代价上限
+		NMPCComponent->Config.ObstacleInfluenceDistance = 3500.0f; // 感知范围 35m，提前规划
+		NMPCComponent->Config.ObstacleAlpha = 0.13f;           // 衰减系数，平衡影响范围与梯度强度
+		NMPCComponent->Config.MaxObstacleCostPerStep = 1800.0f; // 单步障碍物代价上限
 	}
 
 }
