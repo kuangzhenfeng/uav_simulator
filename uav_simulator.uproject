@@ -25,6 +25,10 @@
 		{
 			"Name": "GeoReferencing",
 			"Enabled": true
+		},
+		{
+			"Name": "SoftUEBridge",
+			"Enabled": true
 		}
 	]
 }
