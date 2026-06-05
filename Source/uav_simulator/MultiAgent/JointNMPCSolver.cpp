@@ -98,9 +98,11 @@ FJointNMPCSolveResult UJointNMPCSolver::Solve(
 		{
 			Refs = ReferencePointsPerAgent[i];
 		}
+		// 先取出填充值，避免 Refs.Add(Refs.Last()) 在扩容时引用悬挂
+		FVector FillValue = Refs.Num() > 0 ? Refs.Last() : AgentStates[i].State.Position;
 		while (Refs.Num() < N + 1)
 		{
-			Refs.Add(Refs.Num() > 0 ? Refs.Last() : AgentStates[i].State.Position);
+			Refs.Add(FillValue);
 		}
 		PaddedRefs.Add(Refs);
 	}
@@ -144,7 +146,7 @@ FJointNMPCSolveResult UJointNMPCSolver::Solve(
 
 		// 计算梯度
 		TArray<TArray<FVector>> Gradient;
-		ComputeJointGradient(AgentStates, AllControls, AllPositions, PaddedRefs,
+		ComputeJointGradient(AgentStates, AllControls, AllPositions, AllVelocities, PaddedRefs,
 			StaticObstacles, FormationTargets, Config, Gradient);
 
 		// 回溯线搜索
@@ -379,6 +381,7 @@ void UJointNMPCSolver::ComputeJointGradient(
 	const TArray<FAgentStateSnapshot>& AgentStates,
 	const TArray<TArray<FVector>>& AllControls,
 	const TArray<TArray<FVector>>& AllPositions,
+	const TArray<TArray<FVector>>& AllVelocities,
 	const TArray<TArray<FVector>>& AllReferences,
 	const TArray<FObstacleInfo>& StaticObstacles,
 	const TArray<FVector>& FormationTargets,
@@ -421,10 +424,14 @@ void UJointNMPCSolver::ComputeJointGradient(
 
 				// 构造包含扰动后的所有 Agent 位置数组（其余 Agent 保持不变）
 				TArray<TArray<FVector>> TrialPosPlus = AllPositions;
-				TArray<TArray<FVector>> TrialVelPlus; // 不需要重新计算其余 Agent
+				TArray<TArray<FVector>> TrialVelPlus = AllVelocities;
 				TArray<TArray<FVector>> TrialPosMinus = AllPositions;
 				TrialPosPlus[i] = PosPlus;
+				TrialVelPlus[i] = VelPlus;
 				TrialPosMinus[i] = PosMinus;
+
+				TArray<TArray<FVector>> TrialVelMinus = AllVelocities;
+				TrialVelMinus[i] = VelMinus;
 
 				TArray<TArray<FVector>> TrialCtrlPlus = AllControls;
 				TArray<TArray<FVector>> TrialCtrlMinus = AllControls;
@@ -435,7 +442,7 @@ void UJointNMPCSolver::ComputeJointGradient(
 					TrialPosPlus, TrialVelPlus, TrialCtrlPlus, AllReferences,
 					StaticObstacles, FormationTargets, Config);
 				float CostMinus = ComputeJointCost(
-					TrialPosMinus, TrialVelPlus, TrialCtrlMinus, AllReferences,
+					TrialPosMinus, TrialVelMinus, TrialCtrlMinus, AllReferences,
 					StaticObstacles, FormationTargets, Config);
 
 				GradK[Dim] = (CostPlus - CostMinus) / (2.0f * Epsilon);

@@ -140,6 +140,7 @@ private:
 		const TArray<FAgentStateSnapshot>& AgentStates,
 		const TArray<TArray<FVector>>& AllControls,
 		const TArray<TArray<FVector>>& AllPositions,
+		const TArray<TArray<FVector>>& AllVelocities,
 		const TArray<TArray<FVector>>& AllReferences,
 		const TArray<FObstacleInfo>& StaticObstacles,
 		const TArray<FVector>& FormationTargets,

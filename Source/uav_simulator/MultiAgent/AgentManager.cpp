@@ -37,12 +37,16 @@ void AMultiAgentGameMode::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] Tick start, dt=%.4f, agents=%d"), DeltaTime, AgentRegistry.Num());
+
 	// 刷新状态缓存
 	StateCacheAccumulator += DeltaTime;
 	if (StateCacheAccumulator >= StateCacheUpdateInterval)
 	{
 		StateCacheAccumulator = 0.0f;
+		UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] RefreshStateCache start"));
 		RefreshStateCache();
+		UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] RefreshStateCache done"));
 	}
 
 	// 联合 NMPC 求解（仅 Leader 触发）
@@ -53,15 +57,21 @@ void AMultiAgentGameMode::Tick(float DeltaTime)
 		if (JointNMPCSolveAccumulator >= SolveInterval)
 		{
 			JointNMPCSolveAccumulator = 0.0f;
+			UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] SolveJointNMPC start"));
 			SolveJointNMPC();
+			UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] SolveJointNMPC done"));
 		}
 	}
 
 	// 任务监控更新
 	if (TaskMonitorInstance && AgentRegistry.Num() > 0)
 	{
+		UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] TaskMonitor Update start"));
 		TaskMonitorInstance->Update(DeltaTime, GetAllAgentStates());
+		UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] TaskMonitor Update done"));
 	}
+
+	UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] Tick end"));
 }
 
 int32 AMultiAgentGameMode::RegisterAgent(AUAVPawn* Agent)
@@ -258,13 +268,21 @@ bool AMultiAgentGameMode::GetJointNMPCCache(int32 AgentID, FVector& OutAccelerat
 
 void AMultiAgentGameMode::RefreshStateCache()
 {
-	for (auto& Pair : AgentRegistry)
+	UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] RefreshStateCache: AgentRegistry.Num=%d, StateCache.Num=%d"),
+		AgentRegistry.Num(), StateCache.Num());
+
+	// 拷贝 AgentRegistry 的 key 集合，避免迭代时修改
+	TArray<int32> AgentIDs;
+	AgentRegistry.GenerateKeyArray(AgentIDs);
+
+	for (int32 AgentID : AgentIDs)
 	{
-		if (Pair.Value.IsValid())
+		TWeakObjectPtr<AUAVPawn>* PawnPtr = AgentRegistry.Find(AgentID);
+		if (PawnPtr && PawnPtr->IsValid())
 		{
-			AUAVPawn* Pawn = Pair.Value.Get();
-			FAgentStateSnapshot& Snapshot = StateCache.FindOrAdd(Pair.Key);
-			Snapshot.AgentID = Pair.Key;
+			AUAVPawn* Pawn = PawnPtr->Get();
+			FAgentStateSnapshot& Snapshot = StateCache.FindOrAdd(AgentID);
+			Snapshot.AgentID = AgentID;
 			Snapshot.State = Pawn->GetUAVState();
 			Snapshot.TargetPosition = Pawn->GetTargetPosition();
 			Snapshot.Timestamp = GetWorld()->GetTimeSeconds();
@@ -284,12 +302,16 @@ void AMultiAgentGameMode::SolveJointNMPC()
 
 	// 收集所有 Agent 的参考轨迹点
 	TArray<TArray<FVector>> RefPointsPerAgent;
-	for (const auto& Pair : AgentRegistry)
+	// 拷贝 AgentRegistry 的 key 集合，避免迭代时潜在的容器修改
+	TArray<int32> RefAgentIDs;
+	AgentRegistry.GenerateKeyArray(RefAgentIDs);
+	for (int32 AgentID : RefAgentIDs)
 	{
 		TArray<FVector> RefPoints;
-		if (Pair.Value.IsValid())
+		TWeakObjectPtr<AUAVPawn>* PawnPtr = AgentRegistry.Find(AgentID);
+		if (PawnPtr && PawnPtr->IsValid())
 		{
-			AUAVPawn* Pawn = Pair.Value.Get();
+			AUAVPawn* Pawn = PawnPtr->Get();
 			// TODO: 从 TrajectoryTracker 采样参考点
 			// 暂时用当前位置作为参考
 			RefPoints.Add(Pawn->GetUAVState().Position);
@@ -299,11 +321,12 @@ void AMultiAgentGameMode::SolveJointNMPC()
 
 	// 收集静态障碍物（从任意 Agent 获取，假设共享）
 	TArray<FObstacleInfo> StaticObstacles;
-	for (const auto& Pair : AgentRegistry)
+	for (int32 AgentID : RefAgentIDs)
 	{
-		if (Pair.Value.IsValid())
+		TWeakObjectPtr<AUAVPawn>* PawnPtr = AgentRegistry.Find(AgentID);
+		if (PawnPtr && PawnPtr->IsValid())
 		{
-			AUAVPawn* Pawn = Pair.Value.Get();
+			AUAVPawn* Pawn = PawnPtr->Get();
 			UObstacleManager* ObsMgr = Pawn->GetObstacleManager();
 			if (ObsMgr)
 			{
