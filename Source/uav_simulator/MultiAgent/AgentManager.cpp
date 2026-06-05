@@ -2,7 +2,11 @@
 
 #include "AgentManager.h"
 #include "uav_simulator/Core/UAVPawn.h"
+#include "uav_simulator/Mission/MissionComponent.h"
+#include "uav_simulator/Mission/MissionTypes.h"
 #include "JointNMPCSolver.h"
+#include "TaskAllocator.h"
+#include "TaskMonitor.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Planning/ObstacleManager.h"
 
@@ -21,7 +25,12 @@ void AMultiAgentGameMode::BeginPlay()
 
 	// 创建联合 NMPC 求解器实例
 	JointNMPCSolverInstance = NewObject<UJointNMPCSolver>(this);
-	UE_LOG(LogUAVMultiAgent, Log, TEXT("[AgentManager] Initialized, JointNMPC solver created"));
+
+	// 创建任务分配器和监控器
+	TaskAllocatorInstance = NewObject<UTaskAllocator>(this);
+	TaskMonitorInstance = NewObject<UTaskMonitor>(this);
+
+	UE_LOG(LogUAVMultiAgent, Log, TEXT("[AgentManager] Initialized, all subsystems created"));
 }
 
 void AMultiAgentGameMode::Tick(float DeltaTime)
@@ -46,6 +55,12 @@ void AMultiAgentGameMode::Tick(float DeltaTime)
 			JointNMPCSolveAccumulator = 0.0f;
 			SolveJointNMPC();
 		}
+	}
+
+	// 任务监控更新
+	if (TaskMonitorInstance && AgentRegistry.Num() > 0)
+	{
+		TaskMonitorInstance->Update(DeltaTime, GetAllAgentStates());
 	}
 }
 
@@ -311,6 +326,102 @@ void AMultiAgentGameMode::SolveJointNMPC()
 		}
 	}
 }
+
+// ---- 任务分配 ----
+
+FTaskAllocationResult AMultiAgentGameMode::SubmitTasks(const TArray<FTaskDescriptor>& Tasks)
+{
+	if (!TaskAllocatorInstance)
+	{
+		UE_LOG(LogUAVMultiAgent, Error, TEXT("[AgentManager] TaskAllocator not initialized"));
+		FTaskAllocationResult EmptyResult;
+		return EmptyResult;
+	}
+
+	// 从注册表派生 UAV 能力
+	TArray<FUAVCapability> Capabilities = UTaskAllocator::DeriveCapabilities(GetAllAgentStates());
+
+	// 求解分配
+	FTaskAllocationResult Result = TaskAllocatorInstance->Allocate(Tasks, Capabilities, TaskAllocationConfig);
+
+	// 初始化监控
+	if (Result.bIsFeasible && TaskMonitorInstance)
+	{
+		TaskMonitorInstance->Initialize(Result, TaskMonitorConfig);
+	}
+
+	// 将分配结果推送到各 Agent 的 MissionComponent
+	if (Result.bIsFeasible)
+	{
+		for (const FTaskAssignment& Assignment : Result.Assignments)
+		{
+			TWeakObjectPtr<AUAVPawn>* PawnPtr = AgentRegistry.Find(Assignment.AgentID);
+			if (PawnPtr && PawnPtr->IsValid())
+			{
+				AUAVPawn* Pawn = PawnPtr->Get();
+				UMissionComponent* Mission = Pawn->GetMissionComponent();
+				if (Mission)
+				{
+					// 查找任务描述
+					for (const FTaskDescriptor& Task : Tasks)
+					{
+						if (Task.TaskID == Assignment.TaskID)
+						{
+							Mission->ClearWaypoints();
+							FMissionWaypoint WP;
+							WP.Position = Task.TargetLocation;
+							WP.DesiredSpeed = 1000.0f; // 默认速度
+							Mission->AddMissionWaypoint(WP);
+							Mission->StartMission();
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	UE_LOG(LogUAVMultiAgent, Log, TEXT("[AgentManager] Submitted %d tasks, %d assignments"),
+		Tasks.Num(), Result.Assignments.Num());
+
+	return Result;
+}
+
+FTaskAllocationResult AMultiAgentGameMode::TriggerReplan(const FString& Reason)
+{
+	UE_LOG(LogUAVMultiAgent, Log, TEXT("[AgentManager] Replan triggered: %s"), *Reason);
+
+	if (!TaskAllocatorInstance || !TaskAllocatorInstance->HasValidAllocation())
+	{
+		FTaskAllocationResult EmptyResult;
+		return EmptyResult;
+	}
+
+	// 获取当前 Agent 状态
+	TArray<FAgentStateSnapshot> CurrentStates = GetAllAgentStates();
+	TArray<FUAVCapability> Capabilities = UTaskAllocator::DeriveCapabilities(CurrentStates);
+
+	// 使用当前分配进行重规划
+	return TaskAllocatorInstance->Reallocate(
+		TaskAllocatorInstance->GetCurrentAllocation(),
+		TArray<FTaskDescriptor>(), // 无新任务
+		TArray<int32>(),           // 无失败 Agent
+		CurrentStates,
+		Capabilities,
+		TaskAllocationConfig);
+}
+
+FTaskAllocationResult AMultiAgentGameMode::GetCurrentTaskAllocation() const
+{
+	if (TaskAllocatorInstance)
+	{
+		return TaskAllocatorInstance->GetCurrentAllocation();
+	}
+	FTaskAllocationResult EmptyResult;
+	return EmptyResult;
+}
+
+// ---- 编队计算 ----
 
 TArray<FVector> AMultiAgentGameMode::ComputeFormationOffsets(int32 NumAgents) const
 {

@@ -5,10 +5,13 @@
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
 #include "MultiAgentTypes.h"
+#include "TaskAllocationTypes.h"
 #include "AgentManager.generated.h"
 
 class AUAVPawn;
 class UJointNMPCSolver;
+class UTaskAllocator;
+class UTaskMonitor;
 
 /**
  * 多机协同 GameMode
@@ -119,6 +122,36 @@ public:
 	 */
 	bool GetJointNMPCCache(int32 AgentID, FVector& OutAcceleration) const;
 
+	// ---- 任务分配 ----
+
+	/**
+	 * 获取任务分配器
+	 */
+	UTaskAllocator* GetTaskAllocator() const { return TaskAllocatorInstance; }
+
+	/**
+	 * 获取任务监控器
+	 */
+	UTaskMonitor* GetTaskMonitor() const { return TaskMonitorInstance; }
+
+	/**
+	 * 提交任务池（触发分配求解）
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MultiAgent|TaskAllocation")
+	FTaskAllocationResult SubmitTasks(const TArray<FTaskDescriptor>& Tasks);
+
+	/**
+	 * 触发重规划
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MultiAgent|TaskAllocation")
+	FTaskAllocationResult TriggerReplan(const FString& Reason);
+
+	/**
+	 * 获取当前分配
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MultiAgent|TaskAllocation")
+	FTaskAllocationResult GetCurrentTaskAllocation() const;
+
 	// ---- 配置 ----
 
 	// 编队配置
@@ -132,6 +165,14 @@ public:
 	// CBF-QP 默认配置（分配给每个 Agent）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MultiAgent")
 	FCBFQPConfig DefaultCBFQPConfig;
+
+	// 任务分配配置
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MultiAgent|TaskAllocation")
+	FTaskAllocationConfig TaskAllocationConfig;
+
+	// 任务监控配置
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MultiAgent|TaskAllocation")
+	FTaskMonitorConfig TaskMonitorConfig;
 
 	// Agent 状态缓存刷新间隔 (秒)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MultiAgent")
@@ -155,6 +196,14 @@ private:
 	// 联合 NMPC 求解器实例
 	UPROPERTY()
 	TObjectPtr<UJointNMPCSolver> JointNMPCSolverInstance;
+
+	// 任务分配器实例
+	UPROPERTY()
+	TObjectPtr<UTaskAllocator> TaskAllocatorInstance;
+
+	// 任务监控器实例
+	UPROPERTY()
+	TObjectPtr<UTaskMonitor> TaskMonitorInstance;
 
 	// 联合 NMPC 求解频率累加器
 	float JointNMPCSolveAccumulator = 0.0f;

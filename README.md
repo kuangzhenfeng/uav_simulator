@@ -269,7 +269,7 @@ Script\test.bat
 | Phase 10 | NMPC 全程接管重构（50Hz 全程控制，消除模式切换） | 已完成 |
 | Phase 11 | 控制器优化与线性MPC（前馈、自适应、LinearMPC） | 已完成 |
 | Phase 12 | 多机协同与安全滤波（联合 NMPC、CBF-QP、编队控制） | 已完成 |
-| Phase 13 | 任务分配与联合优化（MILP/MIQP/MINLP、联合轨迹优化） | 计划中 |
+| Phase 13 | 任务分配与联合优化（MILP 求解器、任务监控与重规划） | 已完成 |
 | Phase 14 | 环境与优化 | 计划中 |
 
 ### 目标架构
