@@ -7,6 +7,7 @@
 #include "UAVTypes.h"
 #include "UAVProductTypes.h"
 #include "../Planning/NMPCAvoidance.h"
+#include "../MultiAgent/MultiAgentTypes.h"
 #include "UAVPawn.generated.h"
 
 class UUAVDynamics;
@@ -24,6 +25,10 @@ class UStabilityScorer;
 class UControlParameterTuner;
 class UNMPCAvoidance;
 class ULinearMPCAvoidance;
+class UAgentCommunicationComponent;
+class UFormationComponent;
+class UCBFQPFilter;
+class AMultiAgentGameMode;
 
 /**
  * 无人机Pawn类
@@ -135,6 +140,24 @@ public:
 	// NMPC stuck 状态查询
 	bool IsNMPCStuck() const { return bNMPCStuck; }
 
+	// ---- 多机协同接口 ----
+
+	// 获取 AgentID（-1 表示未注册/单机模式）
+	UFUNCTION(BlueprintCallable, Category = "MultiAgent")
+	int32 GetAgentID() const { return AgentID; }
+
+	// 是否处于多机模式
+	UFUNCTION(BlueprintCallable, Category = "MultiAgent")
+	bool IsMultiAgentMode() const { return bIsMultiAgentMode; }
+
+	// 获取通信组件
+	UFUNCTION(BlueprintCallable, Category = "MultiAgent")
+	UAgentCommunicationComponent* GetCommunicationComponent() const { return CommunicationComponent; }
+
+	// 获取编队控制组件
+	UFUNCTION(BlueprintCallable, Category = "MultiAgent")
+	UFormationComponent* GetFormationComponent() const { return FormationComponent; }
+
 protected:
 	// 根组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
@@ -187,6 +210,14 @@ protected:
 	// PID调参组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
 	TObjectPtr<UControlParameterTuner> ParameterTunerComponent;
+
+	// 多机通信组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MultiAgent Components")
+	TObjectPtr<UAgentCommunicationComponent> CommunicationComponent;
+
+	// 编队控制组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MultiAgent Components")
+	TObjectPtr<UFormationComponent> FormationComponent;
 
 	// NMPC 避障组件（全程接管轨迹跟踪+避障）
 	UPROPERTY()
@@ -246,6 +277,23 @@ private:
 	// 缓存 NMPC 修正目标位置，用于障碍物感知偏差计算
 	FVector CachedNMPCCorrectedTarget = FVector::ZeroVector;
 	bool bHasCachedNMPCTarget = false;
+
+	// ---- 多机协同私有状态 ----
+
+	// Agent 唯一标识（由 AgentManager 分配）
+	int32 AgentID = -1;
+
+	// 是否处于多机模式
+	bool bIsMultiAgentMode = false;
+
+	// CBF-QP 安全滤波器实例
+	UPROPERTY()
+	TObjectPtr<UCBFQPFilter> CBFQPFilter;
+
+	// CBF-QP 配置
+	FCBFQPConfig CBFQPConfig;
+
+	// ---- 原有私有方法 ----
 
 	// 更新传感器数据
 	void UpdateSensors(float DeltaTime);

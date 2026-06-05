@@ -19,6 +19,10 @@
 #include "../Debug/ControlParameterTuner.h"
 #include "../Planning/NMPCAvoidance.h"
 #include "../Planning/LinearMPCAvoidance.h"
+#include "../MultiAgent/AgentCommunicationComponent.h"
+#include "../MultiAgent/FormationComponent.h"
+#include "../MultiAgent/CBFQPFilter.h"
+#include "../MultiAgent/AgentManager.h"
 #include "../Utility/Filter.h"
 #include "../Utility/Debug.h"
 #include "GameFramework/PlayerController.h"
@@ -63,6 +67,12 @@ AUAVPawn::AUAVPawn()
 
 	// 创建PID调参组件
 	ParameterTunerComponent = CreateDefaultSubobject<UControlParameterTuner>(TEXT("ParameterTuner"));
+
+	// 创建多机通信组件
+	CommunicationComponent = CreateDefaultSubobject<UAgentCommunicationComponent>(TEXT("CommunicationComponent"));
+
+	// 创建编队控制组件
+	FormationComponent = CreateDefaultSubobject<UFormationComponent>(TEXT("FormationComponent"));
 
 	// 初始化状态
 	CurrentState = FUAVState();
@@ -123,6 +133,17 @@ void AUAVPawn::BeginPlay()
 		NMPCComponent->Config.ObstacleInfluenceDistance = 3500.0f; // 感知范围 35m，提前规划
 		NMPCComponent->Config.ObstacleAlpha = 0.13f;           // 衰减系数，平衡影响范围与梯度强度
 		NMPCComponent->Config.MaxObstacleCostPerStep = 1800.0f; // 单步障碍物代价上限
+	}
+
+	// 多机协同注册
+	AMultiAgentGameMode* MultiAgentGM = GetWorld()->GetAuthGameMode<AMultiAgentGameMode>();
+	if (MultiAgentGM)
+	{
+		AgentID = MultiAgentGM->RegisterAgent(this);
+		bIsMultiAgentMode = true;
+		CBFQPFilter = NewObject<UCBFQPFilter>(this);
+		CBFQPConfig = MultiAgentGM->DefaultCBFQPConfig;
+		UE_LOG(LogUAVActor, Log, TEXT("[MultiAgent] Registered as Agent %d"), AgentID);
 	}
 
 }
@@ -724,6 +745,25 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			// 紧急制动层：基于物理制动距离的最后防线
 			EffectiveAccel = ApplyEmergencyBraking(EffectiveAccel);
 
+
+			// CBF-QP 安全滤波（多机模式：保证机间安全距离）
+			if (bIsMultiAgentMode && CBFQPFilter && CBFQPConfig.bEnabled)
+			{
+				TArray<FAgentStateSnapshot> NeighborStates =
+					CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 6.0f);
+				if (NeighborStates.Num() > 0)
+				{
+					FCBFQPResult CBFResult = CBFQPFilter->Filter(
+						EffectiveAccel, CurrentState, NeighborStates, CBFQPConfig);
+					if (CBFResult.bWasFiltered)
+					{
+						UE_LOG(LogUAVMultiAgent, Verbose,
+							TEXT("[CBF-QP] Agent %d: filtered accel, minH=%.0f"),
+							AgentID, CBFResult.MinHValue);
+					}
+					EffectiveAccel = CBFResult.SafeAcceleration;
+				}
+			}
 			// 计算期望角加速度（用于前馈控制）
 			FRotator DesiredAngularAccel = ComputeAngularAccelerationFromLinearAccel(
 				EffectiveAccel, CurrentState.Rotation.Yaw);
