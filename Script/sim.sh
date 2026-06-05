@@ -28,7 +28,7 @@ echo "========================================"
 KILLER_PID=$!
 
 echo "Starting UE5 (will be stopped after ${SIM_DURATION}s real time)..."
-"$UE_EDITOR" "$PROJECT_PATH" -game -NullRHI -NoSound -NoSplash -unattended -nopause -NOSAVECONFIG -ExecCmds="slomo $SLOMO" -silent -LogCmds="Global Warning, LogUAVActor Log, LogUAVPlanning Log, LogUAVMission Log, LogUAVAI Log, LogUAVAttitude Log" >/dev/null 2>&1 || true
+"$UE_EDITOR" "$PROJECT_PATH" -game -NullRHI -NoSound -NoSplash -unattended -nopause -NOSAVECONFIG -ExecCmds="slomo $SLOMO" -silent -LogCmds="Global Warning, LogUAVActor Log, LogUAVPlanning Log, LogUAVMission Log, LogUAVAI Log, LogUAVAttitude Log, LogUAVMultiAgent Log" >/dev/null 2>&1 || true
 
 # Kill the background killer if still running
 kill $KILLER_PID 2>/dev/null || true

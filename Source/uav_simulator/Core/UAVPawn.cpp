@@ -80,6 +80,17 @@ AUAVPawn::AUAVPawn()
 
 	// 创建风场组件（Phase 14: 环境模拟）
 	WindFieldComponent = CreateDefaultSubobject<UWindField>(TEXT("WindField"));
+	// 默认风场配置：恒定微风 + 标准大气阻力参数
+	{
+		FWindConfig DefaultWindConfig;
+		DefaultWindConfig.bEnabled = true;
+		DefaultWindConfig.WindType = EWindFieldType::Constant;
+		DefaultWindConfig.SteadyWindVelocity = FVector(300.0f, 0.0f, 0.0f); // X 方向 300 cm/s
+		DefaultWindConfig.AirDensity = 1.225f;
+		DefaultWindConfig.DragArea = 0.04f;
+		DefaultWindConfig.DragCoefficient = 1.0f;
+		WindFieldComponent->SetWindConfig(DefaultWindConfig);
+	}
 
 	// 创建气压计传感器
 	BarometerSensor = CreateDefaultSubobject<UBarometerSensor>(TEXT("BarometerSensor"));
