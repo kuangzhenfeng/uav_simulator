@@ -3,6 +3,7 @@
 #include "AnemometerSensor.h"
 #include "../Environment/WindField.h"
 #include "../Debug/UAVLogConfig.h"
+#include "../Utility/Filter.h"
 
 UAnemometerSensor::UAnemometerSensor()
 {
@@ -58,6 +59,10 @@ void UAnemometerSensor::UpdateSensor(const FUAVState& TrueState, float DeltaTime
 	{
 		CurrentData.WindDirection = 0.0f;
 	}
+
+		UE_LOG_THROTTLE(1.0, LogUAVSensor, Log, TEXT("[Anemometer] Speed=%.0f Direction=%.1f Wind=(%.0f,%.0f,%.0f)"),
+			CurrentData.WindSpeed, CurrentData.WindDirection,
+			CurrentData.WindVelocity.X, CurrentData.WindVelocity.Y, CurrentData.WindVelocity.Z);
 }
 
 float UAnemometerSensor::AddGaussianNoise(float Value, float StdDev) const

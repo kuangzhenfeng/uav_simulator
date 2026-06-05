@@ -2,6 +2,7 @@
 
 #include "MagnetometerSensor.h"
 #include "../Debug/UAVLogConfig.h"
+#include "../Utility/Filter.h"
 
 UMagnetometerSensor::UMagnetometerSensor()
 {
@@ -49,6 +50,9 @@ void UMagnetometerSensor::UpdateSensor(const FUAVState& TrueState, float DeltaTi
 	{
 		CurrentData.Heading += 360.0f;
 	}
+
+	UE_LOG_THROTTLE(1.0, LogUAVSensor, Log, TEXT("[Magnetometer] Heading=%.1f Mag=(%.1f,%.1f,%.1f)"),
+		CurrentData.Heading, CurrentData.MagneticField.X, CurrentData.MagneticField.Y, CurrentData.MagneticField.Z);
 }
 
 float UMagnetometerSensor::AddGaussianNoise(float Value, float StdDev) const

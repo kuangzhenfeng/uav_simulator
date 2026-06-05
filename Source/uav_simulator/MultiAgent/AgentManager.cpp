@@ -9,6 +9,8 @@
 #include "TaskMonitor.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Planning/ObstacleManager.h"
+#include "uav_simulator/Planning/TrajectoryTracker.h"
+#include "uav_simulator/Utility/Filter.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAgentManager, Log, All);
 
@@ -37,16 +39,14 @@ void AMultiAgentGameMode::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] Tick start, dt=%.4f, agents=%d"), DeltaTime, AgentRegistry.Num());
+	UE_LOG_THROTTLE(5.0, LogUAVMultiAgent, Log, TEXT("[AgentManager] Tick, dt=%.4f, agents=%d"), DeltaTime, AgentRegistry.Num());
 
 	// 刷新状态缓存
 	StateCacheAccumulator += DeltaTime;
 	if (StateCacheAccumulator >= StateCacheUpdateInterval)
 	{
 		StateCacheAccumulator = 0.0f;
-		UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] RefreshStateCache start"));
 		RefreshStateCache();
-		UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] RefreshStateCache done"));
 	}
 
 	// 联合 NMPC 求解（仅 Leader 触发）
@@ -57,21 +57,16 @@ void AMultiAgentGameMode::Tick(float DeltaTime)
 		if (JointNMPCSolveAccumulator >= SolveInterval)
 		{
 			JointNMPCSolveAccumulator = 0.0f;
-			UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] SolveJointNMPC start"));
 			SolveJointNMPC();
-			UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] SolveJointNMPC done"));
 		}
 	}
 
 	// 任务监控更新
 	if (TaskMonitorInstance && AgentRegistry.Num() > 0)
 	{
-		UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] TaskMonitor Update start"));
 		TaskMonitorInstance->Update(DeltaTime, GetAllAgentStates());
-		UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] TaskMonitor Update done"));
 	}
 
-	UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] Tick end"));
 }
 
 int32 AMultiAgentGameMode::RegisterAgent(AUAVPawn* Agent)
@@ -268,7 +263,7 @@ bool AMultiAgentGameMode::GetJointNMPCCache(int32 AgentID, FVector& OutAccelerat
 
 void AMultiAgentGameMode::RefreshStateCache()
 {
-	UE_LOG(LogUAVMultiAgent, Verbose, TEXT("[AgentManager] RefreshStateCache: AgentRegistry.Num=%d, StateCache.Num=%d"),
+	UE_LOG_THROTTLE(5.0, LogUAVMultiAgent, Log, TEXT("[AgentManager] RefreshStateCache: AgentRegistry.Num=%d, StateCache.Num=%d"),
 		AgentRegistry.Num(), StateCache.Num());
 
 	// 拷贝 AgentRegistry 的 key 集合，避免迭代时修改
@@ -312,9 +307,23 @@ void AMultiAgentGameMode::SolveJointNMPC()
 		if (PawnPtr && PawnPtr->IsValid())
 		{
 			AUAVPawn* Pawn = PawnPtr->Get();
-			// TODO: 从 TrajectoryTracker 采样参考点
-			// 暂时用当前位置作为参考
-			RefPoints.Add(Pawn->GetUAVState().Position);
+			// 从 TrajectoryTracker 采样未来 N+1 个参考点
+			UTrajectoryTracker* Tracker = Pawn->GetTrajectoryTracker();
+			if (Tracker && Tracker->IsTracking())
+			{
+				int32 N = JointNMPCConfig.BaseConfig.PredictionSteps;
+				float Dt = JointNMPCConfig.BaseConfig.GetDt();
+				float CurrentTime = Tracker->GetCurrentTime();
+				for (int32 i = 0; i <= N; ++i)
+				{
+					RefPoints.Add(Tracker->GetDesiredState(CurrentTime + i * Dt).Position);
+				}
+			}
+			else
+			{
+				// 无轨迹跟踪时回退到当前位置
+				RefPoints.Add(Pawn->GetUAVState().Position);
+			}
 		}
 		RefPointsPerAgent.Add(RefPoints);
 	}
@@ -348,6 +357,8 @@ void AMultiAgentGameMode::SolveJointNMPC()
 			SetJointNMPCCache(AllStates[i].AgentID, Result.OptimalAccelerations[i]);
 		}
 	}
+		UE_LOG(LogUAVMultiAgent, Log, TEXT("[JointNMPC] Solved: agents=%d cost=%.1f converged=%s"),
+			AllStates.Num(), Result.TotalCost, Result.bConverged ? TEXT("Y") : TEXT("N"));
 }
 
 // ---- 任务分配 ----

@@ -805,7 +805,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 						EffectiveAccel, CurrentState, NeighborStates, CBFQPConfig);
 					if (CBFResult.bWasFiltered)
 					{
-						UE_LOG(LogUAVMultiAgent, Verbose,
+						UE_LOG(LogUAVMultiAgent, Log,
 							TEXT("[CBF-QP] Agent %d: filtered accel, minH=%.0f"),
 							AgentID, CBFResult.MinHValue);
 					}

@@ -25,7 +25,7 @@ start /MIN "" cmd /c "ping -n %PING_COUNT% 127.0.0.1 >nul & taskkill /F /IM Unre
 
 REM Run UE5 directly (blocking) - suppress verbose logs
 echo Starting UE5 (will be stopped after %SIM_DURATION%s real time)...
-"%UE_EDITOR%" "%PROJECT_PATH%" -game -NullRHI -NoSound -NoSplash -unattended -nopause -NOSAVECONFIG -ExecCmds="slomo %SLOMO%" -silent -LogCmds="Global Warning, LogUAVActor Log, LogUAVPlanning Log, LogUAVMission Log, LogUAVAI Log, LogUAVAttitude Log, LogUAVMultiAgent Log" >nul 2>&1
+"%UE_EDITOR%" "%PROJECT_PATH%" -game -NullRHI -NoSound -NoSplash -unattended -nopause -NOSAVECONFIG -ExecCmds="slomo %SLOMO%" -silent -LogCmds="Global Warning, LogUAVActor Log, LogUAVPlanning Log, LogUAVMission Log, LogUAVAI Log, LogUAVAttitude Log, LogUAVMultiAgent Log, LogUAVSensor Log" >nul 2>&1
 
 REM Kill lingering killer process so MSYS bash does not hang
 taskkill /F /IM ping.exe >nul 2>&1

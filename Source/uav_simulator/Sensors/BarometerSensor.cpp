@@ -2,6 +2,7 @@
 
 #include "BarometerSensor.h"
 #include "../Debug/UAVLogConfig.h"
+#include "../Utility/Filter.h"
 
 UBarometerSensor::UBarometerSensor()
 {
@@ -46,6 +47,9 @@ void UBarometerSensor::UpdateSensor(const FUAVState& TrueState, float DeltaTime)
 
 	// 温度模拟（标准大气递减率: -6.5°C/km）
 	CurrentData.Temperature = AddGaussianNoise(20.0f - AltitudeM * 0.0065f, TemperatureNoiseStdDev);
+
+	UE_LOG_THROTTLE(1.0, LogUAVSensor, Log, TEXT("[Barometer] Alt=%.0f Pressure=%.2f Temp=%.1f"),
+		CurrentData.Altitude, CurrentData.Pressure, CurrentData.Temperature);
 }
 
 float UBarometerSensor::AddGaussianNoise(float Value, float StdDev) const

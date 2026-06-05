@@ -5,6 +5,7 @@
 #include "EngineUtils.h"
 #include "Logging/LogVerbosity.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
+#include "uav_simulator/Utility/Filter.h"
 
 UObstacleManager::UObstacleManager()
 {
@@ -48,7 +49,7 @@ int32 UObstacleManager::RegisterObstacle(const FObstacleInfo& Obstacle)
 	Obstacles.Add(NewObstacle);
 	OnObstacleDetected.Broadcast(NewObstacle);
 
-	UE_LOG(LogUAVPlanning, Verbose, TEXT("Obstacle registered: ID=%d, Type=%d, Center=%s, Extents=%s"),
+	UE_LOG(LogUAVPlanning, Log, TEXT("Obstacle registered: ID=%d, Type=%d, Center=%s, Extents=%s"),
 		NewObstacle.ObstacleID,
 		(int32)NewObstacle.Type,
 		*NewObstacle.Center.ToString(),
@@ -348,7 +349,7 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 		return -1;
 	}
 
-	UE_LOG(LogUAVPlanning, Verbose, TEXT("[ObstacleManager] Registering perceived obstacle from actor: %s"), *Actor->GetName());
+	UE_LOG_THROTTLE(5.0, LogUAVPlanning, Log, TEXT("[ObstacleManager] Registering perceived obstacle from actor: %s"), *Actor->GetName());
 
 	FVector Origin, BoxExtent;
 	Actor->GetActorBounds(false, Origin, BoxExtent);
@@ -393,7 +394,7 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 	Obstacle.Extents = ComputeObstacleExtentsFromBounds(Type, BoxExtent);
 
 	// 输出调试日志：Actor边界信息
-	UE_LOG(LogUAVPlanning, Verbose, TEXT("[ObstacleManager] Actor Bounds: Origin=%s, Extent=%s"),
+	UE_LOG_THROTTLE(5.0, LogUAVPlanning, Log, TEXT("[ObstacleManager] Actor Bounds: Origin=%s, Extent=%s"),
 		*Origin.ToString(), *BoxExtent.ToString());
 
 	return RegisterPerceivedObstacle(Obstacle);
@@ -420,7 +421,7 @@ int32 UObstacleManager::RemoveStalePerceivedObstacles(float MaxAge)
 	{
 		if (Obstacles[i].bIsPerceived && (CurrentTime - Obstacles[i].LastPerceivedTime) > MaxAge)
 		{
-			UE_LOG(LogUAVPlanning, Verbose, TEXT("[ObstacleManager] Removing stale perceived obstacle: ID=%d, Age=%.1fs"),
+			UE_LOG_THROTTLE(5.0, LogUAVPlanning, Log, TEXT("[ObstacleManager] Removing stale perceived obstacle: ID=%d, Age=%.1fs"),
 				Obstacles[i].ObstacleID, CurrentTime - Obstacles[i].LastPerceivedTime);
 			Obstacles.RemoveAt(i);
 			RemovedCount++;

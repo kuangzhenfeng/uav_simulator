@@ -92,17 +92,17 @@ void UPositionController::ComputeControl(const FUAVState& CurrentState, const FV
 	OutDesiredAttitude = FRotator(DesiredPitch, DesiredYaw, DesiredRoll);
 
 	// 调试日志：输出位置控制信息（每10帧1次）
-	UE_LOG_EVERY_N(10, LogUAVPosition, Verbose, TEXT("Target: (%.1f,%.1f,%.1f) | Current: (%.1f,%.1f,%.1f) | Error: (%.1f,%.1f,%.1f)"),
+	UE_LOG_EVERY_N(10, LogUAVPosition, Log, TEXT("Target: (%.1f,%.1f,%.1f) | Current: (%.1f,%.1f,%.1f) | Error: (%.1f,%.1f,%.1f)"),
 		InTargetPosition.X, InTargetPosition.Y, InTargetPosition.Z,
 		CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
 		PositionError.X, PositionError.Y, PositionError.Z);
 
-	UE_LOG_EVERY_N(10, LogUAVPosition, Verbose, TEXT("Velocity: Desired: (%.1f,%.1f,%.1f) | Current: (%.1f,%.1f,%.1f) | Error: (%.1f,%.1f,%.1f)"),
+	UE_LOG_EVERY_N(10, LogUAVPosition, Log, TEXT("Velocity: Desired: (%.1f,%.1f,%.1f) | Current: (%.1f,%.1f,%.1f) | Error: (%.1f,%.1f,%.1f)"),
 		DesiredVelocity.X, DesiredVelocity.Y, DesiredVelocity.Z,
 		CurrentState.Velocity.X, CurrentState.Velocity.Y, CurrentState.Velocity.Z,
 		VelocityError.X, VelocityError.Y, VelocityError.Z);
 
-	UE_LOG_EVERY_N(10, LogUAVPosition, Verbose, TEXT("Output: Thrust: %.3f | Attitude: R=%.2f P=%.2f Y=%.2f"),
+	UE_LOG_EVERY_N(10, LogUAVPosition, Log, TEXT("Output: Thrust: %.3f | Attitude: R=%.2f P=%.2f Y=%.2f"),
 		OutThrust, DesiredRoll, DesiredPitch, DesiredYaw);
 
 	// 更新积分项（抗饱和）

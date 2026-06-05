@@ -87,7 +87,7 @@ bool UBTService_UAVPathPlanning::ShouldReplan(const FVector& CurrentTarget) cons
 {
 	float Distance = FVector::Dist(CurrentTarget, LastTargetLocation);
 	bool bShouldReplan = Distance > ReplanningThreshold;
-	UE_LOG(LogUAVAI, Verbose, TEXT("ShouldReplan: Distance=%.1f, Threshold=%.1f, Result=%s"),
+	UE_LOG(LogUAVAI, Log, TEXT("ShouldReplan: Distance=%.1f, Threshold=%.1f, Result=%s"),
 		Distance, ReplanningThreshold, bShouldReplan ? TEXT("YES") : TEXT("NO"));
 	return bShouldReplan;
 }

@@ -204,7 +204,7 @@ TArray<float> UTrajectoryOptimizer::ComputeTimeAllocation(const TArray<FVector>&
 	for (int32 i = 0; i < Waypoints.Num() - 1; ++i)
 	{
 		float Distance = FVector::Dist(Waypoints[i], Waypoints[i + 1]);
-		UE_LOG(LogUAVPlanning, Verbose, TEXT("TrajectoryOptimizer: Segment %d distance: %.3f"), i, Distance);
+		UE_LOG(LogUAVPlanning, Log, TEXT("TrajectoryOptimizer: Segment %d distance: %.3f"), i, Distance);
 
 		// 使用梯形速度规划计算时间
 		// 加速阶段时间
@@ -225,7 +225,7 @@ TArray<float> UTrajectoryOptimizer::ComputeTimeAllocation(const TArray<FVector>&
 			float CruiseTime = CruiseDist / MaxVelocity;
 			SegmentTime = 2.0f * AccelTime + CruiseTime;
 		}
-		UE_LOG(LogUAVPlanning, Verbose, TEXT("TrajectoryOptimizer: Segment %d time: %.3f"), i, SegmentTime);
+		UE_LOG(LogUAVPlanning, Log, TEXT("TrajectoryOptimizer: Segment %d time: %.3f"), i, SegmentTime);
 
 		// 添加安全余量
 		SegmentTime *= 1.05f;

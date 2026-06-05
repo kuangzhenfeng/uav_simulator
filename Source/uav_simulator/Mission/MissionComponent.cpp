@@ -99,7 +99,7 @@ void UMissionComponent::AddMissionWaypoint(const FMissionWaypoint& Waypoint)
 		SetMissionState(EMissionState::Ready);
 	}
 
-	UE_LOG(LogUAVMission, Verbose, TEXT("AddMissionWaypoint: Added waypoint at %s, total: %d"),
+	UE_LOG(LogUAVMission, Log, TEXT("AddMissionWaypoint: Added waypoint at %s, total: %d"),
 		*Waypoint.Position.ToString(), Waypoints.Num());
 }
 
@@ -406,7 +406,7 @@ void UMissionComponent::SetMissionState(EMissionState NewState)
 
 	OnMissionStateChanged.Broadcast(OldState, NewState);
 
-	UE_LOG(LogUAVMission, Verbose, TEXT("SetMissionState: %d -> %d"),
+	UE_LOG(LogUAVMission, Log, TEXT("SetMissionState: %d -> %d"),
 		static_cast<int32>(OldState), static_cast<int32>(NewState));
 }
 

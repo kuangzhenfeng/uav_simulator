@@ -169,7 +169,7 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 		UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Generating trajectory with %d waypoints"), Waypoints.Num());
 		for (int32 i = 0; i < Waypoints.Num(); ++i)
 		{
-			UE_LOG(LogUAVAI, Verbose, TEXT("  Waypoint[%d]: (%.1f, %.1f, %.1f)"),
+			UE_LOG(LogUAVAI, Log, TEXT("  Waypoint[%d]: (%.1f, %.1f, %.1f)"),
 				i, Waypoints[i].X, Waypoints[i].Y, Waypoints[i].Z);
 		}
 
