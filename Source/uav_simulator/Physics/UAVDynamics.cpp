@@ -76,11 +76,15 @@ FUAVState UUAVDynamics::ComputeDerivative(const FUAVState& State, float Time)
 	// 总力（世界坐标系）
 	FVector WorldForce = WorldThrustForce + GravityForce + DragForce;
 
+	// 外部风阻力加速度（由 WindField 组件提供）
+	// 直接作为加速度叠加，不除以质量（WindField 内部已计算 F/m）
+	FVector WindAccel = ExternalWindAcceleration;
+
 	// 位置导数 = 速度
 	Derivative.Position = State.Velocity;
 
 	// 速度导数 = 加速度（世界坐标系）
-	FVector WorldAcceleration = WorldForce / Mass;
+	FVector WorldAcceleration = WorldForce / Mass + WindAccel;
 	Derivative.Velocity = WorldAcceleration;
 
 	// 保存线性加速度（转换到机体坐标系，用于 IMU 仿真）

@@ -41,6 +41,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
 	FVector GetLinearAcceleration() const { return LinearAcceleration; }
 
+	// 设置外部风阻力加速度（由 WindField 组件提供）
+	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
+	void SetExternalWindAcceleration(const FVector& InWindAccel) { ExternalWindAcceleration = InWindAccel; }
+
+	// 获取质量 (kg)
+	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
+	float GetMass() const { return Mass; }
+
 	// 批量设置物理参数（供型号注册表调用）
 	void SetPhysicsParams(float InMass, float InArmLength, const FVector& InMomentOfInertia, float InMaxThrust)
 	{
@@ -104,6 +112,9 @@ protected:
 
 	// 线性加速度（机体坐标系，用于 IMU 仿真）
 	FVector LinearAcceleration = FVector::ZeroVector;
+
+	// 外部风阻力加速度（cm/s²，世界坐标系）
+	FVector ExternalWindAcceleration = FVector::ZeroVector;
 
 private:
 	// 计算总推力和力矩

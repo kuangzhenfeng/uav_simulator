@@ -29,6 +29,10 @@ class UAgentCommunicationComponent;
 class UFormationComponent;
 class UCBFQPFilter;
 class AMultiAgentGameMode;
+class UWindField;
+class UBarometerSensor;
+class UMagnetometerSensor;
+class UAnemometerSensor;
 
 /**
  * 无人机Pawn类
@@ -218,6 +222,22 @@ protected:
 	// 编队控制组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MultiAgent Components")
 	TObjectPtr<UFormationComponent> FormationComponent;
+
+	// 风场组件（Phase 14: 环境模拟）
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Environment Components")
+	TObjectPtr<UWindField> WindFieldComponent;
+
+	// 气压计传感器
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensor Components")
+	TObjectPtr<UBarometerSensor> BarometerSensor;
+
+	// 磁力计传感器
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensor Components")
+	TObjectPtr<UMagnetometerSensor> MagnetometerSensor;
+
+	// 风速计传感器
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensor Components")
+	TObjectPtr<UAnemometerSensor> AnemometerSensor;
 
 	// NMPC 避障组件（全程接管轨迹跟踪+避障）
 	UPROPERTY()

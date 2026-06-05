@@ -25,6 +25,10 @@
 #include "../MultiAgent/AgentManager.h"
 #include "../Utility/Filter.h"
 #include "../Utility/Debug.h"
+#include "../Environment/WindField.h"
+#include "../Sensors/BarometerSensor.h"
+#include "../Sensors/MagnetometerSensor.h"
+#include "../Sensors/AnemometerSensor.h"
 #include "GameFramework/PlayerController.h"
 
 AUAVPawn::AUAVPawn()
@@ -73,6 +77,21 @@ AUAVPawn::AUAVPawn()
 
 	// 创建编队控制组件
 	FormationComponent = CreateDefaultSubobject<UFormationComponent>(TEXT("FormationComponent"));
+
+	// 创建风场组件（Phase 14: 环境模拟）
+	WindFieldComponent = CreateDefaultSubobject<UWindField>(TEXT("WindField"));
+
+	// 创建气压计传感器
+	BarometerSensor = CreateDefaultSubobject<UBarometerSensor>(TEXT("BarometerSensor"));
+	Sensors.Add(BarometerSensor);
+
+	// 创建磁力计传感器
+	MagnetometerSensor = CreateDefaultSubobject<UMagnetometerSensor>(TEXT("MagnetometerSensor"));
+	Sensors.Add(MagnetometerSensor);
+
+	// 创建风速计传感器
+	AnemometerSensor = CreateDefaultSubobject<UAnemometerSensor>(TEXT("AnemometerSensor"));
+	Sensors.Add(AnemometerSensor);
 
 	// 初始化状态
 	CurrentState = FUAVState();
@@ -146,6 +165,15 @@ void AUAVPawn::BeginPlay()
 		UE_LOG(LogUAVActor, Log, TEXT("[MultiAgent] Registered as Agent %d"), AgentID);
 	}
 
+	// Phase 14: 环境组件接线
+	// 风速计引用风场组件获取真实风速
+	if (AnemometerSensor && WindFieldComponent)
+	{
+		AnemometerSensor->SetWindField(WindFieldComponent);
+	}
+
+	UE_LOG(LogUAVActor, Log, TEXT("[Environment] WindField + sensors initialized"));
+
 }
 
 void AUAVPawn::SetPayloadMass(float NewPayloadMass)
@@ -168,6 +196,15 @@ void AUAVPawn::Tick(float DeltaTime)
 	while (Remaining > KINDA_SMALL_NUMBER)
 	{
 		const float Step = FMath::Min(Remaining, FixedStep);
+
+		// Phase 14: 计算风阻力加速度并传递给动力学组件
+		if (WindFieldComponent && DynamicsComponent)
+		{
+			FVector WindAccel = WindFieldComponent->ComputeWindDragAcceleration(
+				CurrentState.Velocity, CurrentState.Position, DynamicsComponent->GetMass());
+			DynamicsComponent->SetExternalWindAcceleration(WindAccel);
+		}
+
 		UpdateSensors(Step);
 		UpdateController(Step);
 		UpdatePhysics(Step);
