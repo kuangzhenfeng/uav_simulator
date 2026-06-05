@@ -68,17 +68,25 @@ bool FUAVDynamicsThrustTest::RunTest(const FString& Parameters)
 		UAV_TEST_FLOAT_EQUAL(RetrievedThrusts[i], 1.0f, 0.01f);
 	}
 
-	// 测试最大推力下的加速度
-	FUAVState InitialState;
-	InitialState.Position = FVector(0.0f, 0.0f, 100.0f);
-	InitialState.Velocity = FVector::ZeroVector;
-	InitialState.Rotation = FRotator::ZeroRotator;
-	InitialState.AngularVelocity = FVector::ZeroVector;
+	// 电机动力学模型：一阶惯性环节，MotorSpeeds 从 0 开始需要多帧才能达到目标转速
+	// 需要多次 Update 让电机转速充分上升，推力才能超过重力
+	// T = k_t * ω²，k_t = MaxThrust / MaxMotorSpeed² = 15 / 838² ≈ 2.14e-5
+	// 悬停需要单电机推力 = 1.5*980/4/100 = 3.675N → ω = sqrt(3.675/2.14e-5) ≈ 414 rad/s
+	FUAVState CurrentState;
+	CurrentState.Position = FVector(0.0f, 0.0f, 100.0f);
+	CurrentState.Velocity = FVector::ZeroVector;
+	CurrentState.Rotation = FRotator::ZeroRotator;
+	CurrentState.AngularVelocity = FVector::ZeroVector;
 
-	FUAVState NewState = Dynamics->UpdateDynamics(InitialState, 0.01f);
+	// 多次迭代让电机达到稳态（时间常数 0.02s，50 帧 ≈ 0.5s 足够）
+	for (int32 i = 0; i < 50; ++i)
+	{
+		CurrentState = Dynamics->UpdateDynamics(CurrentState, 0.01f);
+	}
 
-	// 最大推力应该产生向上加速度
-	TestTrue(TEXT("Should accelerate upward with max thrust"), NewState.Velocity.Z > 0.0f);
+	// 最大推力（4 电机全满）远超重力，应产生向上加速度
+	TestTrue(TEXT("Should accelerate upward with max thrust after motor spin-up"),
+		CurrentState.Velocity.Z > 0.0f);
 
 	return true;
 }

@@ -234,10 +234,22 @@ void UAStarPathPlanner::AutoComputeSearchBounds(const FVector& Start, const FVec
 
 FIntVector UAStarPathPlanner::WorldToGrid(const FVector& WorldPos) const
 {
+	// 防止超大浮点值导致 int32 溢出（FLT_MAX/100 远超 INT_MAX）
+	auto SafeFloorToInt = [](float Value, float Resolution) -> int32
+	{
+		float GridCoord = Value / Resolution;
+		if (!FMath::IsFinite(GridCoord) || GridCoord > static_cast<float>(TNumericLimits<int32>::Max()) ||
+			GridCoord < static_cast<float>(TNumericLimits<int32>::Min()))
+		{
+			return 0;
+		}
+		return FMath::FloorToInt(GridCoord);
+	};
+
 	return FIntVector(
-		FMath::FloorToInt(WorldPos.X / GridResolution),
-		FMath::FloorToInt(WorldPos.Y / GridResolution),
-		FMath::FloorToInt(WorldPos.Z / GridResolution)
+		SafeFloorToInt(WorldPos.X, GridResolution),
+		SafeFloorToInt(WorldPos.Y, GridResolution),
+		SafeFloorToInt(WorldPos.Z, GridResolution)
 	);
 }
 

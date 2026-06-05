@@ -5,6 +5,8 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "../Core/UAVTypes.h"
+#include "../MultiAgent/MultiAgentTypes.h"
+#include "../MultiAgent/TaskAllocationTypes.h"
 
 /**
  * UAV Simulator 测试通用工具
@@ -45,6 +47,23 @@ namespace UAVTestCategories
 
 	// Core 子分类
 	static const TCHAR* UAVTypes = TEXT("UAVSimulator.Core.UAVTypes");
+
+	// MultiAgent 子分类
+	static const TCHAR* MultiAgent = TEXT("UAVSimulator.MultiAgent");
+	static const TCHAR* CBFQPFilter = TEXT("UAVSimulator.MultiAgent.CBFQPFilter");
+	static const TCHAR* JointNMPCSolver = TEXT("UAVSimulator.MultiAgent.JointNMPCSolver");
+	static const TCHAR* MILPSolverCat = TEXT("UAVSimulator.MultiAgent.MILPSolver");
+	static const TCHAR* TaskAllocatorCat = TEXT("UAVSimulator.MultiAgent.TaskAllocator");
+	static const TCHAR* TaskMonitorCat = TEXT("UAVSimulator.MultiAgent.TaskMonitor");
+
+	// Environment 子分类
+	static const TCHAR* Environment = TEXT("UAVSimulator.Environment");
+	static const TCHAR* WindField = TEXT("UAVSimulator.Environment.WindField");
+
+	// Sensors 新增子分类
+	static const TCHAR* Barometer = TEXT("UAVSimulator.Sensors.Barometer");
+	static const TCHAR* Magnetometer = TEXT("UAVSimulator.Sensors.Magnetometer");
+	static const TCHAR* Anemometer = TEXT("UAVSimulator.Sensors.Anemometer");
 }
 
 // ==================== 测试标志组合 ====================
@@ -315,5 +334,108 @@ namespace UAVTestHelpers
 			Waypoints.Add(Pos);
 		}
 		return Waypoints;
+		}
+
+		// ==================== MultiAgent 辅助函数 ====================
+
+		/**
+		 * 创建测试用 Agent 状态快照
+		 */
+		inline FAgentStateSnapshot CreateAgentSnapshot(
+			int32 AgentID,
+			const FVector& Position = FVector::ZeroVector,
+			const FVector& Velocity = FVector::ZeroVector,
+			const FRotator& Rotation = FRotator::ZeroRotator,
+			const FVector& TargetPosition = FVector::ZeroVector,
+			const FVector& NMPCAcceleration = FVector::ZeroVector)
+		{
+			FAgentStateSnapshot Snapshot;
+			Snapshot.AgentID = AgentID;
+			Snapshot.State.Position = Position;
+			Snapshot.State.Velocity = Velocity;
+			Snapshot.State.Rotation = Rotation;
+			Snapshot.TargetPosition = TargetPosition;
+			Snapshot.NMPCAcceleration = NMPCAcceleration;
+			Snapshot.Timestamp = 0.0;
+			return Snapshot;
+		}
+
+		/**
+		 * 创建测试用任务描述
+		 */
+		inline FTaskDescriptor CreateTaskDescriptor(
+			int32 TaskID,
+			const FVector& TargetLocation = FVector::ZeroVector,
+			ETaskPriority Priority = ETaskPriority::Normal,
+			float EstimatedDuration = 10.0f,
+			float Reward = 1.0f,
+			float RequiredPayload = 0.0f,
+			int32 RequiredCapabilities = 0)
+		{
+			FTaskDescriptor Task;
+			Task.TaskID = TaskID;
+			Task.TargetLocation = TargetLocation;
+			Task.Priority = Priority;
+			Task.EstimatedDuration = EstimatedDuration;
+			Task.Reward = Reward;
+			Task.RequiredPayload = RequiredPayload;
+			Task.RequiredCapabilities = RequiredCapabilities;
+			return Task;
+		}
+
+		/**
+		 * 创建测试用 UAV 能力描述
+		 */
+		inline FUAVCapability CreateUAVCapability(
+			int32 AgentID,
+			const FVector& Position = FVector::ZeroVector,
+			float MaxSpeed = 2000.0f,
+			float RemainingFlightTime = 600.0f,
+			float MaxPayloadKg = 10.0f,
+			int32 CapabilityMask = 0,
+			float CurrentPayloadMass = 0.0f)
+		{
+			FUAVCapability Cap;
+			Cap.AgentID = AgentID;
+			Cap.CurrentPosition = Position;
+			Cap.MaxSpeed = MaxSpeed;
+			Cap.RemainingFlightTime = RemainingFlightTime;
+			Cap.MaxPayloadKg = MaxPayloadKg;
+			Cap.CapabilityMask = CapabilityMask;
+			Cap.CurrentPayloadMass = CurrentPayloadMass;
+			return Cap;
+		}
+
+		/**
+		 * 创建测试用任务分配条目
+		 */
+		inline FTaskAssignment CreateTaskAssignment(
+			int32 TaskID,
+			int32 AgentID,
+			float StartTime = 0.0f,
+			float CompletionTime = 0.0f,
+			float TravelDistance = 0.0f)
+		{
+			FTaskAssignment Assignment;
+			Assignment.TaskID = TaskID;
+			Assignment.AgentID = AgentID;
+			Assignment.EstimatedStartTime = StartTime;
+			Assignment.EstimatedCompletionTime = CompletionTime;
+			Assignment.EstimatedTravelDistance = TravelDistance;
+			return Assignment;
+		}
+
+		/**
+		 * 创建测试用分配结果
+		 */
+		inline FTaskAllocationResult CreateAllocationResult(
+			const TArray<FTaskAssignment>& Assignments)
+		{
+			FTaskAllocationResult Result;
+			Result.Assignments = Assignments;
+			Result.bIsFeasible = true;
+			Result.TotalCost = 0.0f;
+			Result.Makespan = 0.0f;
+			return Result;
+		}
 	}
-}
