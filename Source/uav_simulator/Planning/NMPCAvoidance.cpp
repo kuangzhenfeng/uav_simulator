@@ -721,8 +721,12 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	Result.bNeedsCorrection = (NeedsCorrectionHoldCount > 0);
 
 	// 卡死判定：控制极小且当前位置确实有障碍物（不能仅靠远处预测）
+	// 增加速度条件：UAV 仍在移动时（Speed > 50cm/s），低控制量是正常的巡航行为，不算卡死
 	const float FirstControlMagnitude = FirstControl.Size();
-	const bool bLowControlStuck = bCurrentHasObs && FirstControlMagnitude < Config.StuckForceThreshold;
+	const float CurrentSpeed = CurrentVelocity.Size();
+	const bool bLowControlStuck = bCurrentHasObs
+		&& FirstControlMagnitude < Config.StuckForceThreshold
+		&& CurrentSpeed < 50.0f;
 	const float SaturationRatio =
 		Config.MaxAcceleration > KINDA_SMALL_NUMBER ? (FirstControlMagnitude / Config.MaxAcceleration) : 0.0f;
 

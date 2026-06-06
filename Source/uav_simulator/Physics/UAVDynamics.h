@@ -33,6 +33,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
 	void SetMotorThrusts(const TArray<float>& InThrusts);
 
+	// 紧急停桨（碰撞触发）
+	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
+	void EmergencyStopMotors();
+
+	// 是否已停桨
+	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
+	bool AreMotorsStopped() const { return bMotorsStopped; }
+
 	// 获取当前电机推力
 	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
 	TArray<float> GetMotorThrusts() const { return MotorThrusts; }
@@ -109,6 +117,9 @@ protected:
 	// 电机转速 (rad/s)
 	UPROPERTY(BlueprintReadOnly, Category = "Motor State")
 	TArray<float> MotorSpeeds;
+
+	// 电机是否已停止
+	bool bMotorsStopped = false;
 
 	// 线性加速度（机体坐标系，用于 IMU 仿真）
 	FVector LinearAcceleration = FVector::ZeroVector;

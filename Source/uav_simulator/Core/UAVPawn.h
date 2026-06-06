@@ -117,6 +117,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Control")
 	EUAVControlMode GetControlMode() const { return ControlMode; }
 
+	// 获取飞行状态
+	UFUNCTION(BlueprintCallable, Category = "UAV|State")
+	EFlightState GetFlightState() const { return FlightState; }
+
+	// 是否已炸机
+	UFUNCTION(BlueprintCallable, Category = "UAV|State")
+	bool IsCrashed() const { return FlightState == EFlightState::Crashed; }
+
 	// 获取轨迹跟踪组件
 	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
 	UTrajectoryTracker* GetTrajectoryTracker() const { return TrajectoryTrackerComponent; }
@@ -263,6 +271,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Control")
 	EUAVControlMode ControlMode = EUAVControlMode::Position;
 
+	// 飞行状态
+	UPROPERTY(BlueprintReadOnly, Category = "UAV State")
+	EFlightState FlightState = EFlightState::Flying;
+
 	// 预定义航点数组（已废弃，请使用 MissionComponent）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Waypoints", meta = (DeprecatedProperty, DeprecationMessage = "Use MissionComponent instead"))
 	TArray<FVector> Waypoints;
@@ -323,6 +335,12 @@ private:
 
 	// 更新物理模型
 	void UpdatePhysics(float DeltaTime);
+
+	// 碰撞检测（与障碍物穿透时触发炸机）
+	void CheckCollision();
+
+	// 触发炸机逻辑
+	void TriggerCrash();
 
 	// NMPC 求解相关
 	bool ShouldSolveNMPC(float DeltaTime);

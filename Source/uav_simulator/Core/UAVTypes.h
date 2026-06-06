@@ -275,6 +275,16 @@ enum class EUAVControlMode : uint8
 };
 
 /**
+ * 无人机飞行状态枚举
+ */
+UENUM(BlueprintType)
+enum class EFlightState : uint8
+{
+	Flying		UMETA(DisplayName = "Flying"),
+	Crashed		UMETA(DisplayName = "Crashed")
+};
+
+/**
  * 规划配置参数
  */
 USTRUCT(BlueprintType)

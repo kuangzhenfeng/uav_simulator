@@ -168,6 +168,31 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		}
 
 		EffectiveTimeScale = FMath::Max(EffectiveTimeScale, TimeScale * ClampedMinScale);
+
+		// 轨迹级卡死检测：UAV 长时间低速且轨迹进度停滞，强制推进轨迹时间
+		// 防止自适应时间缩放崩溃导致 UAV 永远无法到达终点
+		float Speed = GetUAVSpeed(GetOwner());
+		if (Speed < 50.0f && TrackingTime > CurrentTrajectory.TotalDuration * 0.1f)
+		{
+			LowSpeedStuckAccumulator += DeltaTime;
+			if (LowSpeedStuckAccumulator > 3.0f)
+			{
+				// 强制推进轨迹时间 2 秒，让参考点前进，驱动 UAV 继续飞行
+				float BoostAmount = FMath::Min(2.0f, CurrentTrajectory.TotalDuration - TrackingTime);
+				if (BoostAmount > 0.1f)
+				{
+					TrackingTime += BoostAmount;
+					LowSpeedStuckAccumulator = 0.0f;
+					UE_LOG(LogUAVPlanning, Warning,
+						TEXT("[Tracker] Low-speed stuck! Speed=%.0f Progress=%.2f, forced advance +%.1fs"),
+						Speed, TrackingTime / FMath::Max(CurrentTrajectory.TotalDuration, 0.001f), BoostAmount);
+				}
+			}
+		}
+		else
+		{
+			LowSpeedStuckAccumulator = 0.0f;
+		}
 	}
 
 	// 更新跟踪时间

@@ -24,8 +24,9 @@ void UControlParameterTuner::BeginPlay()
 
 void UControlParameterTuner::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	for (IConsoleObject* Cmd : ConsoleCommands)
-		IConsoleManager::Get().UnregisterConsoleObject(Cmd);
+	// PIE结束时IConsoleManager可能已先于组件销毁，
+	// 反注册会访问已释放的单例导致AV。
+	// 引擎退出时会自动清理所有控制台命令，这里只需清空数组。
 	ConsoleCommands.Empty();
 	Super::EndPlay(EndPlayReason);
 }

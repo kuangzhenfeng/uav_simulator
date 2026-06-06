@@ -208,6 +208,16 @@ void AUAVPawn::Tick(float DeltaTime)
 	{
 		const float Step = FMath::Min(Remaining, FixedStep);
 
+		// 炸机状态：仅更新物理（自由落体），跳过控制
+		if (FlightState == EFlightState::Crashed)
+		{
+			UpdatePhysics(Step);
+			SetActorLocation(CurrentState.Position);
+			SetActorRotation(CurrentState.Rotation);
+			Remaining -= Step;
+			continue;
+		}
+
 		// Phase 14: 计算风阻力加速度并传递给动力学组件
 		if (WindFieldComponent && DynamicsComponent)
 		{
@@ -219,6 +229,10 @@ void AUAVPawn::Tick(float DeltaTime)
 		UpdateSensors(Step);
 		UpdateController(Step);
 		UpdatePhysics(Step);
+
+		// 碰撞检测
+		CheckCollision();
+
 		SetActorLocation(CurrentState.Position);
 		SetActorRotation(CurrentState.Rotation);
 		Remaining -= Step;
@@ -448,10 +462,24 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 
 	// 缓存最近障碍物距离
 	CachedNearestObsDist = MAX_FLT;
+	bool bInsideObstacle = false;
 	for (const FObstacleInfo& Obs : NearbyObstacles)
 	{
 		float D = NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs);
 		CachedNearestObsDist = FMath::Min(CachedNearestObsDist, D);
+		if (D < 0.0f)
+		{
+			bInsideObstacle = true;
+		}
+	}
+
+	// 穿透障碍物检测：UAV 位于障碍物内部时，强制触发逃逸
+	if (bInsideObstacle && !Result.bStuck)
+	{
+		bNMPCStuck = true;
+		UE_LOG_THROTTLE(0.5, LogUAVActor, Warning,
+			TEXT("[Penetration] UAV inside obstacle! Dist=%.0fcm, forcing escape"),
+			CachedNearestObsDist);
 	}
 
 	if (Result.bStuck)
@@ -610,7 +638,9 @@ FVector AUAVPawn::ApplyEmergencyBraking(const FVector& Acceleration)
 		return Acceleration;
 
 	float CurrentSpeed = CurrentState.Velocity.Size();
-	if (CurrentSpeed < 100.0f) // 已经很慢，无需制动
+	// 低速时（<150cm/s）无需紧急制动：制动距离极短（<14cm），物理上无意义
+	// 且会干扰 NMPC 正常控制输出，导致 UAV 停滞不前
+	if (CurrentSpeed < 150.0f)
 		return Acceleration;
 
 	// 计算理论制动距离: d = v²/(2a)
@@ -905,6 +935,73 @@ void AUAVPawn::UpdatePhysics(float DeltaTime)
 	{
 		CurrentState = DynamicsComponent->UpdateDynamics(CurrentState, DeltaTime);
 	}
+}
+
+void AUAVPawn::CheckCollision()
+{
+	// 已炸机状态不再检测
+	if (FlightState == EFlightState::Crashed)
+	{
+		return;
+	}
+
+	// 障碍物穿透检测：UAV 中心点进入障碍物内部时触发炸机
+	if (!ObstacleManagerComponent)
+	{
+		return;
+	}
+
+	const TArray<FObstacleInfo>& Obstacles = ObstacleManagerComponent->GetAllObstacles();
+	for (const FObstacleInfo& Obs : Obstacles)
+	{
+		// 复用 NMPC 的障碍物距离计算（ObstacleManager 的同名方法为 private）
+		float D = MAX_FLT;
+		if (NMPCComponent)
+		{
+			D = NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs);
+		}
+		else
+		{
+			// 简化回退：球体近似
+			D = FVector::Dist(CurrentState.Position, Obs.Center) - Obs.Extents.X - Obs.SafetyMargin;
+		}
+
+		if (D < 0.0f)
+		{
+			UE_LOG(LogUAVActor, Warning,
+				TEXT("[Crash] UAV collided with obstacle ID=%d, dist=%.0fcm"),
+				Obs.ObstacleID, D);
+			TriggerCrash();
+			return;
+		}
+	}
+}
+
+void AUAVPawn::TriggerCrash()
+{
+	FlightState = EFlightState::Crashed;
+
+	// 停桨
+	if (DynamicsComponent)
+	{
+		DynamicsComponent->EmergencyStopMotors();
+	}
+
+	// 停止轨迹跟踪
+	if (TrajectoryTrackerComponent)
+	{
+		TrajectoryTrackerComponent->StopTracking();
+	}
+
+	// 停止任务
+	if (MissionComponent)
+	{
+		MissionComponent->StopMission();
+	}
+
+	UE_LOG(LogUAVActor, Warning,
+		TEXT("[Crash] UAV crashed at Pos=(%d,%d,%d), motors stopped, falling under gravity"),
+		(int)CurrentState.Position.X, (int)CurrentState.Position.Y, (int)CurrentState.Position.Z);
 }
 
 void AUAVPawn::SetTrajectory(const FTrajectory& InTrajectory)

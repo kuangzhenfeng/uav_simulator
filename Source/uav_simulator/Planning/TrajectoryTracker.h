@@ -198,6 +198,9 @@ private:
 	// overtime 累计时间
 	float OvertimeElapsed = 0.0f;
 
+	// 低速卡死检测累计器（秒）
+	float LowSpeedStuckAccumulator = 0.0f;
+
 	// 从轨迹采样点进行插值
 	FTrajectoryPoint InterpolateTrajectory(float Time) const;
 

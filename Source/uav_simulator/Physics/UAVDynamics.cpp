@@ -148,7 +148,7 @@ FUAVState UUAVDynamics::ScaleState(const FUAVState& State, float Scale) const
 
 void UUAVDynamics::SetMotorThrusts(const TArray<float>& InThrusts)
 {
-	if (InThrusts.Num() == 4)
+	if (InThrusts.Num() == 4 && !bMotorsStopped)
 	{
 		MotorThrusts = InThrusts;
 
@@ -157,6 +157,23 @@ void UUAVDynamics::SetMotorThrusts(const TArray<float>& InThrusts)
 		{
 			Thrust = FMath::Clamp(Thrust, 0.0f, 1.0f);
 		}
+	}
+}
+
+void UUAVDynamics::EmergencyStopMotors()
+{
+	bMotorsStopped = true;
+
+	// 电机推力归零
+	for (int32 i = 0; i < MotorThrusts.Num(); ++i)
+	{
+		MotorThrusts[i] = 0.0f;
+	}
+
+	// 电机转速快速衰减到零
+	for (int32 i = 0; i < MotorSpeeds.Num(); ++i)
+	{
+		MotorSpeeds[i] = 0.0f;
 	}
 }
 
@@ -211,6 +228,12 @@ void UUAVDynamics::ComputeForcesAndTorques(FVector& OutForce, FVector& OutTorque
 
 void UUAVDynamics::UpdateMotorDynamics(float DeltaTime)
 {
+	// 停桨状态：电机转速保持为零，跳过动力学
+	if (bMotorsStopped)
+	{
+		return;
+	}
+
 	// 电机动力学：一阶惯性环节
 	// dω/dt = (ω_desired - ω) / τ_motor
 	// 其中 ω_desired 由期望推力反解得到
