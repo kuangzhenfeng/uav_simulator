@@ -7,16 +7,17 @@
 #include "Styling/SlateTypes.h"
 #include "CameraSwitcherWidget.generated.h"
 
-class UButton;
-class UTextBlock;
-class UVerticalBox;
+class SButton;
+class SVerticalBox;
+class SHorizontalBox;
+struct FButtonStyle;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnViewChanged, int32, AgentID);
 
 /**
  * 视角切换按钮面板
  *
- * 显示"全局视角"和每台无人机的跟随按钮，支持点击切换。
+ * 横向紧凑布局：标题 + 横排按钮 [All] [#0] [#1] [#2]
  */
 UCLASS()
 class UAV_SIMULATOR_API UCameraSwitcherWidget : public UUserWidget
@@ -34,42 +35,32 @@ public:
 	void HighlightCurrentView(int32 AgentID);
 
 protected:
-	virtual void NativeConstruct() override;
+	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
-	UPROPERTY(Transient)
-	TObjectPtr<UVerticalBox> ButtonList;
-
 	int32 DroneCount = 0;
 	int32 CurrentHighlightAgentID = -1;
 
-	UPROPERTY(Transient)
-	TObjectPtr<UButton> GlobalButton;
+	// 根容器（纵向：标题 + 分隔线 + 按钮行）
+	TSharedPtr<SVerticalBox> RootVBox;
 
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<UButton>> DroneButtons;
+	// 按钮行容器（横向）
+	TSharedPtr<SHorizontalBox> ButtonRow;
 
-	UButton* CreateButton(const FString& Label, int32 AgentID);
+	// Slate 按钮引用（用于高亮更新）
+	TSharedPtr<SButton> GlobalSlateButton;
+	TArray<TSharedPtr<SButton>> DroneSlateButtons;
+
+	// 按钮样式（作为成员变量保证生命周期，SButton 持有指针引用）
+	FButtonStyle NormalStyle;
+	FButtonStyle HighlightedStyle;
+
+	// 面板背景 Brush
+	FSlateBrush PanelBgBrush;
+
+	// 重建按钮行
+	void BuildContent();
+
+	// 更新按钮高亮
 	void UpdateHighlight();
-	void SetButtonHighlight(UButton* Button, bool bHighlighted);
-
-	UFUNCTION()
-	void OnGlobalClicked();
-
-	UFUNCTION()
-	void OnDrone0Clicked();
-	UFUNCTION()
-	void OnDrone1Clicked();
-	UFUNCTION()
-	void OnDrone2Clicked();
-	UFUNCTION()
-	void OnDrone3Clicked();
-	UFUNCTION()
-	void OnDrone4Clicked();
-	UFUNCTION()
-	void OnDrone5Clicked();
-	UFUNCTION()
-	void OnDrone6Clicked();
-	UFUNCTION()
-	void OnDrone7Clicked();
 };

@@ -2,11 +2,13 @@
 
 #include "AgentManager.h"
 #include "uav_simulator/Core/UAVPawn.h"
+#include "uav_simulator/Core/UAVPlayerController.h"
 #include "uav_simulator/Mission/MissionComponent.h"
 #include "uav_simulator/Mission/MissionTypes.h"
 #include "JointNMPCSolver.h"
 #include "TaskAllocator.h"
 #include "TaskMonitor.h"
+#include "uav_simulator/Debug/UAVHUD.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Planning/ObstacleManager.h"
 #include "uav_simulator/Planning/TrajectoryTracker.h"
@@ -19,6 +21,10 @@ AMultiAgentGameMode::AMultiAgentGameMode(const FObjectInitializer& ObjectInitial
 {
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = true;
+
+	// 设置 HUD 和 PlayerController
+	HUDClass = AUAVHUD::StaticClass();
+	PlayerControllerClass = AUAVPlayerController::StaticClass();
 }
 
 void AMultiAgentGameMode::BeginPlay()
