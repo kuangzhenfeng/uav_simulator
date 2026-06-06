@@ -142,10 +142,10 @@ public:
 		const TArray<float>& ConstraintBounds,
 		const FCBFQPConfig& Config) const;
 
-	// ---- 统一 QP V2 接口 ----
+	// ---- 统一 QP 接口 ----
 
 	/**
-	 * 统一安全滤波 V2: 同时处理静态障碍 + 机间 CBF
+	 * 统一安全滤波: 同时处理静态障碍 + 机间 CBF
 	 * @param NominalAcceleration NMPC 输出加速度
 	 * @param MyState 本机状态
 	 * @param NeighborStates 邻居状态列表

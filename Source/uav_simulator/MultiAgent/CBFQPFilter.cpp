@@ -517,7 +517,7 @@ void UCBFQPFilter::BuildStaticObstacleConstraints(
     }
 }
 
-// ========== 统一 FilterV2 ==========
+// ========== 统一 Filter ==========
 
 FCBFQPResult UCBFQPFilter::FilterV2(
     const FVector& NominalAcceleration,

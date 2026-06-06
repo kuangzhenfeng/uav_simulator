@@ -1003,7 +1003,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			FVector EffectiveAccel = ApplyDeviationProtection(SmoothedNMPCAcceleration);
 			EffectiveAccel = ApplyVelocityClamp(EffectiveAccel);
 
-			// ---- CBF-QP 统一安全滤波 V2 ----
+			// ---- CBF-QP 统一安全滤波 ----
 				// 支持 ShadowLog (只记录)/Active (修改控制)/Disabled 模式
 				if (CBFQPFilter && CBFQPConfig.Mode != ECBFMode::Disabled)
 				{
@@ -1065,7 +1065,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 						// QP 后加速度幅值限制：QP 逐轴约束允许总幅值达 sqrt(3)*a_max
 						EffectiveAccel = EffectiveAccel.GetClampedToMaxSize(CBFQPConfig.MaxAccelerationQP);
 					}
-					else // ShadowLog 模式: 记录 V2 诊断，但继续执行旧安全链
+					else // ShadowLog 模式: 记录诊断，但继续执行旧安全链
 					{
 						if (bIsMultiAgentMode && CBFQPFilter && CBFQPConfig.bEnabled)
 						{
