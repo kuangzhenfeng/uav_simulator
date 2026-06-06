@@ -37,9 +37,9 @@
 
 ## Unreal Engine control
 
-`soft_ue_cli` controls this UE project via the SoftUEBridge plugin.
-Run `soft_ue_cli --help` to see all available commands.
+`soft-ue-cli` controls this UE project via the SoftUEBridge plugin (installed via pipx).
+Run `soft-ue-cli --help` to see all available commands.
 The game or editor must be running with SoftUEBridge enabled before using UE commands.
 
 After the user rebuilds and launches UE, verify with:
-  `soft_ue_cli check-setup`
+  `soft-ue-cli check-setup`

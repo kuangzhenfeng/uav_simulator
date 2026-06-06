@@ -83,7 +83,7 @@
 
 ### 4. 运行仿真采集基线日志
 
-- Windows: `cmd //c "Script\\sim.bat 120"`
+- Windows: `Script\sim.bat 120`
 - macOS/Linux: `bash Script/sim.sh 120`
 - 读取 `Logs/uav.log`，记录关键指标作为基线：
   - 巡航速度范围
@@ -160,19 +160,19 @@
 
 ### 9. 编译验证
 
-- Windows: `cmd //c "Script\\build.bat"`
+- Windows: `Script\build.bat`
 - macOS/Linux: `bash Script/build.sh`
 - 编译失败 → 读取错误 → 修复 → 重新编译
 
 ### 10. 单元测试
 
-- Windows: `cmd //c "Script\\test.bat"`
+- Windows: `Script\test.bat`
 - macOS/Linux: `bash Script/test.sh`
 - 对比改动前后的通过率，确认无新增失败
 
 ### 11. 仿真回归验证
 
-- Windows: `cmd //c "Script\\sim.bat 120"`
+- Windows: `Script\sim.bat 120`
 - macOS/Linux: `bash Script/sim.sh 120`
 - 读取 `Logs/uav.log`，与阶段一基线对比：
   - 巡航速度无显著下降

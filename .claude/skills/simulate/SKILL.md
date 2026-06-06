@@ -12,7 +12,7 @@
 
 1. **并行执行**：
    - **后台运行仿真**（使用 `run_in_background: true`）：
-     - Windows: `cmd //c "Script\\sim.bat 120"`
+     - Windows: `Script\sim.bat 120`
      - macOS/Linux: `bash Script/sim.sh 120`
    - **同时读取代码**：
      - 先读取核心代码文件：
@@ -37,7 +37,7 @@
    - 定位根本原因（读取相关源码，如果之前未读取）
    - 实施修复
    - 编译：
-     - Windows: `cmd //c "Script\\build.bat"`
+     - Windows: `Script\build.bat`
      - macOS/Linux: `bash Script/build.sh`
    - 编译失败 → 读取错误输出 → 修复代码 → 重新编译
    - 编译成功 → 回到步骤 1
