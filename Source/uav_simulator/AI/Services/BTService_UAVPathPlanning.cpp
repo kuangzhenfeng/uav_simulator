@@ -161,10 +161,42 @@ void UBTService_UAVPathPlanning::SimplifyGlobalPath(TArray<FVector>& Path, const
 	Path = MoveTemp(Simplified);
 }
 
+// ========== 辅助方法：对航点进行中间点插值，限制单段距离 ==========
+static void SubdivideWaypoints(const TArray<FVector>& InWaypoints, float MaxDist, TArray<FVector>& OutWaypoints)
+{
+	OutWaypoints.Empty(InWaypoints.Num());
+	for (int32 i = 0; i < InWaypoints.Num(); ++i)
+	{
+		if (i > 0)
+		{
+			float Dist = FVector::Dist(InWaypoints[i - 1], InWaypoints[i]);
+			if (Dist > MaxDist)
+			{
+				int32 NumInsert = FMath::CeilToInt(Dist / MaxDist) - 1;
+				for (int32 j = 1; j <= NumInsert; ++j)
+				{
+					float Alpha = (float)j / (NumInsert + 1);
+					OutWaypoints.Add(FMath::Lerp(InWaypoints[i - 1], InWaypoints[i], Alpha));
+				}
+			}
+		}
+		OutWaypoints.Add(InWaypoints[i]);
+	}
+}
+
 // ========== 多航段路径规划：逐段 A* + 拼接 + 全局精简 ==========
 bool UBTService_UAVPathPlanning::PlanMultiSegmentPath(AUAVPawn* UAVPawn, const TArray<FVector>& Waypoints, TArray<FVector>& OutPath)
 {
 	if (!UAVPawn || Waypoints.Num() < 2)
+	{
+		return false;
+	}
+
+	// 限制单段距离，防止轨迹时间膨胀
+	TArray<FVector> SafeWaypoints;
+	SubdivideWaypoints(Waypoints, MaxSegmentDistance, SafeWaypoints);
+
+	if (SafeWaypoints.Num() < 2)
 	{
 		return false;
 	}
@@ -182,14 +214,14 @@ bool UBTService_UAVPathPlanning::PlanMultiSegmentPath(AUAVPawn* UAVPawn, const T
 	}
 
 	UE_LOG(LogUAVPlanning, Log, TEXT("[MultiSeg] Planning started"));
-	UE_LOG(LogUAVPlanning, Log, TEXT("[MultiSeg] Waypoints: %d, Obstacles: %d, Algorithm: %s"),
-		Waypoints.Num(), Obstacles.Num(),
+	UE_LOG(LogUAVPlanning, Log, TEXT("[MultiSeg] Waypoints: %d (after subdivision: %d), Obstacles: %d, Algorithm: %s"),
+		Waypoints.Num(), SafeWaypoints.Num(), Obstacles.Num(),
 		PathPlanningAlgorithm == EPathPlanningAlgorithm::AStar ? TEXT("A*") : TEXT("RRT"));
 
 	// 如果没有障碍物，直接使用原始航点（无需规划）
 	if (Obstacles.Num() == 0)
 	{
-		OutPath = Waypoints;
+		OutPath = SafeWaypoints;
 		UE_LOG(LogUAVPlanning, Log, TEXT("No obstacles, using original waypoints directly"));
 		return true;
 	}
@@ -204,15 +236,15 @@ bool UBTService_UAVPathPlanning::PlanMultiSegmentPath(AUAVPawn* UAVPawn, const T
 
 	// 逐段规划并拼接
 	OutPath.Empty();
-	OutPath.Add(Waypoints[0]);
+	OutPath.Add(SafeWaypoints[0]);
 	TSet<int32> WaypointIndices;
 	WaypointIndices.Add(0);
 
 	bool bAllSegmentsOK = true;
-	for (int32 i = 0; i < Waypoints.Num() - 1; ++i)
+	for (int32 i = 0; i < SafeWaypoints.Num() - 1; ++i)
 	{
-		const FVector& SegStart = Waypoints[i];
-		const FVector& SegEnd = Waypoints[i + 1];
+		const FVector& SegStart = SafeWaypoints[i];
+		const FVector& SegEnd = SafeWaypoints[i + 1];
 
 		UE_LOG(LogUAVPlanning, Log, TEXT("  Segment [%d->%d]: %s -> %s"), i, i + 1, *SegStart.ToString(), *SegEnd.ToString());
 

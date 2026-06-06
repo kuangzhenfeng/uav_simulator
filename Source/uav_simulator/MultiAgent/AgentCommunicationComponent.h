@@ -48,6 +48,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "MultiAgent|Communication")
 	TArray<FAgentStateSnapshot> ReceiveNeighborStates(float Radius);
 
+	// 设置 OwnerAgentID（由 UAVPawn 在注册后调用）
+	void SetOwnerAgentID(int32 InAgentID) { OwnerAgentID = InAgentID; }
+
 	// ---- 通信模拟配置（预留，当前未启用）----
 
 	// 是否模拟通信延迟

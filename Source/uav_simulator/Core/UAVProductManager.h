@@ -26,7 +26,7 @@ public:
 			S.Mass = 12.0f; S.MaxThrust = 100.0f; S.ArmLength = 0.45f;
 			S.MomentOfInertia = FVector(0.28f, 0.28f, 0.50f);
 			S.HoverThrust = 0.294f;
-			S.RollPID = FPIDParams(0.005f, 0.0f, 0.0f); S.PitchPID = S.RollPID;
+			S.RollPID = FPIDParams(0.015f, 0.0f, 0.008f); S.PitchPID = S.RollPID;
 			S.MaxVelocity = 1200.0f;
 			S.MaxPayloadKg = 20.0f; S.SprayWidthM = 6.0f;
 			S.PayloadDescription = TEXT("20L喷洒系统，喷幅6m");
@@ -37,7 +37,7 @@ public:
 			S.Mass = 22.0f; S.MaxThrust = 250.0f; S.ArmLength = 0.60f;
 			S.MomentOfInertia = FVector(0.80f, 0.80f, 1.40f);
 			S.HoverThrust = 0.216f;
-			S.RollPID = FPIDParams(0.006f, 0.0f, 0.0f); S.PitchPID = S.RollPID;
+			S.RollPID = FPIDParams(0.012f, 0.0f, 0.006f); S.PitchPID = S.RollPID;
 			S.MaxVelocity = 800.0f;
 			S.MaxPayloadKg = 60.0f; S.SprayWidthM = 10.0f;
 			S.PayloadDescription = TEXT("60L喷洒系统，喷幅10m");
@@ -48,7 +48,7 @@ public:
 			S.Mass = 35.0f; S.MaxThrust = 400.0f; S.ArmLength = 0.75f;
 			S.MomentOfInertia = FVector(1.80f, 1.80f, 3.20f);
 			S.HoverThrust = 0.214f;
-			S.RollPID = FPIDParams(0.002f, 0.0f, 0.0f); S.PitchPID = S.RollPID;
+			S.RollPID = FPIDParams(0.010f, 0.0f, 0.004f); S.PitchPID = S.RollPID;
 			S.MaxVelocity = 600.0f;
 			S.MaxPayloadKg = 100.0f; S.SprayWidthM = 14.0f;
 			S.PayloadDescription = TEXT("100L喷洒系统，喷幅14m");

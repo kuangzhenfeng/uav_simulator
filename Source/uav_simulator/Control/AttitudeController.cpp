@@ -91,15 +91,16 @@ FMotorOutput UAttitudeController::ComputeControlWithFeedforward(
 
 	// 计算角速度阻尼（使用角速度反馈代替误差微分）
 	// 降低阻尼系数，防止高角速度时过度纠正
-	const float AngularDamping = 0.0005f;
-	float RollD = -AngularDamping * AngularVelDeg.X;
-	float PitchD = -AngularDamping * AngularVelDeg.Y;
-	float YawD = -AngularDamping * 0.5f * AngularVelDeg.Z;
+	// 使用 PID 参数中的 Kd 作为阻尼系数
+	float RollD = -RollPID.Kd * AngularVelDeg.X;
+	float PitchD = -PitchPID.Kd * AngularVelDeg.Y;
+	float YawD = -YawPID.Kd * 0.5f * AngularVelDeg.Z;
 
-	// 限制阻尼项，防止高角速度时产生过大控制输出
-	RollD = FMath::Clamp(RollD, -0.05f, 0.05f);
-	PitchD = FMath::Clamp(PitchD, -0.05f, 0.05f);
-	YawD = FMath::Clamp(YawD, -0.025f, 0.025f);
+		// 限制阻尼项，防止高角速度时产生过大控制输出
+		const float MaxDamping = 0.20f;
+		RollD = FMath::Clamp(RollD, -MaxDamping, MaxDamping);
+		PitchD = FMath::Clamp(PitchD, -MaxDamping, MaxDamping);
+		YawD = FMath::Clamp(YawD, -0.08f, 0.08f);
 
 	// 计算前馈力矩
 	FRotator FeedforwardTorque = FRotator::ZeroRotator;
@@ -133,7 +134,7 @@ FMotorOutput UAttitudeController::ComputeControlWithFeedforward(
 
 	// 限制控制输出，防止单个电机推力变化过大
 	// 启动阶段使用更保守的限制，防止姿态失控
-	const float MaxRollPitch = FMath::Min(MaxControlOutput, 0.08f);
+	const float MaxRollPitch = FMath::Min(MaxControlOutput, 0.20f);
 	RollControl = FMath::Clamp(RollControl, -MaxRollPitch, MaxRollPitch);
 	PitchControl = FMath::Clamp(PitchControl, -MaxRollPitch, MaxRollPitch);
 	YawControl = FMath::Clamp(YawControl, -MaxControlOutput * 0.5f, MaxControlOutput * 0.5f);

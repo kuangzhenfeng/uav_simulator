@@ -232,6 +232,7 @@ TArray<float> UTrajectoryOptimizer::ComputeTimeAllocation(const TArray<FVector>&
 		// 添加安全余量
 		SegmentTime *= 1.05f;
 		SegmentTime = FMath::Max(SegmentTime, 0.5f); // 最小0.5秒
+		SegmentTime = FMath::Min(SegmentTime, 60.0f); // 最大60秒，防止异常长轨迹
 
 		SegmentTimes.Add(SegmentTime);
 	}

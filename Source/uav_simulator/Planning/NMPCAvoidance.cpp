@@ -743,7 +743,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	// 滞后：触发后保持至少 100 帧（高帧率下约 500ms）
 	if (bRawNeedsCorrection)
 	{
-		NeedsCorrectionHoldCount = 100;
+		NeedsCorrectionHoldCount = 40;
 	}
 	else if (NeedsCorrectionHoldCount > 0)
 	{

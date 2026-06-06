@@ -168,21 +168,21 @@ void AUAVPawn::BeginPlay()
 	{
 		const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
 		NMPCComponent->Config.MaxVelocity = Spec.MaxVelocity;
-		NMPCComponent->Config.PredictionHorizon = 5.0f;        // 预测时域 3s，覆盖 24m
-		NMPCComponent->Config.PredictionSteps = 8;            // 降低到 12 步，平衡性能与精度
-		NMPCComponent->Config.WeightReference = 0.005f;          // 提高参考跟踪权重，确保持续推进
-		NMPCComponent->Config.WeightVelocity = 0.003f;          // 提高速度跟踪权重
-		NMPCComponent->Config.WeightTerminal = 0.005f;           // 终端代价保持不变
-		NMPCComponent->Config.WeightObstacle = 8.0f;           // 大幅降低障碍物权重，避免过度避障
-		NMPCComponent->Config.ObstacleSafeDistance = 150.0f;   // 安全距离 1.5m（障碍物半径50cm的3倍）
-		NMPCComponent->Config.ObstacleInfluenceDistance = 1500.0f; // 感知范围 15m
-		NMPCComponent->Config.ObstacleAlpha = 0.05f;          // 进一步降低衰减系数，缩小障碍物影响范围
-		NMPCComponent->Config.MaxObstacleCostPerStep = 800.0f;
-			NMPCComponent->Config.MaxAcceleration = 400.0f;      // 最大加速度约束
-			NMPCComponent->Config.MaxIterations = 50;              // 增加迭代次数，让优化器充分收敛
-			NMPCComponent->Config.InitialStepSize = 500.0f;       // 增大初始步长，加速探索
-			NMPCComponent->Config.WeightControl = 0.0001f;         // 大幅降低控制代价，允许大加速度输出
-			NMPCComponent->Config.WeightTemporalConsistency = 0.001f; // 降低时序一致性权重，减少帧间惯性
+		NMPCComponent->Config.PredictionHorizon = 4.0f;         // 预测时域 4s
+		NMPCComponent->Config.PredictionSteps = 8;              // 8 步
+		NMPCComponent->Config.WeightReference = 0.01f;          // 参考跟踪权重
+		NMPCComponent->Config.WeightVelocity = 0.005f;          // 速度跟踪权重
+		NMPCComponent->Config.WeightTerminal = 0.01f;           // 终端代价
+		NMPCComponent->Config.WeightObstacle = 5.0f;            // 障碍物权重
+		NMPCComponent->Config.ObstacleSafeDistance = 200.0f;    // 安全距离 2m
+		NMPCComponent->Config.ObstacleInfluenceDistance = 1200.0f; // 感知范围 12m
+		NMPCComponent->Config.ObstacleAlpha = 0.04f;           // 衰减系数
+		NMPCComponent->Config.MaxObstacleCostPerStep = 600.0f;
+		NMPCComponent->Config.MaxAcceleration = 500.0f;         // 最大加速度
+		NMPCComponent->Config.MaxIterations = 40;               // 迭代次数
+		NMPCComponent->Config.InitialStepSize = 500.0f;         // 初始步长
+		NMPCComponent->Config.WeightControl = 0.0001f;           // 控制代价
+		NMPCComponent->Config.WeightTemporalConsistency = 0.001f; // 时序一致性
 	}
 
 	// 多机协同注册
@@ -193,6 +193,10 @@ void AUAVPawn::BeginPlay()
 		bIsMultiAgentMode = true;
 		CBFQPFilter = NewObject<UCBFQPFilter>(this);
 		CBFQPConfig = MultiAgentGM->DefaultCBFQPConfig;
+		if (CommunicationComponent)
+		{
+			CommunicationComponent->SetOwnerAgentID(AgentID);
+		}
 		UE_LOG(LogUAVActor, Log, TEXT("[MultiAgent] Registered as Agent %d"), AgentID);
 	}
 
@@ -729,8 +733,8 @@ FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float Cr
 
 void AUAVPawn::UpdateSpeedScaleForObstacles()
 {
-	const float ObsSafe = 200.0f;      // 安全距离 2m
-	const float ObsInfluence = 500.0f; // 影响范围 5m，缩小范围避免过度减速
+	const float ObsSafe = 150.0f;      // 安全距离 1.5m（仅在极近距离减速）
+	const float ObsInfluence = 300.0f; // 影响范围 3m（大幅缩小，避免远距离减速）
 	float SpeedScale = 1.0f;
 
 	// 仅对前方的障碍物减速：排除 UAV 身后的障碍物
@@ -767,14 +771,14 @@ void AUAVPawn::UpdateSpeedScaleForObstacles()
 	{
 		// 分段减速策略：近距离适度减速，远距离几乎不减速
 		// 让 NMPC 主导避障，速度缩放仅作为辅助安全机制
-		if (EffectiveObsDist < ObsSafe) // <3m: 减速至 50%
+		if (EffectiveObsDist < ObsSafe) // <1.5m: 减速至 70%（放宽，让 NMPC 主导）
 		{
-			SpeedScale = FMath::Lerp(0.50f, 0.70f,
+			SpeedScale = FMath::Lerp(0.70f, 0.85f,
 				FMath::Clamp(EffectiveObsDist / ObsSafe, 0.0f, 1.0f));
 		}
-		else // 3-8m: 渐进减速至 70%
+		else // 1.5-3m: 渐进减速至 85%
 		{
-			SpeedScale = FMath::Lerp(0.70f, 1.0f,
+			SpeedScale = FMath::Lerp(0.85f, 1.0f,
 				FMath::Clamp((EffectiveObsDist - ObsSafe) / (ObsInfluence - ObsSafe), 0.0f, 1.0f));
 		}
 	}
@@ -793,7 +797,7 @@ FVector AUAVPawn::ApplyEmergencyBraking(const FVector& Acceleration)
 		return Acceleration;
 
 	// 距离 > 6m 时无需干预：NMPC 完全可以处理
-	if (CachedNearestObsDist >= 400.0f)
+	if (CachedNearestObsDist >= 300.0f)
 		return Acceleration;
 
 	// 计算理论制动距离: d = v²/(2a)
@@ -802,7 +806,7 @@ FVector AUAVPawn::ApplyEmergencyBraking(const FVector& Acceleration)
 
 	// 安全裕度：2.0 倍制动距离 + 1m 基础距离
 	// 此公式确保只有在真正可能碰撞时才触发，不会干扰 NMPC 正常避障
-	float RequiredDist = BrakingDist * 1.5f + 50.0f;
+	float RequiredDist = BrakingDist * 1.2f + 30.0f;
 
 	if (CachedNearestObsDist < RequiredDist)
 	{
@@ -969,15 +973,15 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			}
 			else
 			{
-				SmoothedNMPCAcceleration = SmoothedNMPCAcceleration * 0.75f + CachedNMPCAcceleration * 0.25f;
+				SmoothedNMPCAcceleration = SmoothedNMPCAcceleration * 0.4f + CachedNMPCAcceleration * 0.6f;
 			}
 			// 最小加速度保证：当 UAV 速度极低且 NMPC 控制量过小时，注入最小前进加速度
 			// 防止 NMPC 因自适应时间缩放冻结参考点 + 温启动零控制形成死循环
 			{
 				const float CurSpeed = CurrentState.Velocity.Size();
 				const float NMPCMag = SmoothedNMPCAcceleration.Size();
-				const float MinSpeed = 200.0f;      // 2 m/s
-				const float MinControlMag = 30.0f;  // NMPC 控制量低于此值视为过小
+				const float MinSpeed = 400.0f;      // 4 m/s
+				const float MinControlMag = 50.0f;  // NMPC 控制量低于此值视为过小
 
 				if (CurSpeed < MinSpeed && NMPCMag < MinControlMag)
 				{
@@ -988,7 +992,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 
 					if (DistToRef > 50.0f) // 距参考点 > 50cm 时才注入
 					{
-						FVector MinAccelVec = ToRef.GetSafeNormal() * 100.0f; // 1 m/s^2
+						FVector MinAccelVec = ToRef.GetSafeNormal() * 200.0f; // 2 m/s^2
 						SmoothedNMPCAcceleration = SmoothedNMPCAcceleration + MinAccelVec;
 					}
 				}
@@ -997,11 +1001,8 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			FVector EffectiveAccel = ApplyDeviationProtection(SmoothedNMPCAcceleration);
 			EffectiveAccel = ApplyVelocityClamp(EffectiveAccel);
 
-			// 紧急制动层：基于物理制动距离的最后防线
-			EffectiveAccel = ApplyEmergencyBraking(EffectiveAccel);
-
-
 			// CBF-QP 安全滤波（多机模式：保证机间安全距离）
+			// 放在紧急制动之前，确保 CBF-QP 能在制动前约束加速度
 			if (bIsMultiAgentMode && CBFQPFilter && CBFQPConfig.bEnabled)
 			{
 				TArray<FAgentStateSnapshot> NeighborStates =
@@ -1017,6 +1018,51 @@ void AUAVPawn::UpdateController(float DeltaTime)
 							AgentID, CBFResult.MinHValue);
 					}
 					EffectiveAccel = CBFResult.SafeAcceleration;
+				}
+			}
+
+			// 紧急制动层：基于物理制动距离的最后防线
+			EffectiveAccel = ApplyEmergencyBraking(EffectiveAccel);
+
+			// 加速度幅值限制：防止过大加速度导致姿态控制器饱和
+			{
+				float AccelMag = EffectiveAccel.Size();
+				const float MaxAccelCmd = 800.0f; // 8 m/s²，与姿态控制器 MaxTilt=30° 匹配
+				if (AccelMag > MaxAccelCmd)
+				{
+					EffectiveAccel *= MaxAccelCmd / AccelMag;
+				}
+			}
+			// 紧急回避：当距离低于安全距离时，施加递增排斥+速度衰减
+			// 阈值 DSafe，强度随距离线性增大（最近时可达2000 cm/s²）
+			if (bIsMultiAgentMode && CommunicationComponent)
+			{
+				TArray<FAgentStateSnapshot> Neighbors =
+					CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 2.0f);
+				for (const FAgentStateSnapshot& Neighbor : Neighbors)
+				{
+					float Dist = FVector::Dist(CurrentState.Position, Neighbor.State.Position);
+					float RepelThreshold = CBFQPConfig.DSafe; // DSafe=500cm
+					if (Dist < RepelThreshold && Dist > 1.0f)
+					{
+						FVector RepelDir = (CurrentState.Position - Neighbor.State.Position).GetSafeNormal();
+						// 线性递增：Dist 越小排斥越强，最近时 2000 cm/s²
+						float Ratio = 1.0f - (Dist / RepelThreshold);
+						float RepelStrength = FMath::Lerp(400.0f, 2000.0f, Ratio);
+						EffectiveAccel += RepelDir * RepelStrength;
+
+							// 速度衰减：减少朝向邻居的速度分量
+							FVector ToNeighbor = (Neighbor.State.Position - CurrentState.Position).GetSafeNormal();
+							float VelToward = FVector::DotProduct(CurrentState.Velocity, ToNeighbor);
+							if (VelToward > 0.0f)
+							{
+								float DampStrength = FMath::Lerp(200.0f, 800.0f, Ratio);
+								EffectiveAccel -= ToNeighbor * FMath::Min(VelToward * 2.0f, DampStrength);
+							}
+						UE_LOG_THROTTLE(0.5, LogUAVMultiAgent, Warning,
+							TEXT("[CBF-QP] Agent %d: EMERGENCY repel from %d, Dist=%.0fcm, Strength=%.0f"),
+							AgentID, Neighbor.AgentID, Dist, RepelStrength);
+					}
 				}
 			}
 			// 计算期望角加速度（用于前馈控制）

@@ -137,7 +137,7 @@ public:
 	float ErrorPauseThreshold = 1500.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking", meta = (ClampMin = "0.01", ClampMax = "1.0"))
-	float MinAdaptiveTimeScale = 0.8f;
+	float MinAdaptiveTimeScale = 0.9f;
 
 protected:
 	// 当前轨迹

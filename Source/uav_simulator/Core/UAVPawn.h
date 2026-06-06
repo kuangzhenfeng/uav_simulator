@@ -155,6 +155,9 @@ public:
 	// NMPC stuck 状态查询
 	bool IsNMPCStuck() const { return bNMPCStuck; }
 
+
+	// 获取当前 NMPC 加速度（供 AgentManager 状态缓存传播到 CBF-QP）
+	FVector GetNMPCAcceleration() const { return SmoothedNMPCAcceleration; }
 		// 获取 UAV 碰撞半径（cm），基于 ArmLength + 安全余量
 		// 用于障碍物感知时替代 GetActorBounds 返回的过大包围盒
 		float GetCollisionRadius() const

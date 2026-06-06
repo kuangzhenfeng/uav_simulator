@@ -287,6 +287,7 @@ void AMultiAgentGameMode::RefreshStateCache()
 			Snapshot.State = Pawn->GetUAVState();
 			Snapshot.TargetPosition = Pawn->GetTargetPosition();
 			Snapshot.Timestamp = GetWorld()->GetTimeSeconds();
+			Snapshot.NMPCAcceleration = Pawn->GetNMPCAcceleration();
 		}
 	}
 }

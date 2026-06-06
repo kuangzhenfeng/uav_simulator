@@ -58,6 +58,10 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Global Planner")
 	float MaxAcceleration = 800.0f;
 
+	// 航段最大距离 (cm)，超过此距离自动插入中间点，防止轨迹时间膨胀
+	UPROPERTY(EditAnywhere, Category = "Global Planner")
+	float MaxSegmentDistance = 20000.0f;
+
 	// ---- Local Planner 参数 ----
 
 	// Local Planner 连续失败次数阈值 - 超过此值触发 Global Replan

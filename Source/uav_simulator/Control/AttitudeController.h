@@ -122,13 +122,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Attitude Controller")
 	FAttitudeControlConfig GetControlConfig() const { return ControlConfig; }
 
-	// Roll PID参数 (增大Kp以提高响应速度)
+	// Roll PID参数 (PD控制：Kp响应 + Kd阻尼)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID Parameters")
-	FPIDParams RollPID = FPIDParams(0.012f, 0.0f, 0.0f);
+	FPIDParams RollPID = FPIDParams(0.03f, 0.0f, 0.01f);
 
-	// Pitch PID参数 (增大Kp以提高响应速度)
+	// Pitch PID参数 (PD控制：Kp响应 + Kd阻尼)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID Parameters")
-	FPIDParams PitchPID = FPIDParams(0.012f, 0.0f, 0.0f);
+	FPIDParams PitchPID = FPIDParams(0.03f, 0.0f, 0.01f);
 
 	// Yaw PID参数 (增大Kp以主导控制方向)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID Parameters")

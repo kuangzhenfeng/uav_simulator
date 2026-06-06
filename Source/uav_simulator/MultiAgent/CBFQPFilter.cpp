@@ -64,6 +64,24 @@ FCBFQPResult UCBFQPFilter::Filter(
 		NominalAcceleration, ConstraintNormals, ConstraintBounds, Config);
 	Result.bWasFiltered = true;
 
+	// 安全加速度限幅：当 h 严重为负时，限制朝向邻居的加速度分量
+	// 防止投影梯度法在多约束时产生朝向邻居的残余加速度
+	FVector SafeAccel = Result.SafeAcceleration;
+	for (int32 k = 0; k < ConstraintNormals.Num(); ++k)
+	{
+		if (ConstraintBounds[k] < 0.0f) // h < 0: 安全距离已违反
+		{
+			FVector Normal = ConstraintNormals[k].GetSafeNormal();
+			float DotAccel = FVector::DotProduct(SafeAccel, Normal);
+			if (DotAccel > 0.0f)
+			{
+				// 加速度有朝向邻居的分量，强制反转为排斥方向
+				SafeAccel -= DotAccel * Normal;
+			}
+		}
+	}
+	Result.SafeAcceleration = SafeAccel;
+
 	return Result;
 }
 
