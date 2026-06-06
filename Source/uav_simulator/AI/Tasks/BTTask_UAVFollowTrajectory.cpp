@@ -226,6 +226,14 @@ void UBTTask_UAVFollowTrajectory::TickTask(UBehaviorTreeComponent& OwnerComp, ui
 		return;
 	}
 
+	// 检查轨迹跟踪是否因超时完成
+	if (UAVPawn->IsTrajectoryTimedOut())
+	{
+		UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: Trajectory timed out"));
+		FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
+		return;
+	}
+
 	// 检查轨迹跟踪是否完成
 	if (UAVPawn->IsTrajectoryComplete())
 	{

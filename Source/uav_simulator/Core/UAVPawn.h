@@ -96,6 +96,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Trajectory")
 	bool IsTrajectoryComplete() const;
 
+	// 检查轨迹跟踪是否因超时完成
+	UFUNCTION(BlueprintCallable, Category = "UAV|Trajectory")
+	bool IsTrajectoryTimedOut() const;
+
 	// 设置预定义航点
 	UFUNCTION(BlueprintCallable, Category = "UAV|Waypoints", meta = (DeprecatedFunction, DeprecationMessage = "Use MissionComponent->SetWaypoints instead"))
 	void SetWaypoints(const TArray<FVector>& InWaypoints);

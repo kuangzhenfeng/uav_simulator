@@ -85,6 +85,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
 	bool IsComplete() const;
 
+		/**
+		 * 检查是否因超时完成
+		 */
+		UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
+		bool IsTimedOut() const { return bIsTimedOut; }
+
 	/**
 	 * 检查是否正在跟踪
 	 */
@@ -121,6 +127,10 @@ public:
 	// 轨迹完成事件
 	UPROPERTY(BlueprintAssignable, Category = "Trajectory Tracking")
 	FOnTrajectoryCompleted OnTrajectoryCompleted;
+
+	// 轨迹超时事件
+	UPROPERTY(BlueprintAssignable, Category = "Trajectory Tracking")
+	FOnTrajectoryCompleted OnTrajectoryTimedOut;
 
 	// 轨迹进度更新事件
 	UPROPERTY(BlueprintAssignable, Category = "Trajectory Tracking")
@@ -159,6 +169,10 @@ protected:
 	// 是否已完成
 	UPROPERTY(BlueprintReadOnly, Category = "Trajectory Tracking")
 	bool bIsComplete;
+
+	// 是否因超时完成
+	UPROPERTY(BlueprintReadOnly, Category = "Trajectory Tracking")
+	bool bIsTimedOut = false;
 
 	// 时间缩放因子 (用于加速/减速播放)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trajectory Tracking")

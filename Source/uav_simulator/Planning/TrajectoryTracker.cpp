@@ -21,6 +21,7 @@ UTrajectoryTracker::UTrajectoryTracker()
 	bIsTracking = false;
 	bIsPaused = false;
 	bIsComplete = false;
+	bIsTimedOut = false;
 	TimeScale = 1.0f;
 	bHoldFinalState = true;
 	ProgressUpdateInterval = 0.1f;
@@ -78,11 +79,13 @@ void UTrajectoryTracker::HandleOvertimeCompletion(float DeltaTime)
 	{
 		FVector FinalPos = CurrentTrajectory.Points.Last().Position;
 		float Dist = FVector::Dist(CurrentPos, FinalPos);
-		UE_LOG(LogUAVPlanning, Warning, TEXT("[Tracker] Overtime timeout (%.1fs): Dist=%.0f Speed=%.0f, force completing"),
+		UE_LOG(LogUAVPlanning, Warning, TEXT("[Tracker] Overtime timeout (%.1fs): Dist=%.0f Speed=%.0f, marking as timed out"),
 			OvertimeElapsed, Dist, Speed);
+		bIsTimedOut = true;
 		bIsComplete = true;
 		OvertimeElapsed = 0.0f;
 		OnTrajectoryCompleted.Broadcast();
+		OnTrajectoryTimedOut.Broadcast();
 	}
 	else
 	{
@@ -253,6 +256,7 @@ void UTrajectoryTracker::StartTracking()
 	bIsTracking = true;
 	bIsPaused = false;
 	bIsComplete = false;
+	bIsTimedOut = false;
 	TrackingTime = 0.0f;
 	LastProgressUpdateTime = 0.0f;
 	LastProgress = 0.0f;
@@ -286,6 +290,7 @@ void UTrajectoryTracker::Reset()
 	bIsTracking = false;
 	bIsPaused = false;
 	bIsComplete = false;
+	bIsTimedOut = false;
 	LastProgressUpdateTime = 0.0f;
 	LastProgress = 0.0f;
 	OvertimeElapsed = 0.0f;

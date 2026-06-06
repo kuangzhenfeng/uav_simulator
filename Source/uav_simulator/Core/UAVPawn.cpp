@@ -610,6 +610,20 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 	{
 		HandleStuckEscape(Result, NearbyObstacles);
 	}
+
+	// NMPC 净空不足制动：收敛但轨迹距障碍过近时，施加保守制动
+	if (Result.Diagnostics.bClearanceInsufficient && !Result.bStuck)
+	{
+		float Speed = CurrentState.Velocity.Size();
+		if (Speed > 50.0f)
+		{
+			FVector VelDir = CurrentState.Velocity.GetSafeNormal();
+			CachedNMPCAcceleration = -VelDir * 400.0f;
+			UE_LOG_THROTTLE(0.5, LogUAVActor, Warning,
+				TEXT("[NMPC] Clearance insufficient (%.0fcm), applying brake"),
+				Result.Diagnostics.MinPredictedClearance);
+		}
+	}
 }
 
 // ========== 逃逸逻辑辅助方法 ==========
@@ -1007,19 +1021,18 @@ void AUAVPawn::UpdateController(float DeltaTime)
 				// 支持 ShadowLog (只记录)/Active (修改控制)/Disabled 模式
 				if (CBFQPFilter && CBFQPConfig.Mode != ECBFMode::Disabled)
 				{
-					// 收集静态障碍物（排除动态障碍，动态障碍通过相对速度在 HOCBF 中处理）
-					TArray<FObstacleInfo> StaticObsForCBF;
+					// 收集障碍物（静态和动态障碍均通过 CBF 处理，动态障碍使用相对速度）
+					TArray<FObstacleInfo> ObsForCBF;
 					if (ObstacleManagerComponent)
 					{
 						const TArray<FObstacleInfo>& AllObs = ObstacleManagerComponent->GetAllObstacles();
 						for (const FObstacleInfo& Obs : AllObs)
 						{
-							if (Obs.bIsDynamic) continue;
 							float Dist = NMPCComponent
 								? NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs)
 								: FVector::Dist(CurrentState.Position, Obs.Center) - Obs.Extents.GetMax();
 							if (Dist < CBFQPConfig.StaticInfluenceDistance)
-								StaticObsForCBF.Add(Obs);
+								ObsForCBF.Add(Obs);
 						}
 					}
 
@@ -1031,12 +1044,12 @@ void AUAVPawn::UpdateController(float DeltaTime)
 					}
 
 					FCBFQPResult CBFResult = CBFQPFilter->FilterV2(
-						EffectiveAccel, CurrentState, NeighborStates, StaticObsForCBF, CBFQPConfig);
+						EffectiveAccel, CurrentState, NeighborStates, ObsForCBF, CBFQPConfig);
 
 					if (CBFResult.bWasFiltered || CBFResult.StaticConstraintCount > 0 || CBFResult.AgentConstraintCount > 0)
 					{
 						UE_LOG(LogUAVMetrics, Log,
-							TEXT("[CBF_SOLVE] Agent=%d MinH=%.0f Residual=%.4f StaticSlack=%.1f AgentSlack=%.1f Active=%d Status=%d Ms=%.2f"),
+							TEXT("[CBF_SOLVE] Agent=%d MinH=%.0f Residual=%.4f StaticSlack=%.4f AgentSlack=%.4f Active=%d Status=%d Ms=%.2f"),
 							AgentID, CBFResult.MinHValue, CBFResult.KKTResidual,
 							CBFResult.StaticSlack, CBFResult.AgentSlack,
 							CBFResult.ActiveConstraintCount, (int32)CBFResult.SolveStatus,
@@ -1062,8 +1075,8 @@ void AUAVPawn::UpdateController(float DeltaTime)
 								EffectiveAccel = -VelDir * 400.0f;
 						}
 
-						// QP 后加速度幅值限制：QP 逐轴约束允许总幅值达 sqrt(3)*a_max
-						EffectiveAccel = EffectiveAccel.GetClampedToMaxSize(CBFQPConfig.MaxAccelerationQP);
+						// 注意：不再对 QP 输出做幅值限幅
+						// QP 已有逐轴约束 |u_i| <= MaxAccelerationQP，事后限幅会破坏 CBF 障碍约束
 					}
 					else // ShadowLog 模式: 记录诊断，但继续执行旧安全链
 					{
@@ -1394,6 +1407,15 @@ bool AUAVPawn::IsTrajectoryComplete() const
 		return TrajectoryTrackerComponent->IsComplete();
 	}
 	return true;
+}
+
+bool AUAVPawn::IsTrajectoryTimedOut() const
+{
+	if (TrajectoryTrackerComponent)
+	{
+		return TrajectoryTrackerComponent->IsTimedOut();
+	}
+	return false;
 }
 
 void AUAVPawn::SetControlMode(EUAVControlMode NewMode)

@@ -910,7 +910,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	float InitialCost = MAX_FLT;
 	const int32 N = Config.Solver.PredictionSteps;
 	const float dt = Config.GetDt();
-
+	const float SafeClearanceThreshold = Config.Obstacle.ObstacleSafeDistance * 0.5f;
 	// 确保参考点数量足够
 	TArray<FVector> RefPoints = ReferencePoints;
 	while (RefPoints.Num() < N + 1)
@@ -952,15 +952,15 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 			}
 		}
 
-		// 按代价排序，选出 Top-3 做短 PGD
-		Candidates.Sort([](const FInitCandidate& A, const FInitCandidate& B)
-		{
-			// 净空为负（碰撞）的排到最后
-			bool bAValid = A.MinClearance > 0.0f;
-			bool bBValid = B.MinClearance > 0.0f;
-			if (bAValid != bBValid) return bAValid;
-			return A.Cost < B.Cost;
-		});
+			// 按代价排序，选出 Top-3 做短 PGD
+			Candidates.Sort([&SafeClearanceThreshold](const FInitCandidate& A, const FInitCandidate& B)
+			{
+				// 净空低于安全阈值（碰撞或过近）的排到最后
+				bool bAValid = A.MinClearance > SafeClearanceThreshold;
+				bool bBValid = B.MinClearance > SafeClearanceThreshold;
+				if (bAValid != bBValid) return bAValid;
+				return A.Cost < B.Cost;
+			});
 
 		const int32 ShortPGDIter = 3;
 		const int32 TopK = FMath::Min(3, Candidates.Num());
@@ -1041,14 +1041,14 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 				}
 			}
 
-			// 重新排序：净空为负（碰撞）的排到最后，其余按代价
-			Candidates.Sort([](const FInitCandidate& A, const FInitCandidate& B)
-			{
-				bool bAValid = A.MinClearance > 0.0f;
-				bool bBValid = B.MinClearance > 0.0f;
-				if (bAValid != bBValid) return bAValid;
-				return A.Cost < B.Cost;
-			});
+				// 重新排序：净空低于安全阈值的排到最后，其余按代价
+				Candidates.Sort([&SafeClearanceThreshold](const FInitCandidate& A, const FInitCandidate& B)
+				{
+					bool bAValid = A.MinClearance > SafeClearanceThreshold;
+					bool bBValid = B.MinClearance > SafeClearanceThreshold;
+					if (bAValid != bBValid) return bAValid;
+					return A.Cost < B.Cost;
+				});
 		}
 
 	// 最终控制序列：多初值最优 or 旧初始化（逃逸模式）
@@ -1056,6 +1056,12 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	FString SelectedInitType = TEXT("Legacy");
 	if (StuckEscapeCount <= 0 && Candidates.Num() > 0)
 	{
+				// 最优候选净空低于安全阈值时输出警告
+				if (Candidates[0].MinClearance <= SafeClearanceThreshold)
+				{
+					UE_LOG(LogUAVPlanning, Warning, TEXT("[NMPC] Best candidate clearance=%.0f below threshold=%.0f"),
+						Candidates[0].MinClearance, SafeClearanceThreshold);
+				}
 		Controls = Candidates[0].Controls;
 		SelectedInitType = FString::Printf(TEXT("MultiInit_%s"),
 			Candidates[0].Type == EInitCandidateType::Warm ? TEXT("Warm") :

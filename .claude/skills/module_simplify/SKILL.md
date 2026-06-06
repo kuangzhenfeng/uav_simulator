@@ -1,3 +1,8 @@
+---
+name: module_simplify
+description: 分析指定模块的代码，在保证功能不退化的前提下，从符号级和算法级两个维度进行精简。
+---
+
 # Simplify Skill
 
 ## 触发方式

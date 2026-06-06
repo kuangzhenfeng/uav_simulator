@@ -1,3 +1,8 @@
+---
+name: industrial-refactor
+description: 系统性审查项目中的简化实现，生成工业级重构计划。扫描代码中的简化标记，评估影响，提供分阶段重构方案。
+---
+
 # Industrial Refactor Skill
 
 ## Description
