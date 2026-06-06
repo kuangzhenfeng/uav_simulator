@@ -19,16 +19,21 @@ namespace
 			return nullptr;
 		}
 
-		UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(WorldName));
+		UWorld* World = UWorld::CreateWorld(
+			EWorldType::Game,
+			false,
+			FName(WorldName),
+			GetTransientPackage());
 		if (!World)
 		{
 			return nullptr;
 		}
 
 		FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+		World->AddToRoot();
 		WorldContext.SetCurrentWorld(World);
 
-		World->InitializeNewWorld(UWorld::InitializationValues());
+		World->InitializeActorsForPlay(FURL());
 		World->BeginPlay();
 
 		return World;
@@ -41,8 +46,9 @@ namespace
 			return;
 		}
 
-		World->DestroyWorld(false);
 		GEngine->DestroyWorldContext(World);
+		World->DestroyWorld(false);
+		World->RemoveFromRoot();
 	}
 
 	AActor* SpawnBoxActor(UWorld* World, const FVector& Location, const FRotator& Rotation, const FVector& BoxExtent)

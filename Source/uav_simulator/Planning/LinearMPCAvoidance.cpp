@@ -21,7 +21,7 @@ FNMPCAvoidanceResult ULinearMPCAvoidance::ComputeAvoidance(
 {
 	FNMPCAvoidanceResult Result;
 
-	const int32 N = Config.PredictionSteps;
+	const int32 N = Config.Solver.PredictionSteps;
 	if (ReferencePoints.Num() < N + 1)
 	{
 		return Result;
@@ -117,7 +117,7 @@ bool ULinearMPCAvoidance::SolveQP(
 	const TArray<FObstacleInfo>& Obstacles,
 	TArray<FVector>& OutU)
 {
-	const int32 N = Config.PredictionSteps;
+	const int32 N = Config.Solver.PredictionSteps;
 	const float Dt = Config.GetDt();
 
 	// 计算线性化
@@ -128,11 +128,11 @@ bool ULinearMPCAvoidance::SolveQP(
 	for (int32 i = 0; i < N; ++i)
 	{
 		FVector TargetAccel = (Xref[i + 1] - X0) / (Dt * (i + 1));
-		OutU[i] = TargetAccel.GetClampedToMaxSize(Config.MaxAcceleration);
+		OutU[i] = TargetAccel.GetClampedToMaxSize(Config.Actuator.MaxAcceleration);
 	}
 
 	// 投影梯度下降
-	const int32 MaxIter = Config.MaxIterations;
+	const int32 MaxIter = Config.Solver.MaxIterations;
 	const float StepSize = 0.1f; // 步长
 
 	for (int32 Iter = 0; Iter < MaxIter; ++Iter)
@@ -165,7 +165,7 @@ void ULinearMPCAvoidance::ComputeAnalyticGradient(
 	const TArray<FObstacleInfo>& Obstacles,
 	TArray<FVector>& OutGradU)
 {
-	const int32 N = Config.PredictionSteps;
+	const int32 N = Config.Solver.PredictionSteps;
 	OutGradU.SetNum(N);
 
 	// 完整梯度计算：使用伴随法（Adjoint Method）
@@ -214,11 +214,11 @@ void ULinearMPCAvoidance::ComputeAnalyticGradient(
 			for (const FObstacleInfo& Obs : Obstacles)
 			{
 				float Dist = CalculateDistanceToObstacle(X[k], Obs);
-				if (Dist < Config.ObstacleInfluenceDistance)
+				if (Dist < Config.Obstacle.ObstacleInfluenceDistance)
 				{
 					FVector GradDir = (X[k] - Obs.Center).GetSafeNormal();
-					float Penalty = Config.GetObstacleWeight() * FMath::Exp(-Dist / Config.ObstacleSafeDistance);
-					float dPenalty_dDist = -Penalty / Config.ObstacleSafeDistance;
+					float Penalty = Config.GetObstacleWeight() * FMath::Exp(-Dist / Config.Obstacle.ObstacleSafeDistance);
+					float dPenalty_dDist = -Penalty / Config.Obstacle.ObstacleSafeDistance;
 					dLdx += dPenalty_dDist * GradDir;
 				}
 			}
@@ -286,8 +286,8 @@ void ULinearMPCAvoidance::ForwardSimulateLinear(
 
 void ULinearMPCAvoidance::ProjectToConstraints(TArray<FVector>& U)
 {
-	const float MaxAccel = Config.MaxAcceleration;
-	const float MaxVel = Config.MaxVelocity;
+	const float MaxAccel = Config.Actuator.MaxAcceleration;
+	const float MaxVel = Config.Actuator.MaxVelocity;
 
 	for (FVector& Accel : U)
 	{
@@ -329,9 +329,9 @@ float ULinearMPCAvoidance::ComputeCost(
 		for (const FObstacleInfo& Obs : Obstacles)
 		{
 			float Dist = CalculateDistanceToObstacle(X[i], Obs);
-			if (Dist < Config.ObstacleInfluenceDistance)
+			if (Dist < Config.Obstacle.ObstacleInfluenceDistance)
 			{
-				float Penalty = Config.GetObstacleWeight() * FMath::Exp(-Dist / Config.ObstacleSafeDistance);
+				float Penalty = Config.GetObstacleWeight() * FMath::Exp(-Dist / Config.Obstacle.ObstacleSafeDistance);
 				Cost += Penalty;
 			}
 		}

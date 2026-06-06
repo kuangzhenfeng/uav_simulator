@@ -23,9 +23,17 @@ struct FCBFQPResult
 	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
 	bool bWasFiltered = false;
 
-	// 最小 h 值（诊断用，h < 0 表示安全约束被违反）
+	// 真实最小 h 值: min(||pi-pj||² - DSafe²)，h < 0 表示安全距离已违反
 	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
 	float MinHValue = MAX_FLT;
+
+	// 活跃约束数量
+	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
+	int32 ActiveConstraintCount = 0;
+
+	// 求解时间 (ms)
+	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
+	float SolveTimeMs = 0.0f;
 
 	FCBFQPResult()
 		: SafeAcceleration(FVector::ZeroVector)

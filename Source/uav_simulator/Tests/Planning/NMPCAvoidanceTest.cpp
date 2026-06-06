@@ -22,7 +22,7 @@ bool FNMPCAvoidanceTest_ForwardSimulation::RunTest(const FString& Parameters)
 	TArray<FVector> OutVelocities;
 
 	// 零控制输入（无加速度）
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		Controls.Add(FVector::ZeroVector);
 	}
@@ -30,8 +30,8 @@ bool FNMPCAvoidanceTest_ForwardSimulation::RunTest(const FString& Parameters)
 	NMPC->ForwardSimulate(InitPos, InitVel, Controls, OutPositions, OutVelocities);
 
 	// 验证输出序列长度 = 预测步数 + 1（包含初始状态）
-	TestEqual("Position count", OutPositions.Num(), NMPC->Config.PredictionSteps + 1);
-	TestEqual("Velocity count", OutVelocities.Num(), NMPC->Config.PredictionSteps + 1);
+	TestEqual("Position count", OutPositions.Num(), NMPC->Config.Solver.PredictionSteps + 1);
+	TestEqual("Velocity count", OutVelocities.Num(), NMPC->Config.Solver.PredictionSteps + 1);
 
 	// 零加速度下速度应保持不变
 	float Dt = NMPC->Config.GetDt();
@@ -41,13 +41,13 @@ bool FNMPCAvoidanceTest_ForwardSimulation::RunTest(const FString& Parameters)
 	}
 
 	// 验证匀速运动的最终位置：P = P0 + V * T
-	FVector ExpectedFinalPos = InitPos + InitVel * (Dt * NMPC->Config.PredictionSteps);
+	FVector ExpectedFinalPos = InitPos + InitVel * (Dt * NMPC->Config.Solver.PredictionSteps);
 	TestEqual("Final position", OutPositions.Last(), ExpectedFinalPos);
 
 	// 测试恒定加速度输入
 	Controls.Empty();
 	FVector ConstAccel(50, 0, 0);
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		Controls.Add(ConstAccel);
 	}
@@ -55,7 +55,7 @@ bool FNMPCAvoidanceTest_ForwardSimulation::RunTest(const FString& Parameters)
 	NMPC->ForwardSimulate(InitPos, InitVel, Controls, OutPositions, OutVelocities);
 
 	// 验证加速度使速度增大
-	FVector ExpectedVel = InitVel + ConstAccel * (Dt * NMPC->Config.PredictionSteps);
+	FVector ExpectedVel = InitVel + ConstAccel * (Dt * NMPC->Config.Solver.PredictionSteps);
 	TestTrue("Velocity increases", OutVelocities.Last().X > InitVel.X);
 
 	return true;
@@ -78,7 +78,7 @@ bool FNMPCAvoidanceTest_CostComputation_NoObstacles::RunTest(const FString& Para
 	TArray<FObstacleInfo> Obstacles; // 空障碍物列表
 
 	// 零控制输入，参考点设为远处目标
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		Controls.Add(FVector::ZeroVector);
 		ReferencePoints.Add(FVector(1000, 0, 0));
@@ -112,7 +112,7 @@ bool FNMPCAvoidanceTest_CostComputation_WithObstacle::RunTest(const FString& Par
 	TArray<FVector> ReferencePoints;
 	TArray<FObstacleInfo> Obstacles;
 
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		Controls.Add(FVector::ZeroVector);
 		ReferencePoints.Add(FVector(1000, 0, 0));
@@ -149,7 +149,7 @@ bool FNMPCAvoidanceTest_GradientDescent_NoObstacles::RunTest(const FString& Para
 
 	// 参考点设为远处目标
 	FVector GoalPos(2000, 0, 0);
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		ReferencePoints.Add(GoalPos);
 	}
@@ -180,7 +180,7 @@ bool FNMPCAvoidanceTest_ObstacleAvoidance_SingleSphere::RunTest(const FString& P
 	TArray<FVector> ReferencePoints;
 	TArray<FObstacleInfo> Obstacles;
 
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		ReferencePoints.Add(GoalPos);
 	}
@@ -211,7 +211,7 @@ bool FNMPCAvoidanceTest_ObstacleAvoidance_MultipleSpheres::RunTest(const FString
 	TArray<FVector> ReferencePoints;
 	TArray<FObstacleInfo> Obstacles;
 
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		ReferencePoints.Add(GoalPos);
 	}
@@ -242,7 +242,7 @@ bool FNMPCAvoidanceTest_ObstacleAvoidance_BoxAndCylinder::RunTest(const FString&
 	TArray<FVector> ReferencePoints;
 	TArray<FObstacleInfo> Obstacles;
 
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		ReferencePoints.Add(FVector(2000, 0, 0));
 	}
@@ -304,7 +304,7 @@ bool FNMPCAvoidanceTest_WarmStart::RunTest(const FString& Parameters)
 	TArray<FVector> ReferencePoints;
 	TArray<FObstacleInfo> Obstacles;
 
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		ReferencePoints.Add(FVector(2000, 0, 0));
 	}
@@ -336,7 +336,7 @@ bool FNMPCAvoidanceTest_StuckDetection::RunTest(const FString& Parameters)
 	TArray<FVector> ReferencePoints;
 	TArray<FObstacleInfo> Obstacles;
 
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		ReferencePoints.Add(FVector(2000, 0, 0));
 	}
@@ -364,7 +364,7 @@ bool FNMPCAvoidanceTest_ControlLimits::RunTest(const FString& Parameters)
 
 	// 构造超出限制的控制输入
 	TArray<FVector> Controls;
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		Controls.Add(FVector(500, 500, 500));
 	}
@@ -376,7 +376,7 @@ bool FNMPCAvoidanceTest_ControlLimits::RunTest(const FString& Parameters)
 	// 验证投影后的加速度不超过最大限制
 	for (const FVector& Control : Controls)
 	{
-		TestTrue("Control within limits", Control.Size() <= NMPC->Config.MaxAcceleration + 1.0f);
+		TestTrue("Control within limits", Control.Size() <= NMPC->Config.Actuator.MaxAcceleration + 1.0f);
 	}
 
 	// 前向仿真验证速度约束
@@ -387,7 +387,7 @@ bool FNMPCAvoidanceTest_ControlLimits::RunTest(const FString& Parameters)
 	// 验证仿真过程中速度不超过最大限制
 	for (const FVector& Velocity : Velocities)
 	{
-		TestTrue("Velocity within limits", Velocity.Size() <= NMPC->Config.MaxVelocity + 1.0f);
+		TestTrue("Velocity within limits", Velocity.Size() <= NMPC->Config.Actuator.MaxVelocity + 1.0f);
 	}
 
 	return true;
@@ -406,7 +406,7 @@ bool FNMPCAvoidanceTest_NoCorrection_ClearPath::RunTest(const FString& Parameter
 	TArray<FVector> ReferencePoints;
 	TArray<FObstacleInfo> Obstacles; // 空障碍物列表
 
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		ReferencePoints.Add(FVector(2000, 0, 0));
 	}
@@ -431,7 +431,7 @@ bool FNMPCAvoidanceTest_ResultFields::RunTest(const FString& Parameters)
 	TArray<FVector> ReferencePoints;
 	TArray<FObstacleInfo> Obstacles;
 
-	for (int32 i = 0; i < NMPC->Config.PredictionSteps; ++i)
+	for (int32 i = 0; i < NMPC->Config.Solver.PredictionSteps; ++i)
 	{
 		ReferencePoints.Add(FVector(2000, 0, 0));
 	}
@@ -442,7 +442,7 @@ bool FNMPCAvoidanceTest_ResultFields::RunTest(const FString& Parameters)
 	FNMPCAvoidanceResult Result = NMPC->ComputeAvoidance(CurrentPos, CurrentVel, ReferencePoints, Obstacles);
 
 	// 验证返回结果各字段的有效性
-	TestEqual("Trajectory length correct", Result.PredictedTrajectory.Num(), NMPC->Config.PredictionSteps + 1);
+	TestEqual("Trajectory length correct", Result.PredictedTrajectory.Num(), NMPC->Config.Solver.PredictionSteps + 1);
 	TestTrue("Total cost non-negative", Result.TotalCost >= 0.0f);
 	TestTrue("Corrected target valid", !Result.CorrectedTarget.ContainsNaN());
 	TestTrue("Corrected direction valid", !Result.CorrectedDirection.ContainsNaN());

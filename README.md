@@ -113,7 +113,14 @@
 - 多航段路径规划（逐段 A* + line-of-sight 精简）
 - NMPC 局部避障（非线性模型预测控制）
   - 6-状态点质量模型，投影梯度下降求解器
-  - 指数势垒障碍物代价 + 温启动
+  - Frenet 坐标分解代价函数（横向/纵向误差 + L2 平方距离）
+  - Smooth hinge 障碍代价（A/B 对比开关）
+  - 确定性多初值 PGD（Warm/Nominal/Left/Right/Up/Down/Brake 7 候选 + 短 PGD 精炼）
+  - Homotopy 绕行侧记忆（跨帧持久化，迟滞切换）
+  - Dykstra 投影（同时满足加速度 + 速度约束）
+  - 同次优化内失败检测（线搜索失败 / 梯度收敛但净空不足）
+  - 嵌套参数结构（Solver/Cost/Obstacle/Actuator/Init 分组）
+  - 结构化求解日志 `[NMPC_SOLVE]`、8 个基准回归场景
   - 支持 Sphere/Box/Cylinder 障碍物及动态障碍物预测
 - 基于射线检测的障碍物感知（ObstacleDetector）
 
@@ -141,7 +148,7 @@
 - 编队控制：线形、V形、环形、菱形编队
 - 联合 NMPC：Leader 统一求解，协调多机轨迹
 - 任务分配：MILP 求解器优化任务分配
-- CBF-QP 安全滤波：保证多机间最小安全距离
+- CBF-QP 安全滤波：二阶 CBF 约束（符号修正），保证多机间最小安全距离
 
 ## 项目结构
 
@@ -261,6 +268,7 @@ FNMPCAvoidanceResult Result = NMPCAvoidance->ComputeAvoidance(
 | Planning.AStar | 8 | A* 路径规划、启发式、避障 |
 | Planning.MultiSegment | 4 | 多段路径规划、碰撞检测、路径精简 |
 | Planning.NMPCAvoidance | 5 | NMPC 求解、障碍物代价、动态障碍物 |
+| Planning.NMPCBaseline | 8 | 基准回归场景（直线/走廊/封堵/U形/窄通道/动态/对向） |
 
 ### 运行测试
 
@@ -291,6 +299,7 @@ Script\test.bat
 | Phase 12 | 多机协同与安全滤波（联合 NMPC、CBF-QP、编队控制） | 已完成 |
 | Phase 13 | 任务分配与联合优化（MILP 求解器、任务监控与重规划） | 已完成 |
 | Phase 14 | 环境模拟与传感器扩展（风场模型、气压计、磁力计、风速计） | 已完成 |
+| Phase 15 | NMPC/CBF 优化重构（Frenet 代价、多初值 PGD、Homotopy 记忆、Dykstra 投影、CBF 符号修正） | 已完成 |
 
 ### 目标架构
 

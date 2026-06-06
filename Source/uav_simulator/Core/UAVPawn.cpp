@@ -167,22 +167,23 @@ void AUAVPawn::BeginPlay()
 	// 同步模型速度限制到 NMPC，优化权重配置实现快速安全飞行
 	{
 		const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
-		NMPCComponent->Config.MaxVelocity = Spec.MaxVelocity;
-		NMPCComponent->Config.PredictionHorizon = 4.0f;         // 预测时域 4s
-		NMPCComponent->Config.PredictionSteps = 8;              // 8 步
-		NMPCComponent->Config.WeightReference = 0.01f;          // 参考跟踪权重
-		NMPCComponent->Config.WeightVelocity = 0.005f;          // 速度跟踪权重
-		NMPCComponent->Config.WeightTerminal = 0.01f;           // 终端代价
-		NMPCComponent->Config.WeightObstacle = 5.0f;            // 障碍物权重
-		NMPCComponent->Config.ObstacleSafeDistance = 200.0f;    // 安全距离 2m
-		NMPCComponent->Config.ObstacleInfluenceDistance = 1200.0f; // 感知范围 12m
-		NMPCComponent->Config.ObstacleAlpha = 0.04f;           // 衰减系数
-		NMPCComponent->Config.MaxObstacleCostPerStep = 600.0f;
-		NMPCComponent->Config.MaxAcceleration = 500.0f;         // 最大加速度
-		NMPCComponent->Config.MaxIterations = 40;               // 迭代次数
-		NMPCComponent->Config.InitialStepSize = 500.0f;         // 初始步长
-		NMPCComponent->Config.WeightControl = 0.0001f;           // 控制代价
-		NMPCComponent->Config.WeightTemporalConsistency = 0.001f; // 时序一致性
+		auto& Cfg = NMPCComponent->Config;
+		Cfg.Actuator.MaxVelocity = Spec.MaxVelocity;
+		Cfg.Solver.PredictionHorizon = 4.0f;         // 预测时域 4s
+		Cfg.Solver.PredictionSteps = 8;               // 8 步
+		Cfg.Cost.WeightReference = 0.01f;             // 参考跟踪权重
+		Cfg.Cost.WeightVelocity = 0.005f;             // 速度跟踪权重
+		Cfg.Cost.WeightTerminal = 0.01f;              // 终端代价
+		Cfg.Cost.WeightObstacle = 5.0f;               // 障碍物权重
+		Cfg.Obstacle.ObstacleSafeDistance = 200.0f;   // 安全距离 2m
+		Cfg.Obstacle.ObstacleInfluenceDistance = 1200.0f; // 感知范围 12m
+		Cfg.Obstacle.ObstacleAlpha = 0.04f;          // 衰减系数
+		Cfg.Obstacle.MaxObstacleCostPerStep = 600.0f;
+		Cfg.Actuator.MaxAcceleration = 500.0f;        // 最大加速度
+		Cfg.Solver.MaxIterations = 40;                // 迭代次数
+		Cfg.Solver.InitialStepSize = 500.0f;          // 初始步长
+		Cfg.Cost.WeightControl = 0.0001f;             // 控制代价
+		Cfg.Cost.WeightTemporalConsistency = 0.001f;  // 时序一致性
 	}
 
 	// 多机协同注册
@@ -422,7 +423,7 @@ bool AUAVPawn::ShouldSolveNMPC(float DeltaTime)
 
 void AUAVPawn::PrepareReferencePoints(TArray<FVector>& OutReferencePoints)
 {
-	const int32 N = NMPCComponent->Config.PredictionSteps;
+	const int32 N = NMPCComponent->Config.Solver.PredictionSteps;
 	const float Dt = NMPCComponent->Config.GetDt();
 	const float CurrentTime = TrajectoryTrackerComponent->GetCurrentTime();
 
@@ -465,7 +466,7 @@ void AUAVPawn::FilterNearbyObstacles(TArray<FObstacleInfo>& OutObstacles)
 	// 仅获取 NMPC 感知范围内的障碍物（不再用 2x 范围）
 	TArray<FObstacleInfo> RawObstacles;
 	for (const FObstacleInfo& Obs : ObstacleManagerComponent->GetObstaclesInRange(
-		CurrentState.Position, NMPCComponent->Config.ObstacleInfluenceDistance))
+		CurrentState.Position, NMPCComponent->Config.Obstacle.ObstacleInfluenceDistance))
 	{
 		if (Obs.Extents.GetMax() > 5000.0f)
 		{
@@ -535,14 +536,14 @@ void AUAVPawn::FixReferencePointsPenetratingObstacles(
 		for (const FObstacleInfo& Obs : Obstacles)
 		{
 			float Dist = NMPCComponent->CalculateDistanceToObstacle(RefPt, Obs);
-			if (Dist < NMPCComponent->Config.ObstacleSafeDistance)
+			if (Dist < NMPCComponent->Config.Obstacle.ObstacleSafeDistance)
 			{
 				FVector PushDir = (RefPt - Obs.Center).GetSafeNormal();
 				if (PushDir.IsNearlyZero())
 				{
 					PushDir = FVector::UpVector;
 				}
-				RefPt += PushDir * (NMPCComponent->Config.ObstacleSafeDistance - Dist);
+				RefPt += PushDir * (NMPCComponent->Config.Obstacle.ObstacleSafeDistance - Dist);
 			}
 		}
 	}
@@ -632,16 +633,16 @@ FVector AUAVPawn::CalculateEscapeDirection(const TArray<FObstacleInfo>& NearbyOb
 	FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
 	FVector ToRef = (DesiredPos - CurrentState.Position).GetSafeNormal();
 
-	float ObsWeight = FMath::Clamp(1.0f - NearestD / NMPCComponent->Config.ObstacleSafeDistance, 0.0f, 1.0f);
+	float ObsWeight = FMath::Clamp(1.0f - NearestD / NMPCComponent->Config.Obstacle.ObstacleSafeDistance, 0.0f, 1.0f);
 	return (AwayFromObs * ObsWeight + ToRef * (1.0f - ObsWeight)).GetSafeNormal();
 }
 
 float AUAVPawn::CalculateEscapeAcceleration(float NearestObsDist)
 {
 	float CurrentSpeed = CurrentState.Velocity.Size();
-	float BaseEscapeAccel = 500.0f;
-	float SpeedFactor = FMath::Clamp(1.0f - CurrentSpeed / 500.0f, 0.3f, 1.0f);
-	float DistFactor = FMath::Clamp(1.0f - NearestObsDist / NMPCComponent->Config.ObstacleSafeDistance, 0.5f, 1.5f);
+	float BaseEscapeAccel = 600.0f;
+	float SpeedFactor = FMath::Clamp(1.0f - CurrentSpeed / 600.0f, 0.3f, 1.0f);
+	float DistFactor = FMath::Clamp(1.0f - NearestObsDist / NMPCComponent->Config.Obstacle.ObstacleSafeDistance, 0.5f, 1.5f);
 	return BaseEscapeAccel * SpeedFactor * DistFactor;
 }
 
@@ -649,7 +650,8 @@ void AUAVPawn::HandleStuckEscape(
 	const FNMPCAvoidanceResult& Result,
 	const TArray<FObstacleInfo>& NearbyObstacles)
 {
-	StuckEscapeCooldown = 0.3f;
+	// 逃逸冷却期间不进行 NMPC 求解，直接使用逃逸加速度
+	StuckEscapeCooldown = 0.5f;
 
 	FVector EscapeDir = CalculateEscapeDirection(NearbyObstacles);
 	if (!EscapeDir.IsNearlyZero())
@@ -666,7 +668,7 @@ FVector AUAVPawn::LimitLateralAcceleration(const FVector& Acceleration)
 	FVector Result = Acceleration;
 	float MaxLateralAccel = 300.0f;
 
-	if (CachedNearestObsDist < NMPCComponent->Config.ObstacleSafeDistance * 2.0f)
+	if (CachedNearestObsDist < NMPCComponent->Config.Obstacle.ObstacleSafeDistance * 2.0f)
 	{
 		MaxLateralAccel = 400.0f;
 	}
@@ -710,10 +712,10 @@ FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float Cr
 	float ZError = DesiredPos.Z - CurrentState.Position.Z;
 
 	float HardLimit = 120.0f;
-	if (CachedNearestObsDist < NMPCComponent->Config.ObstacleSafeDistance * 3.0f)
+	if (CachedNearestObsDist < NMPCComponent->Config.Obstacle.ObstacleSafeDistance * 3.0f)
 	{
 		float ProximityRatio = FMath::Clamp(
-			1.0f - CachedNearestObsDist / (NMPCComponent->Config.ObstacleSafeDistance * 3.0f), 0.0f, 1.0f);
+			1.0f - CachedNearestObsDist / (NMPCComponent->Config.Obstacle.ObstacleSafeDistance * 3.0f), 0.0f, 1.0f);
 		HardLimit = FMath::Lerp(120.0f, 130.0f, ProximityRatio);
 	}
 
@@ -793,11 +795,11 @@ FVector AUAVPawn::ApplyEmergencyBraking(const FVector& Acceleration)
 	float CurrentSpeed = CurrentState.Velocity.Size();
 
 	// 低速时无需紧急制动（<200cm/s = 2m/s）：制动距离极短
-	if (CurrentSpeed < 200.0f)
+	if (CurrentSpeed < 150.0f)
 		return Acceleration;
 
 	// 距离 > 6m 时无需干预：NMPC 完全可以处理
-	if (CachedNearestObsDist >= 300.0f)
+	if (CachedNearestObsDist >= 250.0f)
 		return Acceleration;
 
 	// 计算理论制动距离: d = v²/(2a)
@@ -806,7 +808,7 @@ FVector AUAVPawn::ApplyEmergencyBraking(const FVector& Acceleration)
 
 	// 安全裕度：2.0 倍制动距离 + 1m 基础距离
 	// 此公式确保只有在真正可能碰撞时才触发，不会干扰 NMPC 正常避障
-	float RequiredDist = BrakingDist * 1.2f + 30.0f;
+	float RequiredDist = BrakingDist * 1.1f + 25.0f;
 
 	if (CachedNearestObsDist < RequiredDist)
 	{
@@ -819,7 +821,7 @@ FVector AUAVPawn::ApplyEmergencyBraking(const FVector& Acceleration)
 
 		// 与NMPC加速度混合: 距离越近，制动权重越高
 		float BrakeWeight = FMath::Clamp(
-			(RequiredDist - CachedNearestObsDist) / RequiredDist, 0.0f, 0.9f);
+			(RequiredDist - CachedNearestObsDist) / RequiredDist, 0.0f, 0.8f);
 
 		FVector Result = Acceleration * (1.0f - BrakeWeight) + BrakeAccel * BrakeWeight;
 

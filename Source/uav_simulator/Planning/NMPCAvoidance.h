@@ -17,69 +17,24 @@ enum class EMPCType : uint8
 	Linear UMETA(DisplayName = "Linear MPC")
 };
 
+// ==================== 嵌套配置结构 ====================
+
 /**
- * NMPC 配置参数
+ * NMPC 求解器配置
+ * 关系: PredictionHorizon / PredictionSteps = dt
  */
 USTRUCT(BlueprintType)
-struct FNMPCConfig
+struct FNMPCSolverConfig
 {
 	GENERATED_BODY()
 
-	// MPC类型
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MPC")
-	EMPCType MPCType = EMPCType::Nonlinear;
-
 	// 预测步数 N
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
 	int32 PredictionSteps = 10;
 
 	// 预测时域 T_h (秒)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
 	float PredictionHorizon = 2.0f;
-
-	// 最大加速度 (cm/s²)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float MaxAcceleration = 400.0f;
-
-	// 最大速度 (cm/s)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float MaxVelocity = 2000.0f;
-
-	// 参考跟踪权重
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightReference = 0.3f;
-
-	// 速度跟踪权重
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightVelocity = 0.2f;
-
-	// 控制输入权重
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightControl = 0.001f;
-
-	// 时序一致性权重：惩罚与上一帧解的偏差，抑制帧间振荡
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightTemporalConsistency = 0.01f;
-
-	// 障碍物代价权重
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightObstacle = 3.0f;
-
-	// 终端代价权重
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Weights")
-	float WeightTerminal = 2.0f;
-
-	// 障碍物势垒衰减系数 α
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float ObstacleAlpha = 0.5f;
-
-	// 障碍物安全距离 (cm)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float ObstacleSafeDistance = 300.0f;
-
-	// 障碍物影响距离 (cm)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float ObstacleInfluenceDistance = 1000.0f;
 
 	// 求解器最大迭代次数
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
@@ -89,7 +44,7 @@ struct FNMPCConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
 	float ConvergenceTolerance = 0.1f;
 
-	// 有限差分步长 (cm/s²)
+	// 有限差分步长 (cm/s²)，应按控制尺度设置
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
 	float FiniteDiffEpsilon = 20.0f;
 
@@ -105,18 +60,6 @@ struct FNMPCConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
 	int32 MaxBacktrackSteps = 8;
 
-	// Stuck 检测: 合力阈值
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
-	float StuckForceThreshold = 1.5f;
-
-	// 单步障碍物代价上限 (防止 exp 数值爆炸)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
-	float MaxObstacleCostPerStep = 200.0f;
-
-	// 横向扰动幅度 (cm/s^2, 用于跳出局部最优)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	float LateralPerturbationMagnitude = 150.0f;
-
 	// 连续代价上升次数阈值，超过后重置温启动
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
 	int32 WarmStartResetThreshold = 30;
@@ -124,26 +67,205 @@ struct FNMPCConfig
 	// reset 后免疫帧数，防止立即重触发（~150ms）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
 	int32 WarmStartResetImmunity = 200;
+};
+
+/**
+ * NMPC 代价权重配置
+ * 注意: 改为平方误差后，旧权重不能直接复用（量纲从 cm 变为 cm²）
+ */
+USTRUCT(BlueprintType)
+struct FNMPCCostConfig
+{
+	GENERATED_BODY()
+
+	// 参考跟踪权重
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Cost")
+	float WeightReference = 0.3f;
+
+	// 速度跟踪权重
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Cost")
+	float WeightVelocity = 0.2f;
+
+	// 控制输入权重
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Cost")
+	float WeightControl = 0.001f;
+
+	// 时序一致性权重：惩罚与上一帧解的偏差，抑制帧间振荡
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Cost")
+	float WeightTemporalConsistency = 0.01f;
+
+	// 障碍物代价权重
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Cost")
+	float WeightObstacle = 3.0f;
+
+	// 终端代价权重
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Cost")
+	float WeightTerminal = 2.0f;
+
+		// 横向跟踪权重 (Frenet 分解)
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Cost")
+		float WeightLateral = 0.5f;
+
+		// 纵向滞后权重 (Frenet 分解)
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Cost")
+		float WeightLag = 0.3f;
+
+		// 路径进度权重
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Cost")
+		float WeightProgress = 0.1f;
+
+		// 反向运动惩罚权重
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Cost")
+		float WeightReverse = 0.5f;
+};
+
+/**
+ * NMPC 障碍物配置
+ * 约束: ObstacleInfluenceDistance > ObstacleSafeDistance
+ */
+USTRUCT(BlueprintType)
+struct FNMPCObstacleConfig
+{
+	GENERATED_BODY()
+
+	// 障碍物势垒衰减系数 α
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
+	float ObstacleAlpha = 0.4f;
+
+	// 障碍物安全距离 (cm)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
+	float ObstacleSafeDistance = 300.0f;
+
+	// 障碍物影响距离 (cm)，必须大于安全距离
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
+	float ObstacleInfluenceDistance = 1000.0f;
+
+	// 单步障碍物代价上限 (防止 exp 数值爆炸)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
+	float MaxObstacleCostPerStep = 200.0f;
 
 	// 障碍物代价死区: 小于该值视为无障碍影响
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
 	float ObstacleCostDeadband = 0.3f;
 
+		// Smooth hinge 参数 β
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
+		float SmoothHingeBeta = 2.0f;
+
+		// 是否使用 smooth hinge 障碍代价（A/B 对比开关）
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
+		bool bUseSmoothHinge = false;
+};
+
+/**
+ * NMPC 初始化与卡死检测配置
+ */
+USTRUCT(BlueprintType)
+struct FNMPCInitializationConfig
+{
+	GENERATED_BODY()
+
+	// Stuck 检测: 合力阈值
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Init")
+	float StuckForceThreshold = 1.5f;
+
 	// 纠偏目标最小位移阈值 (cm)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Init")
 	float MinCorrectionDistance = 5.0f;
 
 	// 纠偏目标前瞻步数 (显式欧拉中 step 1 不含控制量，需用更远的步)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC", meta = (ClampMin = "2", ClampMax = "10"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Init", meta = (ClampMin = "2", ClampMax = "10"))
 	int32 CorrectionLookaheadSteps = 5;
 
+	// 横向扰动幅度 (cm/s^2, 用于跳出局部最优)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Init")
+	float LateralPerturbationMagnitude = 150.0f;
+};
+
+/**
+ * 执行器约束配置
+ * 约束: 制动距离 = v²/(2*a_max)，与 MaxVelocity 和 MaxAcceleration 一致
+ */
+USTRUCT(BlueprintType)
+struct FActuatorConstraintConfig
+{
+	GENERATED_BODY()
+
+	// 最大加速度 (cm/s²)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Actuator")
+	float MaxAcceleration = 400.0f;
+
+	// 最大速度 (cm/s)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Actuator")
+	float MaxVelocity = 2000.0f;
+
+		// Dykstra 投影最大迭代数
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Actuator")
+		int32 MaxProjectionIterations = 10;
+
+		// Dykstra 投影可行性容差
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Actuator")
+		float ProjectionTolerance = 1.0f;
+
+		// 是否使用 Dykstra 投影（false = 旧顺序投影）
+		UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Actuator")
+		bool bUseDykstraProjection = true;
+};
+
+/**
+ * NMPC 诊断配置（预留）
+ */
+USTRUCT(BlueprintType)
+struct FNMPCDiagnosticsConfig
+{
+	GENERATED_BODY()
+};
+
+// ==================== 顶层配置 ====================
+
+/**
+ * NMPC 配置参数
+ */
+USTRUCT(BlueprintType)
+struct FNMPCConfig
+{
+	GENERATED_BODY()
+
+	// MPC类型
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MPC")
+	EMPCType MPCType = EMPCType::Nonlinear;
+
+	// 求解器参数
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
+	FNMPCSolverConfig Solver;
+
+	// 代价权重
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Cost")
+	FNMPCCostConfig Cost;
+
+	// 障碍物参数
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Obstacle")
+	FNMPCObstacleConfig Obstacle;
+
+	// 初始化与卡死检测
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Init")
+	FNMPCInitializationConfig Init;
+
+	// 执行器约束
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Actuator")
+	FActuatorConstraintConfig Actuator;
+
+	// 诊断参数
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Diag")
+	FNMPCDiagnosticsConfig Diag;
+
 	// 获取时间步长 dt
-	float GetDt() const { return PredictionHorizon / FMath::Max(PredictionSteps, 1); }
+	float GetDt() const { return Solver.PredictionHorizon / FMath::Max(Solver.PredictionSteps, 1); }
 
 	// 线性MPC权重访问器（复用NMPC权重）
-	float GetPositionWeight() const { return WeightReference; }
-	float GetControlWeight() const { return WeightControl; }
-	float GetObstacleWeight() const { return WeightObstacle; }
+	float GetPositionWeight() const { return Cost.WeightReference; }
+	float GetControlWeight() const { return Cost.WeightControl; }
+	float GetObstacleWeight() const { return Cost.WeightObstacle; }
 };
 
 /**
@@ -177,6 +299,67 @@ struct FNMPCPredictionStep
 		, ObstacleCost(0.0f)
 	{}
 };
+
+/**
+ * NMPC 求解诊断信息
+ */
+USTRUCT(BlueprintType)
+struct FNMPCSolveDiagnostics
+{
+	GENERATED_BODY()
+
+	// 初始代价
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	float InitialCost = MAX_FLT;
+
+	// 最终代价
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	float FinalCost = MAX_FLT;
+
+	// 相对代价下降率
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	float RelativeCostDecrease = 0.0f;
+
+	// 梯度范数
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	float GradientNorm = 0.0f;
+
+	// 迭代次数
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	int32 Iterations = 0;
+
+	// 回溯失败次数
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	int32 BacktrackFailCount = 0;
+
+		// 求解失败原因（拆分为具体标志）
+		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+		bool bMaxIterReached = false;       // 达到最大迭代次数未收敛
+		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+		bool bLineSearchFailed = false;     // 线搜索完全失败
+		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+		bool bClearanceInsufficient = false; // 收敛但预测净空不足
+		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+		bool bProgressInsufficient = false; // 收敛但路径进度不足
+		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+		bool bNaNOrInf = false;             // 代价出现 NaN 或 Inf
+
+		// 初值类型
+		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+		FString InitType = TEXT("Unknown");
+
+		// 最小预测净空 (cm) — 基于全时域预测轨迹
+		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+		float MinPredictedClearance = MAX_FLT;
+
+		// 预测路径进度 (cm)
+		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+		float PredictedPathProgress = 0.0f;
+
+		// 求解时间 (ms)
+		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+		float SolveTimeMs = 0.0f;
+	};
 
 /**
  * NMPC 避障结果
@@ -218,6 +401,10 @@ struct FNMPCAvoidanceResult
 	UPROPERTY(BlueprintReadOnly, Category = "NMPC")
 	FVector OptimalAcceleration;
 
+	// 求解诊断信息
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC")
+	FNMPCSolveDiagnostics Diagnostics;
+
 	FNMPCAvoidanceResult()
 		: CorrectedTarget(FVector::ZeroVector)
 		, CorrectedDirection(FVector::ForwardVector)
@@ -237,8 +424,47 @@ struct FNMPCAvoidanceResult
  * - 控制向量: [ax, ay, az] (期望加速度)
  * - 预测模型: 离散欧拉积分
  * - 代价函数: 参考跟踪 + 速度跟踪 + 控制代价 + 障碍物势垒 + 终端代价
- * - 求解器: 投影梯度下降 + 回溯线搜索 + 温启动
+ * - 求解器: 投影梯度下降 + 回溯线搜索 + 温启动 + 确定性多初值
  */
+/**
+ * 绕行侧记忆 (Homotopy class)
+ */
+enum class EAvoidanceHomotopy : uint8
+{
+	None,
+	Left,
+	Right,
+	Above,
+	Below
+};
+
+/**
+ * NMPC 初始化候选类型
+ */
+enum class EInitCandidateType : uint8
+{
+	Warm,
+	Nominal,
+	Left,
+	Right,
+	Up,
+	Down,
+	Brake
+};
+
+/**
+ * NMPC 初始化候选
+ */
+struct FInitCandidate
+{
+	EInitCandidateType Type = EInitCandidateType::Nominal;
+	TArray<FVector> Controls;
+	float Cost = MAX_FLT;
+	float MinClearance = MAX_FLT;
+	float PathProgress = 0.0f;
+};
+
+
 UCLASS(BlueprintType)
 class UAV_SIMULATOR_API UNMPCAvoidance : public UObject
 {
@@ -330,10 +556,44 @@ public:
 	 */
 	void ProjectControls(TArray<FVector>& Controls, const FVector& InitVel) const;
 
+		/**
+		 * Dykstra 投影: 同时满足加速度和速度约束
+		 */
+		void DykstraProjectStep(
+			FVector& Control,
+			const FVector& CurrentVel,
+			float dt) const;
+
 	/**
 	 * 温启动: 将上次最优控制序列左移一步
 	 */
 	void WarmStart();
+
+		/**
+		 * Frenet 坐标分解: 将位置误差分解为纵向/横向
+		 */
+
+		/**
+		 * 生成多初值候选
+		 */
+		TArray<FInitCandidate> GenerateCandidates(
+			const TArray<FVector>& ReferencePoints,
+			const FVector& CurrentVelocity) const;
+
+		/**
+		 * 从 2-4 个控制 knot 插值生成完整控制序列
+		 */
+		void InterpolateFromKnots(
+			TArray<FVector>& OutControls,
+			const TArray<FVector>& Knots,
+			const TArray<int32>& KnotIndices) const;
+		void ComputeFrenetCoordinates(
+			const FVector& Position,
+			const FVector& RefPoint,
+			const FVector& NextRefPoint,
+			FVector& OutTangent,
+			float& OutParallel,
+			FVector& OutPerpendicular) const;
 
 private:
 	// 上次最优控制序列 (用于温启动)
@@ -342,14 +602,10 @@ private:
 	// 是否有上次的控制序列
 	bool bHasPreviousControls = false;
 
-	// 上次总代价 (用于代价上升趋势统计)
-	float PreviousTotalCost = MAX_FLT;
-
-	// 连续代价上升计数
-	int32 ConsecutiveCostRiseCount = 0;
-
-	// reset 后剩余免疫帧数
-	int32 WarmStartResetImmunityCount = 0;
+	// ---- Homotopy 绕行侧记忆 ----
+	EAvoidanceHomotopy CurrentHomotopy = EAvoidanceHomotopy::None;
+	float HomotopyCost = MAX_FLT;
+	int32 HomotopyObstacleID = -1;
 
 	// 上一帧状态 (用于日志状态转换检测)
 	bool bPrevNeedsCorrection = false;

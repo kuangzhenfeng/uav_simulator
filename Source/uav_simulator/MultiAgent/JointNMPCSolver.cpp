@@ -22,10 +22,10 @@ FJointNMPCSolveResult UJointNMPCSolver::Solve(
 		return Result;
 	}
 
-	int32 N = Config.BaseConfig.PredictionSteps;
+	int32 N = Config.BaseConfig.Solver.PredictionSteps;
 	float Dt = Config.BaseConfig.GetDt();
-	float MaxAccel = Config.BaseConfig.MaxAcceleration;
-	float MaxVel = Config.BaseConfig.MaxVelocity;
+	float MaxAccel = Config.BaseConfig.Actuator.MaxAcceleration;
+	float MaxVel = Config.BaseConfig.Actuator.MaxVelocity;
 
 	// 初始化或温启动控制序列
 	TArray<TArray<FVector>> AllControls;
@@ -108,9 +108,9 @@ FJointNMPCSolveResult UJointNMPCSolver::Solve(
 	}
 
 	// 投影梯度下降主循环
-	float StepSize = Config.BaseConfig.InitialStepSize;
+	float StepSize = Config.BaseConfig.Solver.InitialStepSize;
 
-	for (int32 Iter = 0; Iter < Config.BaseConfig.MaxIterations; ++Iter)
+	for (int32 Iter = 0; Iter < Config.BaseConfig.Solver.MaxIterations; ++Iter)
 	{
 		// 投影控制到可行域
 		for (int32 i = 0; i < NumAgents; ++i)
@@ -136,7 +136,7 @@ FJointNMPCSolveResult UJointNMPCSolver::Solve(
 			StaticObstacles, FormationTargets, Config);
 
 		// 收敛检查
-		if (Iter > 0 && FMath::Abs(CurrentCost - PreviousTotalCost) < Config.BaseConfig.ConvergenceTolerance)
+		if (Iter > 0 && FMath::Abs(CurrentCost - PreviousTotalCost) < Config.BaseConfig.Solver.ConvergenceTolerance)
 		{
 			Result.TotalCost = CurrentCost;
 			break;
@@ -154,7 +154,7 @@ FJointNMPCSolveResult UJointNMPCSolver::Solve(
 		TArray<TArray<FVector>> BestControls = AllControls;
 		float CurrentStep = StepSize;
 
-		for (int32 BtStep = 0; BtStep < Config.BaseConfig.MaxBacktrackSteps; ++BtStep)
+		for (int32 BtStep = 0; BtStep < Config.BaseConfig.Solver.MaxBacktrackSteps; ++BtStep)
 		{
 			// 试探更新
 			TArray<TArray<FVector>> TrialControls;
@@ -192,11 +192,11 @@ FJointNMPCSolveResult UJointNMPCSolver::Solve(
 				break;
 			}
 
-			CurrentStep *= Config.BaseConfig.BacktrackFactor;
+			CurrentStep *= Config.BaseConfig.Solver.BacktrackFactor;
 		}
 
 		AllControls = BestControls;
-		StepSize = FMath::Min(CurrentStep * 1.2f, Config.BaseConfig.InitialStepSize);
+		StepSize = FMath::Min(CurrentStep * 1.2f, Config.BaseConfig.Solver.InitialStepSize);
 	}
 
 	// 提取每 Agent 的第一步最优加速度
@@ -255,7 +255,7 @@ float UJointNMPCSolver::ComputeJointCost(
 {
 	float TotalCost = 0.0f;
 	int32 NumAgents = AllPositions.Num();
-	int32 N = Config.BaseConfig.PredictionSteps;
+	int32 N = Config.BaseConfig.Solver.PredictionSteps;
 	float Dt = Config.BaseConfig.GetDt();
 
 	// 单机代价：参考跟踪 + 速度跟踪 + 控制代价
@@ -265,23 +265,23 @@ float UJointNMPCSolver::ComputeJointCost(
 		{
 			// 参考跟踪
 			float RefCost = FVector::DistSquared(AllPositions[i][k], AllReferences[i][k]);
-			TotalCost += Config.BaseConfig.WeightReference * RefCost;
+			TotalCost += Config.BaseConfig.Cost.WeightReference * RefCost;
 
 			// 速度跟踪
 			FVector DesiredVel = (AllReferences[i][k + 1] - AllReferences[i][k]) / Dt;
 			float VelCost = FVector::DistSquared(AllVelocities[i][k], DesiredVel);
-			TotalCost += Config.BaseConfig.WeightVelocity * VelCost;
+			TotalCost += Config.BaseConfig.Cost.WeightVelocity * VelCost;
 
 			// 控制代价
-			TotalCost += Config.BaseConfig.WeightControl * AllControls[i][k].SizeSquared();
+			TotalCost += Config.BaseConfig.Cost.WeightControl * AllControls[i][k].SizeSquared();
 
 			// 静态障碍物代价（指数势垒）
 			for (const FObstacleInfo& Obs : StaticObstacles)
 			{
 				float Dist = FMath::Sqrt(FVector::DistSquared(AllPositions[i][k], Obs.Center)) - Obs.Extents.GetMax();
-				float SafeDist = Config.BaseConfig.ObstacleSafeDistance;
-				float InfluenceDist = Config.BaseConfig.ObstacleInfluenceDistance;
-				float Alpha = Config.BaseConfig.ObstacleAlpha;
+				float SafeDist = Config.BaseConfig.Obstacle.ObstacleSafeDistance;
+				float InfluenceDist = Config.BaseConfig.Obstacle.ObstacleInfluenceDistance;
+				float Alpha = Config.BaseConfig.Obstacle.ObstacleAlpha;
 
 				if (Dist < InfluenceDist)
 				{
@@ -289,7 +289,7 @@ float UJointNMPCSolver::ComputeJointCost(
 					if (Exponent <= 20.0f)
 					{
 						float ObsCost = FMath::Max(0.0f, Exponent);
-						TotalCost += Config.BaseConfig.WeightObstacle * ObsCost;
+						TotalCost += Config.BaseConfig.Cost.WeightObstacle * ObsCost;
 					}
 				}
 			}
@@ -297,7 +297,7 @@ float UJointNMPCSolver::ComputeJointCost(
 
 		// 终端代价
 		float TerminalRefCost = FVector::DistSquared(AllPositions[i][N], AllReferences[i][N]);
-		TotalCost += Config.BaseConfig.WeightTerminal * TerminalRefCost;
+		TotalCost += Config.BaseConfig.Cost.WeightTerminal * TerminalRefCost;
 	}
 
 	// 机间碰撞代价（指数势垒）
@@ -311,7 +311,7 @@ float UJointNMPCSolver::ComputeJointCost(
 					AllPositions[i][k], AllPositions[j][k],
 					Config.InterAgentSafeDistance,
 					Config.InterAgentInfluenceDistance,
-					Config.BaseConfig.ObstacleAlpha);
+					Config.BaseConfig.Obstacle.ObstacleAlpha);
 				TotalCost += Config.WeightInterAgentCollision * Cost;
 			}
 		}
@@ -389,10 +389,10 @@ void UJointNMPCSolver::ComputeJointGradient(
 	TArray<TArray<FVector>>& OutGradient) const
 {
 	int32 NumAgents = AgentStates.Num();
-	int32 N = Config.BaseConfig.PredictionSteps;
-	float Epsilon = Config.BaseConfig.FiniteDiffEpsilon;
+	int32 N = Config.BaseConfig.Solver.PredictionSteps;
+	float Epsilon = Config.BaseConfig.Solver.FiniteDiffEpsilon;
 	float Dt = Config.BaseConfig.GetDt();
-	float MaxVel = Config.BaseConfig.MaxVelocity;
+	float MaxVel = Config.BaseConfig.Actuator.MaxVelocity;
 
 	OutGradient.SetNum(NumAgents);
 

@@ -105,13 +105,13 @@ bool FCBQPBuildConstraintsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Should have 1 constraint"), Normals.Num(), 1);
 	TestEqual(TEXT("Should have 1 bound"), Bounds.Num(), 1);
 
-	// 约束法线方向：A_k = 2*(pi - pj) = 2*(0-300, 0, 0) = (-600, 0, 0)
-	// 归一化后方向应大致为 X 负方向
-	if (Normals.Num() > 0)
-	{
-		FVector NormalDir = Normals[0].GetSafeNormal();
-		TestTrue(TEXT("Constraint normal should point roughly -X"),
-			NormalDir.X < -0.9f);
+		// 约束法线方向：A_k = -2*DeltaP = -2*(Pi-Pj) = -2*(-300,0,0) = (600,0,0)
+		// 归一化后方向应大致为 X 正方向（ui 的约束方向）
+		if (Normals.Num() > 0)
+		{
+			FVector NormalDir = Normals[0].GetSafeNormal();
+			TestTrue(TEXT("Constraint normal should point roughly +X"),
+				NormalDir.X > 0.9f);
 	}
 
 	return true;
@@ -164,23 +164,23 @@ bool FCBFQPFilterFullPipelineTest::RunTest(const FString& Parameters)
 	Config.DSafe = 500.0f;
 	Config.bEnabled = true;
 
-	// ---- 测试 1：有逼近邻居，应触发滤波 ----
-	{
-		FUAVState MyState = UAVTestHelpers::CreateUAVState(
-			FVector(0, 0, 0), FVector(100, 0, 0));
+		// ---- 测试 1：有逼近邻居，应触发滤波 ----
+		{
+			FUAVState MyState = UAVTestHelpers::CreateUAVState(
+				FVector(0, 0, 0), FVector(100, 0, 0));
 
-		TArray<FAgentStateSnapshot> Neighbors;
-		Neighbors.Add(UAVTestHelpers::CreateAgentSnapshot(
-			1, FVector(300, 0, 0), FVector(-100, 0, 0)));
+			TArray<FAgentStateSnapshot> Neighbors;
+			Neighbors.Add(UAVTestHelpers::CreateAgentSnapshot(
+				1, FVector(300, 0, 0), FVector(-100, 0, 0)));
 
-		// 加速度指向邻居
-		FVector NominalAccel(-200, 0, 0);
-		FCBFQPResult Result = Filter->Filter(NominalAccel, MyState, Neighbors, Config);
+			// 加速度指向邻居（+X 方向），CBF 应将其推离
+			FVector NominalAccel(200, 0, 0);
+			FCBFQPResult Result = Filter->Filter(NominalAccel, MyState, Neighbors, Config);
 
-		// 安全加速度的 X 分量应比标称值大（远离邻居）
-		TestTrue(TEXT("SafeAccel.X should be greater than nominal when approaching neighbor"),
-			Result.SafeAcceleration.X > NominalAccel.X);
-	}
+			// 安全加速度的 X 分量应比标称值小（远离邻居方向）
+			TestTrue(TEXT("SafeAccel.X should be less than nominal when approaching neighbor"),
+				Result.SafeAcceleration.X < NominalAccel.X);
+		}
 
 	// ---- 测试 2：无邻居，不应滤波 ----
 	{
@@ -193,6 +193,69 @@ bool FCBFQPFilterFullPipelineTest::RunTest(const FString& Parameters)
 
 		TestFalse(TEXT("Should not filter with no neighbors"), Result.bWasFiltered);
 	}
+
+	return true;
+}
+
+// ==================== 方向性测试：对向逼近 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPDirectionalApproachingTest,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Directional_Approaching",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPDirectionalApproachingTest::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafe = 500.0f;
+
+	// 两机对向飞行：本机在原点向+X飞，邻居在(600,0,0)向-X飞
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector(200, 0, 0));
+
+	TArray<FAgentStateSnapshot> Neighbors;
+	Neighbors.Add(UAVTestHelpers::CreateAgentSnapshot(
+		1, FVector(600, 0, 0), FVector(-200, 0, 0)));
+
+	// NMPC 想向+X加速（朝向邻居）
+	FVector NominalAccel(300, 0, 0);
+	FCBFQPResult Result = Filter->Filter(NominalAccel, MyState, Neighbors, Config);
+
+	// CBF 应将加速度推离邻居：SafeAccel.X 应小于 NominalAccel.X
+	TestTrue(TEXT("Approaching: SafeAccel.X should be less than nominal"),
+		Result.SafeAcceleration.X < NominalAccel.X);
+
+	return true;
+}
+
+// ==================== 方向性测试：远离运动 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPDirectionalSeparatingTest,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Directional_Separating",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPDirectionalSeparatingTest::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafe = 500.0f;
+
+	// 两机远离：本机在原点向-X飞，邻居在(1000,0,0)向+X飞（已远离）
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector(-100, 0, 0));
+
+	TArray<FAgentStateSnapshot> Neighbors;
+	Neighbors.Add(UAVTestHelpers::CreateAgentSnapshot(
+		1, FVector(1000, 0, 0), FVector(100, 0, 0)));
+
+	// 向-X加速（远离邻居）
+	FVector NominalAccel(-200, 0, 0);
+	FCBFQPResult Result = Filter->Filter(NominalAccel, MyState, Neighbors, Config);
+
+	// 远离时 h 增大，CBF 不应限制
+	TestFalse(TEXT("Separating: should not filter"), Result.bWasFiltered);
 
 	return true;
 }

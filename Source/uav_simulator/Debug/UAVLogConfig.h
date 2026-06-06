@@ -58,3 +58,6 @@ DECLARE_LOG_CATEGORY_EXTERN(LogUAVMultiAgent, Log, All);
 
 // Camera system log
 DECLARE_LOG_CATEGORY_EXTERN(LogUAVCamera, Log, All);
+
+// 结构化仿真指标日志
+DECLARE_LOG_CATEGORY_EXTERN(LogUAVMetrics, Log, All);

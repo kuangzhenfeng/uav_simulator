@@ -318,7 +318,7 @@ void AMultiAgentGameMode::SolveJointNMPC()
 			UTrajectoryTracker* Tracker = Pawn->GetTrajectoryTracker();
 			if (Tracker && Tracker->IsTracking())
 			{
-				int32 N = JointNMPCConfig.BaseConfig.PredictionSteps;
+				int32 N = JointNMPCConfig.BaseConfig.Solver.PredictionSteps;
 				float Dt = JointNMPCConfig.BaseConfig.GetDt();
 				float CurrentTime = Tracker->GetCurrentTime();
 				for (int32 i = 0; i <= N; ++i)

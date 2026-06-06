@@ -13,6 +13,7 @@ FCBFQPResult UCBFQPFilter::Filter(
 	const TArray<FAgentStateSnapshot>& NeighborStates,
 	const FCBFQPConfig& Config)
 {
+	const double StartTime = FPlatformTime::Seconds();
 	FCBFQPResult Result;
 	Result.SafeAcceleration = NominalAcceleration;
 
@@ -33,11 +34,11 @@ FCBFQPResult UCBFQPFilter::Filter(
 		return Result;
 	}
 
-	// 计算最小 h 值（诊断）
+	// 计算真实最小 h 值（诊断）
 	Result.MinHValue = MAX_FLT;
-	for (int32 k = 0; k < ConstraintBounds.Num(); ++k)
+	for (const FAgentStateSnapshot& Neighbor : NeighborStates)
 	{
-		float HVal = ConstraintBounds[k]; // b_k 包含了 h 相关项
+		float HVal = ComputeHValue(MyState.Position, Neighbor.State.Position, Config.DSafe);
 		Result.MinHValue = FMath::Min(Result.MinHValue, HVal);
 	}
 
@@ -81,6 +82,18 @@ FCBFQPResult UCBFQPFilter::Filter(
 		}
 	}
 	Result.SafeAcceleration = SafeAccel;
+
+	// 统计活跃约束
+	for (int32 k = 0; k < ConstraintNormals.Num(); ++k)
+	{
+		float Violation = FVector::DotProduct(ConstraintNormals[k], NominalAcceleration) - ConstraintBounds[k];
+		if (Violation > 0.0f)
+		{
+			++Result.ActiveConstraintCount;
+		}
+	}
+
+	Result.SolveTimeMs = static_cast<float>((FPlatformTime::Seconds() - StartTime) * 1000.0);
 
 	return Result;
 }
@@ -142,13 +155,14 @@ void UCBFQPFilter::BuildCBFConstraints(
 		float VelNormSq = DeltaV.SizeSquared();
 		float DeltaPDotUj = FVector::DotProduct(DeltaP, Uj);
 
-		float Bound = VelNormSq + DeltaPDotUj
-			+ 0.5f * Config.Alpha1 * HDot
-			+ 0.5f * Config.Alpha0 * H;
+		// 二阶 CBF 约束 (设计文档 §7.1):
+		//   -2·Δp·ui ≤ 2·‖Δv‖² - 2·Δp·uj + α₁·ḣ + α₀·h
+		//   A = -2·Δp, b = 2·‖Δv‖² - 2·Δp·uj + α₁·ḣ + α₀·h
+		float Bound = 2.0f * VelNormSq - 2.0f * DeltaPDotUj
+			+ Config.Alpha1 * HDot
+			+ Config.Alpha0 * H;
 
-		// 约束: (2*DeltaP) · ui ≤ Bound → A_k = 2*DeltaP, b_k = Bound
-		// 但更常用的标准形式是 A·u ≤ b:
-		FVector ConstraintNormal = 2.0f * DeltaP;
+		FVector ConstraintNormal = -2.0f * DeltaP;
 
 		OutConstraintNormals.Add(ConstraintNormal);
 		OutConstraintBounds.Add(Bound);
