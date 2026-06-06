@@ -332,34 +332,34 @@ struct FNMPCSolveDiagnostics
 	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
 	int32 BacktrackFailCount = 0;
 
-		// 求解失败原因（拆分为具体标志）
-		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
-		bool bMaxIterReached = false;       // 达到最大迭代次数未收敛
-		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
-		bool bLineSearchFailed = false;     // 线搜索完全失败
-		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
-		bool bClearanceInsufficient = false; // 收敛但预测净空不足
-		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
-		bool bProgressInsufficient = false; // 收敛但路径进度不足
-		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
-		bool bNaNOrInf = false;             // 代价出现 NaN 或 Inf
+	// 求解失败原因（拆分为具体标志）
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	bool bMaxIterReached = false;       // 达到最大迭代次数未收敛
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	bool bLineSearchFailed = false;     // 线搜索完全失败
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	bool bClearanceInsufficient = false; // 收敛但预测净空不足
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	bool bProgressInsufficient = false; // 收敛但路径进度不足
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	bool bNaNOrInf = false;             // 代价出现 NaN 或 Inf
 
-		// 初值类型
-		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
-		FString InitType = TEXT("Unknown");
+	// 初值类型
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	FString InitType = TEXT("Unknown");
 
-		// 最小预测净空 (cm) — 基于全时域预测轨迹
-		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
-		float MinPredictedClearance = MAX_FLT;
+	// 最小预测净空 (cm) — 基于全时域预测轨迹
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	float MinPredictedClearance = MAX_FLT;
 
-		// 预测路径进度 (cm)
-		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
-		float PredictedPathProgress = 0.0f;
+	// 预测路径进度 (cm)
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	float PredictedPathProgress = 0.0f;
 
-		// 求解时间 (ms)
-		UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
-		float SolveTimeMs = 0.0f;
-	};
+	// 求解时间 (ms)
+	UPROPERTY(BlueprintReadOnly, Category = "NMPC|Diag")
+	float SolveTimeMs = 0.0f;
+};
 
 /**
  * NMPC 避障结果
@@ -541,6 +541,14 @@ public:
 	 */
 	float CalculateDistanceToObstacle(const FVector& Point, const FObstacleInfo& Obstacle) const;
 
+	/**
+	 * 计算有符号距离的梯度 ∇d(p)
+	 * 梯度方向: 从障碍物表面指向查询点（外部时指向外，内部时指向最小穿透方向）
+	 * @param Point 查询点
+	 * @param Obstacle 障碍物信息
+	 * @return 梯度向量 (归一化或接近归一化)
+	 */
+	FVector ComputeDistanceGradient(const FVector& Point, const FObstacleInfo& Obstacle) const;
 	/**
 	 * 预测动态障碍物未来位置
 	 * @param Obstacle 障碍物信息

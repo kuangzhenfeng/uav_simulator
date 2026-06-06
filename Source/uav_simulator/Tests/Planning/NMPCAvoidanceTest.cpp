@@ -450,5 +450,164 @@ bool FNMPCAvoidanceTest_ResultFields::RunTest(const FString& Parameters)
 	return true;
 }
 
+
+// ==================== 距离梯度测试 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNMPCAvoidanceTest_DistanceGradient_Sphere,
+	"UAVSimulator.Planning.NMPCAvoidance.DistanceGradient_Sphere",
+	UAV_TEST_FLAGS)
+bool FNMPCAvoidanceTest_DistanceGradient_Sphere::RunTest(const FString& Parameters)
+{
+	UNMPCAvoidance* NMPC = NewObject<UNMPCAvoidance>();
+
+	// 球心在原点，半径 100cm
+	FObstacleInfo Obs = UAVTestHelpers::CreateSphereObstacle(1, FVector(0, 0, 0), 100.0f);
+
+	// 外部点 (300, 0, 0): 梯度应指向 +X（远离球心）
+	{
+		FVector Grad = NMPC->ComputeDistanceGradient(FVector(300, 0, 0), Obs);
+		TestTrue(TEXT("Sphere gradient should point +X"), Grad.X > 0.9f);
+		UAV_TEST_FLOAT_EQUAL(Grad.Size(), 1.0f, 0.01f);
+	}
+
+	// 外部点 (0, 0, -200): 梯度应指向 -Z
+	{
+		FVector Grad = NMPC->ComputeDistanceGradient(FVector(0, 0, -200), Obs);
+		TestTrue(TEXT("Sphere gradient should point -Z"), Grad.Z < -0.9f);
+	}
+
+	// 球心处: 梯度应返回单位向量
+	{
+		FVector Grad = NMPC->ComputeDistanceGradient(FVector(0, 0, 0), Obs);
+		UAV_TEST_FLOAT_EQUAL(Grad.Size(), 1.0f, 0.01f);
+	}
+
+	// 有限差分验证: 球体梯度
+	{
+		FVector Point(150, 80, -60);
+		float eps = 1.0f;
+		FVector Grad = NMPC->ComputeDistanceGradient(Point, Obs);
+
+		// 有限差分
+		float dpx = NMPC->CalculateDistanceToObstacle(Point + FVector(eps, 0, 0), Obs)
+				 - NMPC->CalculateDistanceToObstacle(Point - FVector(eps, 0, 0), Obs);
+		float dpy = NMPC->CalculateDistanceToObstacle(Point + FVector(0, eps, 0), Obs)
+				 - NMPC->CalculateDistanceToObstacle(Point - FVector(0, eps, 0), Obs);
+		float dpz = NMPC->CalculateDistanceToObstacle(Point + FVector(0, 0, eps), Obs)
+				 - NMPC->CalculateDistanceToObstacle(Point - FVector(0, 0, eps), Obs);
+		FVector FDGrad(dpx / (2 * eps), dpy / (2 * eps), dpz / (2 * eps));
+
+		// 解析梯度应与有限差分方向一致
+		float Dot = FVector::DotProduct(Grad.GetSafeNormal(), FDGrad.GetSafeNormal());
+		TestTrue(TEXT("Sphere gradient should match finite difference (dot > 0.99)"), Dot > 0.99f);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNMPCAvoidanceTest_DistanceGradient_Box,
+	"UAVSimulator.Planning.NMPCAvoidance.DistanceGradient_Box",
+	UAV_TEST_FLAGS)
+bool FNMPCAvoidanceTest_DistanceGradient_Box::RunTest(const FString& Parameters)
+{
+	UNMPCAvoidance* NMPC = NewObject<UNMPCAvoidance>();
+
+	// Box 中心在原点，半尺寸 (100, 200, 50)
+	FObstacleInfo Obs = UAVTestHelpers::CreateBoxObstacle(
+		1, FVector(0, 0, 0), FVector(100, 200, 50));
+
+	// 外部点 (300, 0, 0): 梯度应指向 +X（Box X 面法线）
+	{
+		FVector Grad = NMPC->ComputeDistanceGradient(FVector(300, 0, 0), Obs);
+		TestTrue(TEXT("Box face gradient should point +X"), Grad.X > 0.9f);
+	}
+
+	// 外部点 (0, 0, 300): 梯度应指向 +Z（Box Z 面法线）
+	{
+		FVector Grad = NMPC->ComputeDistanceGradient(FVector(0, 0, 300), Obs);
+		TestTrue(TEXT("Box face gradient should point +Z"), Grad.Z > 0.9f);
+	}
+
+	// 内部点 (0, 0, 0): 梯度应指向最小穿透方向（Z 轴最浅）
+	{
+		FVector Grad = NMPC->ComputeDistanceGradient(FVector(0, 0, 0), Obs);
+		// Z 半尺寸最小 (50)，沿 Z 推出最快
+		TestTrue(TEXT("Box interior gradient should point along Z axis"),
+			FMath::Abs(Grad.Z) > 0.9f);
+	}
+
+	// 有限差分验证: Box 外部点
+	{
+		FVector Point(150, 80, 60);
+		float eps = 1.0f;
+		FVector Grad = NMPC->ComputeDistanceGradient(Point, Obs);
+
+		float dpx = NMPC->CalculateDistanceToObstacle(Point + FVector(eps, 0, 0), Obs)
+				 - NMPC->CalculateDistanceToObstacle(Point - FVector(eps, 0, 0), Obs);
+		float dpy = NMPC->CalculateDistanceToObstacle(Point + FVector(0, eps, 0), Obs)
+				 - NMPC->CalculateDistanceToObstacle(Point - FVector(0, eps, 0), Obs);
+		float dpz = NMPC->CalculateDistanceToObstacle(Point + FVector(0, 0, eps), Obs)
+				 - NMPC->CalculateDistanceToObstacle(Point - FVector(0, 0, eps), Obs);
+		FVector FDGrad(dpx / (2 * eps), dpy / (2 * eps), dpz / (2 * eps));
+
+		float FDSize = FDGrad.Size();
+		if (FDSize > 0.01f)
+		{
+			float Dot = FVector::DotProduct(Grad.GetSafeNormal(), FDGrad.GetSafeNormal());
+			TestTrue(TEXT("Box gradient should match finite difference"), Dot > 0.95f);
+		}
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNMPCAvoidanceTest_DistanceGradient_Cylinder,
+	"UAVSimulator.Planning.NMPCAvoidance.DistanceGradient_Cylinder",
+	UAV_TEST_FLAGS)
+bool FNMPCAvoidanceTest_DistanceGradient_Cylinder::RunTest(const FString& Parameters)
+{
+	UNMPCAvoidance* NMPC = NewObject<UNMPCAvoidance>();
+
+	// 圆柱 中心在原点，半径 100，半高 200
+	FObstacleInfo Obs = UAVTestHelpers::CreateCylinderObstacle(
+		1, FVector(0, 0, 0), 100.0f, 200.0f);
+
+	// 外部侧面点 (300, 0, 0): 梯度应主要指向 +X
+	{
+		FVector Grad = NMPC->ComputeDistanceGradient(FVector(300, 0, 0), Obs);
+		TestTrue(TEXT("Cylinder side gradient should point +X"), Grad.X > 0.9f);
+	}
+
+	// 外部顶面点 (0, 0, 500): 梯度应主要指向 +Z
+	{
+		FVector Grad = NMPC->ComputeDistanceGradient(FVector(0, 0, 500), Obs);
+		TestTrue(TEXT("Cylinder top gradient should point +Z"), Grad.Z > 0.9f);
+	}
+
+	// 有限差分验证: Cylinder 外部点
+	{
+		FVector Point(200, 100, 50);
+		float eps = 1.0f;
+		FVector Grad = NMPC->ComputeDistanceGradient(Point, Obs);
+
+		float dpx = NMPC->CalculateDistanceToObstacle(Point + FVector(eps, 0, 0), Obs)
+				 - NMPC->CalculateDistanceToObstacle(Point - FVector(eps, 0, 0), Obs);
+		float dpy = NMPC->CalculateDistanceToObstacle(Point + FVector(0, eps, 0), Obs)
+				 - NMPC->CalculateDistanceToObstacle(Point - FVector(0, eps, 0), Obs);
+		float dpz = NMPC->CalculateDistanceToObstacle(Point + FVector(0, 0, eps), Obs)
+				 - NMPC->CalculateDistanceToObstacle(Point - FVector(0, 0, eps), Obs);
+		FVector FDGrad(dpx / (2 * eps), dpy / (2 * eps), dpz / (2 * eps));
+
+		float FDSize = FDGrad.Size();
+		if (FDSize > 0.01f)
+		{
+			float Dot = FVector::DotProduct(Grad.GetSafeNormal(), FDGrad.GetSafeNormal());
+			TestTrue(TEXT("Cylinder gradient should match finite difference"), Dot > 0.95f);
+		}
+	}
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
 

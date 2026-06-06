@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "UObject/NoExportTypes.h"
 #include "MultiAgentTypes.h"
+#include "../Planning/NMPCAvoidance.h"
 #include "CBFQPFilter.generated.h"
 
 /**
@@ -34,6 +35,36 @@ struct FCBFQPResult
 	// 求解时间 (ms)
 	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
 	float SolveTimeMs = 0.0f;
+
+	// ---- 新增诊断字段 ----
+
+	// QP 求解状态
+	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
+	ECBFQPStatus SolveStatus = ECBFQPStatus::Solved;
+
+	// KKT 残差
+	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
+	float KKTResidual = 0.0f;
+
+	// 最大约束违反量
+	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
+	float MaxConstraintViolation = 0.0f;
+
+	// 静态 slack 值
+	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
+	float StaticSlack = 0.0f;
+
+	// 机间 slack 值
+	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
+	float AgentSlack = 0.0f;
+
+	// 静态障碍约束数量
+	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
+	int32 StaticConstraintCount = 0;
+
+	// 机间约束数量
+	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
+	int32 AgentConstraintCount = 0;
 
 	FCBFQPResult()
 		: SafeAcceleration(FVector::ZeroVector)
@@ -102,7 +133,7 @@ public:
 		TArray<float>& OutConstraintBounds) const;
 
 	/**
-	 * 投影梯度 QP 求解器
+	 * 投影梯度 QP 求解器（旧实现，保留向后兼容）
 	 * min ||u - u_nominal||²  s.t. A_k · u ≤ b_k
 	 */
 	FVector SolveProjectedGradientQP(
@@ -110,4 +141,57 @@ public:
 		const TArray<FVector>& ConstraintNormals,
 		const TArray<float>& ConstraintBounds,
 		const FCBFQPConfig& Config) const;
+
+	// ---- 统一 QP V2 接口 ----
+
+	/**
+	 * 统一安全滤波 V2: 同时处理静态障碍 + 机间 CBF
+	 * @param NominalAcceleration NMPC 输出加速度
+	 * @param MyState 本机状态
+	 * @param NeighborStates 邻居状态列表
+	 * @param StaticObstacles 静态障碍物列表
+	 * @param Config CBF-QP 配置
+	 * @return 滤波结果
+	 */
+	FCBFQPResult FilterV2(
+		const FVector& NominalAcceleration,
+		const FUAVState& MyState,
+		const TArray<FAgentStateSnapshot>& NeighborStates,
+		const TArray<FObstacleInfo>& StaticObstacles,
+		const FCBFQPConfig& Config);
+
+	/**
+	 * 构建静态障碍 HOCBF 约束
+	 * h = d(p) - d_safe, ḣ = ∇d·v, 约束: -∇d·u - ξ_s ≤ -(α₁·ḣ + α₀·h)
+	 */
+	void BuildStaticObstacleConstraints(
+		const FUAVState& MyState,
+		const TArray<FObstacleInfo>& Obstacles,
+		const FCBFQPConfig& Config,
+		TArray<float>& OutAFlat, // 每行 5 个元素的 A 矩阵（行优先）
+		TArray<float>& OutBounds) const;
+
+	/**
+	 * Active-Set QP 求解器
+	 * min 0.5·z'Hz + g'z  s.t. Az ≤ b
+	 * 决策变量 z = [ux, uy, uz, ξ_static, ξ_agent]
+	 */
+	void SolveActiveSetQP(
+		int32 N,                    // 决策变量维度 (5)
+		int32 M,                    // 约束数量
+		const TArray<float>& H,    // Hessian (NxN 行优先)
+		const TArray<float>& G,    // 线性项 (N)
+		const TArray<float>& A,    // 约束矩阵 (MxN 行优先)
+		const TArray<float>& B,    // 约束上界 (M)
+		const FCBFQPConfig& Config,
+		TArray<float>& OutZ,       // 解向量 (N)
+		ECBFQPStatus& OutStatus,
+		float& OutKKTResidual,
+		float& OutMaxViolation,
+		int32& OutIterations) const;
+
+private:
+	// 上次 QP 解（用于热启动）
+	TArray<float> PreviousQPSolution;
+	bool bHasPreviousQPSolution = false;
 };

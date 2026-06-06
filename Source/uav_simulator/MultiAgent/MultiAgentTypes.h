@@ -80,6 +80,30 @@ struct FAgentMessage
 	double SendTime = 0.0;
 };
 
+
+/**
+ * CBF-QP 工作模式
+ */
+UENUM(BlueprintType)
+enum class ECBFMode : uint8
+{
+	Disabled	UMETA(DisplayName = "Disabled"),
+	ShadowLog	UMETA(DisplayName = "Shadow Log"),
+	Active		UMETA(DisplayName = "Active")
+};
+
+/**
+ * CBF-QP 求解状态
+ */
+UENUM(BlueprintType)
+enum class ECBFQPStatus : uint8
+{
+	Solved			UMETA(DisplayName = "Solved"),
+	SolvedWithSlack	UMETA(DisplayName = "Solved With Slack"),
+	MaxIterations	UMETA(DisplayName = "Max Iterations"),
+	NumericalFailure UMETA(DisplayName = "Numerical Failure")
+};
+
 /**
  * CBF-QP 安全滤波器配置
  */
@@ -108,9 +132,61 @@ struct FCBFQPConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|Solver")
 	float ConvergenceTolerance = 0.1f;
 
-	// 是否启用
+	// 是否启用（旧接口，Mode=Disabled 时等效于 bEnabled=false）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP")
 	bool bEnabled = true;
+
+	// ---- 静态障碍 CBF 参数 ----
+
+	// 静态障碍安全距离 (cm)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|Static")
+	float DSafeStatic = 200.0f;
+
+	// 静态障碍 CBF α₀
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|Static")
+	float StaticAlpha0 = 1.0f;
+
+	// 静态障碍 CBF α₁
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|Static")
+	float StaticAlpha1 = 2.0f;
+
+	// 静态障碍 CBF 影响距离 (cm)，仅在该距离内的障碍物生成约束
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|Static")
+	float StaticInfluenceDistance = 1500.0f;
+
+	// ---- Slack 惩罚权重 ----
+
+	// 静态 slack 惩罚权重
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|Slack")
+	float RhoStatic = 100.0f;
+
+	// 机间 slack 惩罚权重
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|Slack")
+	float RhoAgent = 100.0f;
+
+	// ---- 工作模式 ----
+
+	// CBF-QP 工作模式: Disabled/ShadowLog/Active
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|Mode")
+	ECBFMode Mode = ECBFMode::Active;
+
+	// ---- QP 求解器参数 ----
+
+	// 加速度上界 (cm/s²)，用于 QP 内约束
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|QP")
+	float MaxAccelerationQP = 800.0f;
+
+	// QP 最大迭代次数
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|QP")
+	int32 QPMaxIterations = 50;
+
+	// QP KKT 容差
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|QP")
+	float QPKKTTolerance = 1e-4f;
+
+	// 是否启用 QP 热启动
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|QP")
+	bool bEnableWarmStart = true;
 };
 
 /**

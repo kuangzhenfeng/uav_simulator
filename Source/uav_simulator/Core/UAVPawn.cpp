@@ -1003,71 +1003,180 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			FVector EffectiveAccel = ApplyDeviationProtection(SmoothedNMPCAcceleration);
 			EffectiveAccel = ApplyVelocityClamp(EffectiveAccel);
 
-			// CBF-QP 安全滤波（多机模式：保证机间安全距离）
-			// 放在紧急制动之前，确保 CBF-QP 能在制动前约束加速度
-			if (bIsMultiAgentMode && CBFQPFilter && CBFQPConfig.bEnabled)
-			{
-				TArray<FAgentStateSnapshot> NeighborStates =
-					CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 6.0f);
-				if (NeighborStates.Num() > 0)
+			// ---- CBF-QP 统一安全滤波 V2 ----
+				// 支持 ShadowLog (只记录)/Active (修改控制)/Disabled 模式
+				if (CBFQPFilter && CBFQPConfig.Mode != ECBFMode::Disabled)
 				{
-					FCBFQPResult CBFResult = CBFQPFilter->Filter(
-						EffectiveAccel, CurrentState, NeighborStates, CBFQPConfig);
-					if (CBFResult.bWasFiltered)
+					// 收集静态障碍物（排除动态障碍，动态障碍通过相对速度在 HOCBF 中处理）
+					TArray<FObstacleInfo> StaticObsForCBF;
+					if (ObstacleManagerComponent)
 					{
-						UE_LOG(LogUAVMultiAgent, Log,
-							TEXT("[CBF-QP] Agent %d: filtered accel, minH=%.0f"),
-							AgentID, CBFResult.MinHValue);
+						const TArray<FObstacleInfo>& AllObs = ObstacleManagerComponent->GetAllObstacles();
+						for (const FObstacleInfo& Obs : AllObs)
+						{
+							if (Obs.bIsDynamic) continue;
+							float Dist = NMPCComponent
+								? NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs)
+								: FVector::Dist(CurrentState.Position, Obs.Center) - Obs.Extents.GetMax();
+							if (Dist < CBFQPConfig.StaticInfluenceDistance)
+								StaticObsForCBF.Add(Obs);
+						}
 					}
-					EffectiveAccel = CBFResult.SafeAcceleration;
-				}
-			}
 
-			// 紧急制动层：基于物理制动距离的最后防线
-			EffectiveAccel = ApplyEmergencyBraking(EffectiveAccel);
-
-			// 加速度幅值限制：防止过大加速度导致姿态控制器饱和
-			{
-				float AccelMag = EffectiveAccel.Size();
-				const float MaxAccelCmd = 800.0f; // 8 m/s²，与姿态控制器 MaxTilt=30° 匹配
-				if (AccelMag > MaxAccelCmd)
-				{
-					EffectiveAccel *= MaxAccelCmd / AccelMag;
-				}
-			}
-			// 紧急回避：当距离低于安全距离时，施加递增排斥+速度衰减
-			// 阈值 DSafe，强度随距离线性增大（最近时可达2000 cm/s²）
-			if (bIsMultiAgentMode && CommunicationComponent)
-			{
-				TArray<FAgentStateSnapshot> Neighbors =
-					CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 2.0f);
-				for (const FAgentStateSnapshot& Neighbor : Neighbors)
-				{
-					float Dist = FVector::Dist(CurrentState.Position, Neighbor.State.Position);
-					float RepelThreshold = CBFQPConfig.DSafe; // DSafe=500cm
-					if (Dist < RepelThreshold && Dist > 1.0f)
+					// 收集邻居状态
+					TArray<FAgentStateSnapshot> NeighborStates;
+					if (bIsMultiAgentMode && CommunicationComponent)
 					{
-						FVector RepelDir = (CurrentState.Position - Neighbor.State.Position).GetSafeNormal();
-						// 线性递增：Dist 越小排斥越强，最近时 2000 cm/s²
-						float Ratio = 1.0f - (Dist / RepelThreshold);
-						float RepelStrength = FMath::Lerp(400.0f, 2000.0f, Ratio);
-						EffectiveAccel += RepelDir * RepelStrength;
+						NeighborStates = CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 6.0f);
+					}
 
-							// 速度衰减：减少朝向邻居的速度分量
-							FVector ToNeighbor = (Neighbor.State.Position - CurrentState.Position).GetSafeNormal();
-							float VelToward = FVector::DotProduct(CurrentState.Velocity, ToNeighbor);
-							if (VelToward > 0.0f)
+					FCBFQPResult CBFResult = CBFQPFilter->FilterV2(
+						EffectiveAccel, CurrentState, NeighborStates, StaticObsForCBF, CBFQPConfig);
+
+					if (CBFResult.bWasFiltered || CBFResult.StaticConstraintCount > 0 || CBFResult.AgentConstraintCount > 0)
+					{
+						UE_LOG(LogUAVMetrics, Log,
+							TEXT("[CBF_SOLVE] Agent=%d MinH=%.0f Residual=%.4f StaticSlack=%.1f AgentSlack=%.1f Active=%d Status=%d Ms=%.2f"),
+							AgentID, CBFResult.MinHValue, CBFResult.KKTResidual,
+							CBFResult.StaticSlack, CBFResult.AgentSlack,
+							CBFResult.ActiveConstraintCount, (int32)CBFResult.SolveStatus,
+							CBFResult.SolveTimeMs);
+					}
+
+					if (CBFQPConfig.Mode == ECBFMode::Active)
+					{
+						// Active 模式: 使用 QP 求解的安全加速度
+						EffectiveAccel = CBFResult.SafeAcceleration;
+
+						// QP 求解失败时进入降级模式
+						if (CBFResult.SolveStatus == ECBFQPStatus::NumericalFailure ||
+							CBFResult.SolveStatus == ECBFQPStatus::MaxIterations)
+						{
+							UE_LOG_THROTTLE(1.0, LogUAVActor, Warning,
+								TEXT("[CBF-QP] Agent %d: QP degraded mode, status=%d"),
+								AgentID, (int32)CBFResult.SolveStatus);
+							// 降级: 保守制动
+							FVector VelDir = CurrentState.Velocity.GetSafeNormal();
+							float Speed = CurrentState.Velocity.Size();
+							if (Speed > 100.0f)
+								EffectiveAccel = -VelDir * 400.0f;
+						}
+
+						// QP 后加速度幅值限制：QP 逐轴约束允许总幅值达 sqrt(3)*a_max
+						EffectiveAccel = EffectiveAccel.GetClampedToMaxSize(CBFQPConfig.MaxAccelerationQP);
+					}
+					else // ShadowLog 模式: 记录 V2 诊断，但继续执行旧安全链
+					{
+						if (bIsMultiAgentMode && CBFQPFilter && CBFQPConfig.bEnabled)
+						{
+							TArray<FAgentStateSnapshot> LegacyNeighbors =
+								CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 6.0f);
+							if (LegacyNeighbors.Num() > 0)
 							{
-								float DampStrength = FMath::Lerp(200.0f, 800.0f, Ratio);
-								EffectiveAccel -= ToNeighbor * FMath::Min(VelToward * 2.0f, DampStrength);
+								FCBFQPResult LegacyResult = CBFQPFilter->Filter(
+									EffectiveAccel, CurrentState, LegacyNeighbors, CBFQPConfig);
+								if (LegacyResult.bWasFiltered)
+								{
+									EffectiveAccel = LegacyResult.SafeAcceleration;
+								}
 							}
-						UE_LOG_THROTTLE(0.5, LogUAVMultiAgent, Warning,
-							TEXT("[CBF-QP] Agent %d: EMERGENCY repel from %d, Dist=%.0fcm, Strength=%.0f"),
-							AgentID, Neighbor.AgentID, Dist, RepelStrength);
+						}
+						EffectiveAccel = ApplyEmergencyBraking(EffectiveAccel);
+						{
+							float AccelMag = EffectiveAccel.Size();
+							if (AccelMag > 800.0f)
+								EffectiveAccel *= 800.0f / AccelMag;
+						}
+						if (bIsMultiAgentMode && CommunicationComponent)
+						{
+							TArray<FAgentStateSnapshot> RepelNeighbors =
+								CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 2.0f);
+							for (const FAgentStateSnapshot& Neighbor : RepelNeighbors)
+							{
+								float Dist = FVector::Dist(CurrentState.Position, Neighbor.State.Position);
+								float RepelThreshold = CBFQPConfig.DSafe;
+								if (Dist < RepelThreshold && Dist > 1.0f)
+								{
+									FVector RepelDir = (CurrentState.Position - Neighbor.State.Position).GetSafeNormal();
+									float Ratio = 1.0f - (Dist / RepelThreshold);
+									float RepelStrength = FMath::Lerp(400.0f, 2000.0f, Ratio);
+									EffectiveAccel += RepelDir * RepelStrength;
+									FVector ToNeighbor = (Neighbor.State.Position - CurrentState.Position).GetSafeNormal();
+									float VelToward = FVector::DotProduct(CurrentState.Velocity, ToNeighbor);
+									if (VelToward > 0.0f)
+									{
+										float DampStrength = FMath::Lerp(200.0f, 800.0f, Ratio);
+										EffectiveAccel -= ToNeighbor * FMath::Min(VelToward * 2.0f, DampStrength);
+									}
+								}
+							}
+						}
 					}
 				}
-			}
-			// 计算期望角加速度（用于前馈控制）
+				else
+				{
+					// 旧安全链 (Mode == Disabled 时使用)
+					if (bIsMultiAgentMode && CBFQPFilter && CBFQPConfig.bEnabled)
+					{
+						TArray<FAgentStateSnapshot> NeighborStates =
+							CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 6.0f);
+						if (NeighborStates.Num() > 0)
+						{
+							FCBFQPResult CBFResult = CBFQPFilter->Filter(
+								EffectiveAccel, CurrentState, NeighborStates, CBFQPConfig);
+							if (CBFResult.bWasFiltered)
+							{
+								UE_LOG(LogUAVMultiAgent, Log,
+									TEXT("[CBF-QP] Agent %d: filtered accel, minH=%.0f"),
+									AgentID, CBFResult.MinHValue);
+							}
+							EffectiveAccel = CBFResult.SafeAcceleration;
+						}
+					}
+
+					// 紧急制动层（旧安全链）
+					EffectiveAccel = ApplyEmergencyBraking(EffectiveAccel);
+
+					// 加速度幅值限制（旧安全链）
+					{
+						float AccelMag = EffectiveAccel.Size();
+						const float MaxAccelCmd = 800.0f;
+						if (AccelMag > MaxAccelCmd)
+							EffectiveAccel *= MaxAccelCmd / AccelMag;
+					}
+
+					// 紧急排斥（旧安全链）
+					if (bIsMultiAgentMode && CommunicationComponent)
+					{
+						TArray<FAgentStateSnapshot> Neighbors =
+							CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 2.0f);
+						for (const FAgentStateSnapshot& Neighbor : Neighbors)
+						{
+							float Dist = FVector::Dist(CurrentState.Position, Neighbor.State.Position);
+							float RepelThreshold = CBFQPConfig.DSafe;
+							if (Dist < RepelThreshold && Dist > 1.0f)
+							{
+								FVector RepelDir = (CurrentState.Position - Neighbor.State.Position).GetSafeNormal();
+								float Ratio = 1.0f - (Dist / RepelThreshold);
+								float RepelStrength = FMath::Lerp(400.0f, 2000.0f, Ratio);
+								EffectiveAccel += RepelDir * RepelStrength;
+
+									FVector ToNeighbor = (Neighbor.State.Position - CurrentState.Position).GetSafeNormal();
+									float VelToward = FVector::DotProduct(CurrentState.Velocity, ToNeighbor);
+									if (VelToward > 0.0f)
+									{
+										float DampStrength = FMath::Lerp(200.0f, 800.0f, Ratio);
+										EffectiveAccel -= ToNeighbor * FMath::Min(VelToward * 2.0f, DampStrength);
+									}
+							UE_LOG_THROTTLE(0.5, LogUAVMultiAgent, Warning,
+								TEXT("[CBF-QP] Agent %d: EMERGENCY repel from %d, Dist=%.0fcm, Strength=%.0f"),
+								AgentID, Neighbor.AgentID, Dist, RepelStrength);
+							}
+						}
+					}
+				}
+
+				// 计算期望角加速度（用于前馈控制）
 			FRotator DesiredAngularAccel = ComputeAngularAccelerationFromLinearAccel(
 				EffectiveAccel, CurrentState.Rotation.Yaw);
 

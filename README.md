@@ -148,7 +148,7 @@
 - 编队控制：线形、V形、环形、菱形编队
 - 联合 NMPC：Leader 统一求解，协调多机轨迹
 - 任务分配：MILP 求解器优化任务分配
-- CBF-QP 安全滤波：二阶 CBF 约束（符号修正），保证多机间最小安全距离
+- CBF-QP 安全滤波：统一 HOCBF 安全层（静态障碍 + 机间），active-set QP 求解器，slack 变量，shadow mode 迁移
 
 ## 项目结构
 
@@ -269,6 +269,7 @@ FNMPCAvoidanceResult Result = NMPCAvoidance->ComputeAvoidance(
 | Planning.MultiSegment | 4 | 多段路径规划、碰撞检测、路径精简 |
 | Planning.NMPCAvoidance | 5 | NMPC 求解、障碍物代价、动态障碍物 |
 | Planning.NMPCBaseline | 8 | 基准回归场景（直线/走廊/封堵/U形/窄通道/动态/对向） |
+| MultiAgent.CBFQPFilter | 17 | CBF h/hdot、方向性、QP求解、FilterV2、静态CBF、slack、多约束 |
 
 ### 运行测试
 
@@ -300,6 +301,7 @@ Script\test.bat
 | Phase 13 | 任务分配与联合优化（MILP 求解器、任务监控与重规划） | 已完成 |
 | Phase 14 | 环境模拟与传感器扩展（风场模型、气压计、磁力计、风速计） | 已完成 |
 | Phase 15 | NMPC/CBF 优化重构（Frenet 代价、多初值 PGD、Homotopy 记忆、Dykstra 投影、CBF 符号修正） | 已完成 |
+| Phase 16 | 安全层重构（统一 HOCBF、Active-Set QP、Shadow 迁移、控制链统一） | 已完成 |
 
 ### 目标架构
 
