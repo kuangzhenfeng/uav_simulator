@@ -26,6 +26,16 @@ protected:
 public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
+	// 调试开关 toggle 方法（供 UI 按钮调用）
+	UFUNCTION(BlueprintCallable, Category = "Planning Visualization")
+	void ToggleVisualization() { bEnableVisualization = !bEnableVisualization; }
+
+	UFUNCTION(BlueprintCallable, Category = "Planning Visualization")
+	void ToggleShowObstacles() { bShowObstacles = !bShowObstacles; }
+
+	UFUNCTION(BlueprintCallable, Category = "Planning Visualization")
+	void ToggleShowPath() { bShowPath = !bShowPath; }
+
 	/**
 	 * 绘制规划路径
 	 * @param Path 路径点数组

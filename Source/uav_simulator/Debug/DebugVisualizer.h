@@ -67,6 +67,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Debug|Planning")
 	void ClearPersistentTrajectory();
 
+	// 调试开关 toggle 方法
+	UFUNCTION(BlueprintCallable, Category = "Debug")
+	void ToggleShowDebugInfo() { bShowDebugInfo = !bShowDebugInfo; }
+
 protected:
 	// 是否显示调试信息
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Settings")

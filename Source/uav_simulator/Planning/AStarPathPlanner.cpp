@@ -16,17 +16,16 @@ bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArr
 	OutPath.Empty();
 	LastPath.Empty();
 
-	UE_LOG(LogUAVPlanning, Warning, TEXT("===== A* Path Planning Started ====="));
-	UE_LOG(LogUAVPlanning, Warning, TEXT("Start: %s, Goal: %s"), *Start.ToString(), *Goal.ToString());
-	UE_LOG(LogUAVPlanning, Warning, TEXT("Obstacle count: %d, Grid resolution: %.1f, UAVCollisionRadius: %.1f, SafetyMargin: %.1f"),
-		Obstacles.Num(), GridResolution, UAVCollisionRadius, PlanningConfig.SafetyMargin);
+	UE_LOG(LogUAVPlanning, Log, TEXT("[A*] Path planning started"));
+	UE_LOG(LogUAVPlanning, Log, TEXT("[A*] Start: %s, Goal: %s"), *Start.ToString(), *Goal.ToString());
+	UE_LOG(LogUAVPlanning, Log, TEXT("[A*] Obstacles: %d, GridRes: %.1f"), Obstacles.Num(), GridResolution);
 
 	// 打印所有障碍物详细信息
 	for (int32 i = 0; i < Obstacles.Num(); ++i)
 	{
 		const FObstacleInfo& Obs = Obstacles[i];
-		UE_LOG(LogUAVPlanning, Warning, TEXT("  Obstacle[%d]: ID=%d, Type=%d, Center=%s, Extents=%s, SafetyMargin=%.1f"),
-			i, Obs.ObstacleID, (int32)Obs.Type, *Obs.Center.ToString(), *Obs.Extents.ToString(), Obs.SafetyMargin);
+		UE_LOG(LogUAVPlanning, Log, TEXT("  Obstacle[%d]: ID=%d, Type=%d, Center=%s, Extents=%s"),
+			i, Obs.ObstacleID, (int32)Obs.Type, *Obs.Center.ToString(), *Obs.Extents.ToString());
 	}
 
 	// 自动计算搜索边界
@@ -49,7 +48,7 @@ bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArr
 	// 起点在障碍物膨胀区内时仍允许规划（UAV已在此位置，需要规划逃离路径）
 	if (IsGridBlocked(StartGrid))
 	{
-		UE_LOG(LogUAVPlanning, Warning, TEXT("Start position is inside obstacle zone, attempting escape planning"));
+		UE_LOG(LogUAVPlanning, Log, TEXT("Start position inside obstacle zone, attempting escape"));
 	}
 
 	if (!IsValidGridCoord(GoalGrid) || IsGridBlocked(GoalGrid))
@@ -199,7 +198,7 @@ bool UAStarPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArr
 	double EndTime = FPlatformTime::Seconds();
 	LastPlanningTimeMs = (EndTime - StartTime) * 1000.0;
 
-	UE_LOG(LogUAVPlanning, Warning, TEXT("A* result: %s, NodesExplored: %d, PathPoints: %d, Time: %.2fms"),
+	UE_LOG(LogUAVPlanning, Log, TEXT("[A*] Result: %s, Nodes: %d, PathPoints: %d, Time: %.2fms"),
 		bSuccess ? TEXT("SUCCESS") : TEXT("FAILED"),
 		NodesExplored,
 		OutPath.Num(),

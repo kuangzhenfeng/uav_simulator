@@ -24,9 +24,9 @@ bool URRTPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArray
 
 	GoalPosition = Goal;
 
-	UE_LOG(LogUAVPlanning, Warning, TEXT("===== RRT Path Planning Started ====="));
-	UE_LOG(LogUAVPlanning, Warning, TEXT("Start: %s, Goal: %s"), *Start.ToString(), *Goal.ToString());
-	UE_LOG(LogUAVPlanning, Warning, TEXT("Obstacle count: %d, StepSize: %.1f, MaxIterations: %d"),
+	UE_LOG(LogUAVPlanning, Log, TEXT("[RRT] Path planning started"));
+	UE_LOG(LogUAVPlanning, Log, TEXT("[RRT] Start: %s, Goal: %s"), *Start.ToString(), *Goal.ToString());
+	UE_LOG(LogUAVPlanning, Log, TEXT("[RRT] Obstacles: %d, StepSize: %.1f, MaxIter: %d"),
 		Obstacles.Num(), StepSize, MaxIterations);
 
 	// 自动计算搜索边界
@@ -138,7 +138,7 @@ bool URRTPathPlanner::PlanPath(const FVector& Start, const FVector& Goal, TArray
 	double EndTime = FPlatformTime::Seconds();
 	LastPlanningTimeMs = (EndTime - StartTime) * 1000.0;
 
-	UE_LOG(LogUAVPlanning, Warning, TEXT("RRT result: %s, TreeNodes: %d, PathPoints: %d, Time: %.2fms"),
+	UE_LOG(LogUAVPlanning, Log, TEXT("[RRT] Result: %s, TreeNodes: %d, PathPoints: %d, Time: %.2fms"),
 		bSuccess ? TEXT("SUCCESS") : TEXT("FAILED"),
 		Tree.Num(),
 		OutPath.Num(),

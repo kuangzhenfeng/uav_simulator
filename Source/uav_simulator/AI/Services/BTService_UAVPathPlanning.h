@@ -52,7 +52,7 @@ protected:
 
 	// 最大速度 (cm/s)
 	UPROPERTY(EditAnywhere, Category = "Global Planner")
-	float MaxVelocity = 2000.0f;
+	float MaxVelocity = 1200.0f;
 
 	// 最大加速度 (cm/s²)
 	UPROPERTY(EditAnywhere, Category = "Global Planner")

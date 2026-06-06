@@ -12,12 +12,18 @@ class SVerticalBox;
 class SHorizontalBox;
 struct FButtonStyle;
 
+// 视角切换委托
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnViewChanged, int32, AgentID);
 
+// 调试开关 toggle 委托（ToggleIndex 对应: 0=Vis, 1=Obs, 2=Path, 3=Dbg）
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnToggleDebug, int32, ToggleIndex);
+
 /**
- * 视角切换按钮面板
+ * 视角切换 + 调试开关按钮面板
  *
- * 横向紧凑布局：标题 + 横排按钮 [All] [#0] [#1] [#2]
+ * 横向紧凑布局：
+ *   Debug  |Vis|Obs|Path|Dbg|
+ *   Camera |All|#0|#1|#2|
  */
 UCLASS()
 class UAV_SIMULATOR_API UCameraSwitcherWidget : public UUserWidget
@@ -27,6 +33,9 @@ class UAV_SIMULATOR_API UCameraSwitcherWidget : public UUserWidget
 public:
 	UPROPERTY(BlueprintAssignable, Category = "Camera")
 	FOnViewChanged OnViewChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "Debug")
+	FOnToggleDebug OnToggleDebug;
 
 	UFUNCTION(BlueprintCallable, Category = "Camera")
 	void RefreshDroneList(int32 Count);
@@ -41,26 +50,38 @@ private:
 	int32 DroneCount = 0;
 	int32 CurrentHighlightAgentID = -1;
 
-	// 根容器（纵向：标题 + 分隔线 + 按钮行）
+	// 调试 toggle 状态（true = 开启，高亮）
+	static constexpr int32 DebugToggleCount = 4;
+	bool DebugToggleStates[4] = { true, true, true, true };
+
+	// 根容器（纵向）
 	TSharedPtr<SVerticalBox> RootVBox;
 
-	// 按钮行容器（横向）
-	TSharedPtr<SHorizontalBox> ButtonRow;
-
-	// Slate 按钮引用（用于高亮更新）
+	// Camera 按钮行
+	TSharedPtr<SHorizontalBox> CameraButtonRow;
 	TSharedPtr<SButton> GlobalSlateButton;
 	TArray<TSharedPtr<SButton>> DroneSlateButtons;
 
-	// 按钮样式（作为成员变量保证生命周期，SButton 持有指针引用）
+	// Debug 按钮行
+	TSharedPtr<SHorizontalBox> DebugButtonRow;
+	TArray<TSharedPtr<SButton>> DebugSlateButtons;
+
+	// 按钮样式
 	FButtonStyle NormalStyle;
 	FButtonStyle HighlightedStyle;
 
 	// 面板背景 Brush
 	FSlateBrush PanelBgBrush;
 
-	// 重建按钮行
+	// 重建 Camera 按钮行
 	void BuildContent();
 
-	// 更新按钮高亮
+	// 重建 Debug 按钮行
+	void BuildDebugContent();
+
+	// 更新 Camera 按钮高亮
 	void UpdateHighlight();
+
+	// 更新 Debug 按钮高亮
+	void UpdateDebugHighlight();
 };

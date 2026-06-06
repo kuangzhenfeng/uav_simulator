@@ -12,6 +12,7 @@
 #include "uav_simulator/Planning/TrajectoryTracker.h"
 #include "uav_simulator/Planning/PlanningVisualizer.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
+#include "uav_simulator/Utility/Filter.h"
 
 UBTService_UAVPathPlanning::UBTService_UAVPathPlanning()
 {
@@ -69,7 +70,7 @@ void UBTService_UAVPathPlanning::TickNode(UBehaviorTreeComponent& OwnerComp, uin
 
 		if (ShouldReplan(TargetLocation))
 		{
-			UE_LOG(LogUAVAI, Warning, TEXT("Target moved significantly (%.1fcm), triggering replan"), FVector::Dist(TargetLocation, LastTargetLocation));
+			UE_LOG(LogUAVAI, Log, TEXT("Target moved %.1fcm, triggering replan"), FVector::Dist(TargetLocation, LastTargetLocation));
 			PerformPathPlanning(UAVPawn, TargetLocation);
 			LastTargetLocation = TargetLocation;
 		}
@@ -78,7 +79,7 @@ void UBTService_UAVPathPlanning::TickNode(UBehaviorTreeComponent& OwnerComp, uin
 	// ========== Local Planner (NMPC Stuck 检测) ==========
 	if (UpdateStuckStateAndCheckReplan(UAVPawn->IsNMPCStuck()))
 	{
-		UE_LOG(LogUAVAI, Warning, TEXT("[LocalPlanner] Consecutive stuck, triggering global replan"));
+		UE_LOG(LogUAVAI, Log, TEXT("[LocalPlanner] Consecutive stuck, triggering global replan"));
 		TriggerGlobalReplan(UAVPawn);
 	}
 }
@@ -87,7 +88,7 @@ bool UBTService_UAVPathPlanning::ShouldReplan(const FVector& CurrentTarget) cons
 {
 	float Distance = FVector::Dist(CurrentTarget, LastTargetLocation);
 	bool bShouldReplan = Distance > ReplanningThreshold;
-	UE_LOG(LogUAVAI, Log, TEXT("ShouldReplan: Distance=%.1f, Threshold=%.1f, Result=%s"),
+	UE_LOG_THROTTLE(5.0, LogUAVAI, Log, TEXT("ShouldReplan: Distance=%.1f, Threshold=%.1f, Result=%s"),
 		Distance, ReplanningThreshold, bShouldReplan ? TEXT("YES") : TEXT("NO"));
 	return bShouldReplan;
 }
@@ -180,8 +181,8 @@ bool UBTService_UAVPathPlanning::PlanMultiSegmentPath(AUAVPawn* UAVPawn, const T
 		}
 	}
 
-	UE_LOG(LogUAVPlanning, Warning, TEXT("========== Multi-Segment Path Planning Started =========="));
-	UE_LOG(LogUAVPlanning, Warning, TEXT("Waypoints: %d, Obstacles: %d, Algorithm: %s"),
+	UE_LOG(LogUAVPlanning, Log, TEXT("[MultiSeg] Planning started"));
+	UE_LOG(LogUAVPlanning, Log, TEXT("[MultiSeg] Waypoints: %d, Obstacles: %d, Algorithm: %s"),
 		Waypoints.Num(), Obstacles.Num(),
 		PathPlanningAlgorithm == EPathPlanningAlgorithm::AStar ? TEXT("A*") : TEXT("RRT"));
 
@@ -252,7 +253,7 @@ bool UBTService_UAVPathPlanning::PlanMultiSegmentPath(AUAVPawn* UAVPawn, const T
 				OutPath.Add(MidPoint);
 				OutPath.Add(SegEnd);
 				WaypointIndices.Add(OutPath.Num() - 1);
-				UE_LOG(LogUAVPlanning, Warning, TEXT("    Segment [%d->%d] A* failed, using altitude bypass at Z+500"), i, i + 1);
+				UE_LOG(LogUAVPlanning, Warning, TEXT("Segment [%d->%d] planning failed, altitude bypass Z+500"), i, i + 1);
 			}
 			else
 			{
@@ -268,8 +269,8 @@ bool UBTService_UAVPathPlanning::PlanMultiSegmentPath(AUAVPawn* UAVPawn, const T
 	int32 BeforeSimplify = OutPath.Num();
 	SimplifyGlobalPath(OutPath, Planner, SafetyMargin, WaypointIndices);
 
-	UE_LOG(LogUAVPlanning, Warning, TEXT("========== Multi-Segment Path Planning Completed =========="));
-	UE_LOG(LogUAVPlanning, Warning, TEXT("Total path points: %d (before simplify: %d), All segments OK: %s"),
+	UE_LOG(LogUAVPlanning, Log, TEXT("[MultiSeg] Planning completed"));
+	UE_LOG(LogUAVPlanning, Log, TEXT("[MultiSeg] Total: %d (before simplify: %d), All OK: %s"),
 		OutPath.Num(), BeforeSimplify, bAllSegmentsOK ? TEXT("YES") : TEXT("NO"));
 
 	return OutPath.Num() >= 2;
@@ -300,15 +301,15 @@ void UBTService_UAVPathPlanning::ProcessPresetWaypoints(AUAVPawn* UAVPawn)
 
 	if (Waypoints.Num() < 2)
 	{
-		UE_LOG(LogUAVPlanning, Warning, TEXT("Preset waypoints insufficient: %d (need at least 2)"), Waypoints.Num());
+		UE_LOG(LogUAVPlanning, Warning, TEXT("Preset waypoints insufficient: %d (need 2+)"), Waypoints.Num());
 		return;
 	}
 
 	// 保存原始航点（用于 Global Replan）
 	OriginalWaypoints = Waypoints;
 
-	UE_LOG(LogUAVPlanning, Warning, TEXT("========== Processing Preset Waypoints =========="));
-	UE_LOG(LogUAVPlanning, Warning, TEXT("Waypoint count: %d"), Waypoints.Num());
+	UE_LOG(LogUAVPlanning, Log, TEXT("[PresetWP] Processing preset waypoints"));
+	UE_LOG(LogUAVPlanning, Log, TEXT("[PresetWP] Count: %d"), Waypoints.Num());
 	for (int32 i = 0; i < Waypoints.Num(); ++i)
 	{
 		UE_LOG(LogUAVPlanning, Log, TEXT("  [%d] %s"), i, *Waypoints[i].ToString());
@@ -320,7 +321,7 @@ void UBTService_UAVPathPlanning::ProcessPresetWaypoints(AUAVPawn* UAVPawn)
 
 	if (!bSuccess || PlannedPath.Num() < 2)
 	{
-		UE_LOG(LogUAVPlanning, Warning, TEXT("Multi-segment planning failed, falling back to direct waypoints"));
+		UE_LOG(LogUAVPlanning, Warning, TEXT("Multi-segment planning failed, using direct waypoints"));
 		PlannedPath = Waypoints;
 	}
 
@@ -343,7 +344,7 @@ void UBTService_UAVPathPlanning::ProcessPresetWaypoints(AUAVPawn* UAVPawn)
 			MissionComp->StartMission();
 		}
 
-		UE_LOG(LogUAVPlanning, Warning, TEXT("========== Preset Waypoints Processed, Tracking Started =========="));
+		UE_LOG(LogUAVPlanning, Log, TEXT("[PresetWP] Tracking started"));
 	}
 }
 
@@ -357,8 +358,8 @@ void UBTService_UAVPathPlanning::PerformPathPlanning(AUAVPawn* UAVPawn, const FV
 
 	FVector CurrentLocation = UAVPawn->GetActorLocation();
 
-	UE_LOG(LogUAVPlanning, Warning, TEXT("========== Path Planning Started =========="));
-	UE_LOG(LogUAVPlanning, Warning, TEXT("Start: %s, Goal: %s"), *CurrentLocation.ToString(), *TargetLocation.ToString());
+	UE_LOG(LogUAVPlanning, Log, TEXT("[PathPlan] Planning started"));
+	UE_LOG(LogUAVPlanning, Log, TEXT("[PathPlan] Start: %s, Goal: %s"), *CurrentLocation.ToString(), *TargetLocation.ToString());
 
 	// 获取障碍物
 	TArray<FObstacleInfo> Obstacles;
@@ -379,7 +380,7 @@ void UBTService_UAVPathPlanning::PerformPathPlanning(AUAVPawn* UAVPawn, const FV
 	TArray<FVector> PlannedPath;
 	bool bPathFound = Planner->PlanPath(CurrentLocation, TargetLocation, PlannedPath);
 
-	UE_LOG(LogUAVPlanning, Warning, TEXT("Planning result: %s, Path points: %d"),
+	UE_LOG(LogUAVPlanning, Log, TEXT("[PathPlan] Result: %s, PathPoints: %d"),
 		bPathFound ? TEXT("SUCCESS") : TEXT("FAILED"), PlannedPath.Num());
 
 	if (bPathFound && PlannedPath.Num() >= 2)
@@ -397,7 +398,7 @@ void UBTService_UAVPathPlanning::PerformPathPlanning(AUAVPawn* UAVPawn, const FV
 		// 轨迹优化 + 启动跟踪
 		if (ApplyOptimizedTrajectory(UAVPawn, PlannedPath, Visualizer))
 		{
-			UE_LOG(LogUAVPlanning, Warning, TEXT("========== Path Planning Completed, Trajectory Tracking Started =========="));
+			UE_LOG(LogUAVPlanning, Log, TEXT("[PathPlan] Completed, tracking started"));
 		}
 	}
 	else
@@ -419,7 +420,7 @@ bool UBTService_UAVPathPlanning::UpdateStuckStateAndCheckReplan(bool bIsStuck)
 	if (!bWasStuckLastFrame)
 	{
 		++LocalPlannerStuckCount;
-		UE_LOG(LogUAVPlanning, Warning, TEXT("[LocalPlanner] NMPC stuck! Consecutive count: %d/%d"),
+		UE_LOG(LogUAVPlanning, Log, TEXT("[LocalPlanner] NMPC stuck! Count: %d/%d"),
 			LocalPlannerStuckCount, LocalPlannerFailThreshold);
 	}
 	bWasStuckLastFrame = true;
@@ -510,7 +511,7 @@ void UBTService_UAVPathPlanning::TriggerGlobalReplan(AUAVPawn* UAVPawn)
 			RemainingWaypoints.Add(OriginalWaypoints[i]);
 		}
 
-		UE_LOG(LogUAVPlanning, Warning, TEXT("[GlobalReplan] Replanning from waypoint %d, remaining %d waypoints"),
+		UE_LOG(LogUAVPlanning, Log, TEXT("[GlobalReplan] From waypoint %d, remaining %d"),
 			NearestIdx, RemainingWaypoints.Num());
 
 		// 重新执行多航段规划
@@ -529,7 +530,7 @@ void UBTService_UAVPathPlanning::TriggerGlobalReplan(AUAVPawn* UAVPawn)
 
 			if (ApplyOptimizedTrajectory(UAVPawn, NewPath, Visualizer))
 			{
-				UE_LOG(LogUAVPlanning, Warning, TEXT("[GlobalReplan] Replan succeeded, trajectory tracking restarted"));
+				UE_LOG(LogUAVPlanning, Log, TEXT("[GlobalReplan] Succeeded, tracking restarted"));
 			}
 		}
 		else

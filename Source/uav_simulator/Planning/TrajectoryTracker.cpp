@@ -171,6 +171,9 @@ void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 
 		EffectiveTimeScale = FMath::Max(EffectiveTimeScale, TimeScale * ClampedMinScale);
 
+		// 应用速度缩放（基于障碍物距离的主动减速）
+		EffectiveTimeScale *= SpeedScale;
+
 		// 轨迹级卡死检测：UAV 长时间低速且轨迹进度停滞，强制推进轨迹时间
 		// 防止自适应时间缩放崩溃导致 UAV 永远无法到达终点
 		float Speed = GetUAVSpeed(GetOwner());

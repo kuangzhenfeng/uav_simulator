@@ -569,8 +569,8 @@ bool UObstacleManager::IsPointInObstacle(const FVector& Point, const FObstacleIn
 			float Distance = FVector::Dist(Point, Obstacle.Center);
 			float Threshold = Obstacle.Extents.X + TotalRadius;
 			bool bInside = Distance < Threshold;
-			UE_LOG(LogUAVPlanning, Log, TEXT("[ObstacleManager::IsPointInObstacle] Sphere: Point=%s, Center=%s, Distance=%.1f, Threshold=%.1f (Extents.X=%.1f + TotalRadius=%.1f), Inside=%s"),
-				*Point.ToString(), *Obstacle.Center.ToString(), Distance, Threshold, Obstacle.Extents.X, TotalRadius, bInside ? TEXT("YES") : TEXT("NO"));
+			UE_LOG_THROTTLE(2.0, LogUAVPlanning, Log, TEXT("[ObstacleManager] IsPointInObstacle: Point=%s, Dist=%.1f, Threshold=%.1f, Inside=%s"),
+				*Point.ToString(), Distance, Threshold, bInside ? TEXT("YES") : TEXT("NO"));
 			return bInside;
 		}
 

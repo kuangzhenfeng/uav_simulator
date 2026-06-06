@@ -58,6 +58,10 @@ private:
 	UFUNCTION()
 	void OnViewChanged(int32 AgentID);
 
+	// 调试开关 toggle 回调（ToggleIndex: 0=Vis, 1=Obs, 2=Path, 3=Dbg）
+	UFUNCTION()
+	void OnToggleDebug(int32 ToggleIndex);
+
 	// 通过 AgentID 查找无人机
 	AUAVPawn* GetDroneByAgentID(int32 AgentID);
 

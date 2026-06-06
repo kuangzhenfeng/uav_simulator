@@ -43,10 +43,23 @@ FMotorOutput UAttitudeController::ComputeControlWithFeedforward(
 	LogAccumTime += DeltaTime;
 	const bool bShouldLog = LogAccumTime >= 1.0f;
 
-	// 启动阶段每帧都记录（前 2 秒）
-	static float TotalTime = 0.0f;
-	TotalTime += DeltaTime;
-	const bool bStartupLog = TotalTime <= 2.0f;
+	// 启动阶段每0.5秒记录一次（前 2 秒）
+	LogStartupAccumTime += DeltaTime;
+	if (LogStartupAccumTime >= 2.0f)
+	{
+		LogStartupAccumTime = 2.0f; // 不再继续累加
+	}
+	const bool bInStartupPhase = LogStartupAccumTime < 2.0f;
+	static float StartupLogAccum = 0.0f;
+	if (bInStartupPhase)
+	{
+		StartupLogAccum += DeltaTime;
+	}
+	const bool bShouldLogStartup = bInStartupPhase && StartupLogAccum >= 0.5f;
+	if (bShouldLogStartup)
+	{
+		StartupLogAccum = 0.0f;
+	}
 
 	if (bShouldLog)
 	{
@@ -64,10 +77,10 @@ FMotorOutput UAttitudeController::ComputeControlWithFeedforward(
 	// 获取角速度（rad/s转换为deg/s）
 	FVector AngularVelDeg = CurrentState.AngularVelocity * (180.0f / PI);
 
-	if (bStartupLog)
+	if (bShouldLogStartup)
 	{
-		UE_LOG(LogUAVAttitude, Warning, TEXT("[STARTUP] T=%.3f | Cur:(R=%.1f P=%.1f) | Err:(R=%.1f P=%.1f) | AngVel:(%.1f,%.1f)"),
-			TotalTime, CurrentState.Rotation.Roll, CurrentState.Rotation.Pitch,
+		UE_LOG(LogUAVAttitude, Log, TEXT("[STARTUP] T=%.3f | Cur:(R=%.1f P=%.1f) | Err:(R=%.1f P=%.1f) | AngVel:(%.1f,%.1f)"),
+			LogStartupAccumTime, CurrentState.Rotation.Roll, CurrentState.Rotation.Pitch,
 			RollError, PitchError, AngularVelDeg.X, AngularVelDeg.Y);
 	}
 
@@ -132,9 +145,9 @@ FMotorOutput UAttitudeController::ComputeControlWithFeedforward(
 			RollP, PitchP, RollD, PitchD, RollControl, PitchControl, AngularVelDeg.X, AngularVelDeg.Y);
 	}
 
-	if (bStartupLog)
+	if (bShouldLogStartup)
 	{
-		UE_LOG(LogUAVAttitude, Warning, TEXT("[STARTUP] PID: P:(%.4f,%.4f) D:(%.4f,%.4f) Final:(%.4f,%.4f) | Kp=%.4f"),
+		UE_LOG(LogUAVAttitude, Log, TEXT("[STARTUP] PID: P:(%.4f,%.4f) D:(%.4f,%.4f) Final:(%.4f,%.4f) | Kp=%.4f"),
 			RollP, PitchP, RollD, PitchD, RollControl, PitchControl, RollPID.Kp);
 	}
 
@@ -158,9 +171,9 @@ FMotorOutput UAttitudeController::ComputeControlWithFeedforward(
 		Thrust = FMath::Clamp(Thrust, 0.0f, 1.0f);
 	}
 
-	if (bStartupLog)
+	if (bShouldLogStartup)
 	{
-		UE_LOG(LogUAVAttitude, Warning, TEXT("[STARTUP] Motors: [%.3f, %.3f, %.3f, %.3f] | Hover=%.3f"),
+		UE_LOG(LogUAVAttitude, Log, TEXT("[STARTUP] Motors: [%.3f, %.3f, %.3f, %.3f] | Hover=%.3f"),
 			Output.Thrusts[0], Output.Thrusts[1], Output.Thrusts[2], Output.Thrusts[3], HoverThrust);
 	}
 

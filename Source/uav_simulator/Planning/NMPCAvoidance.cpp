@@ -191,10 +191,10 @@ float UNMPCAvoidance::ComputeCost(
 		}
 	}
 
-	// 终端代价
+	// 终端代价 - 使用平方距离产生更强梯度
 	if (ReferencePoints.Num() > N)
 	{
-		Cost += Config.WeightTerminal * FVector::Dist(Positions[N], ReferencePoints[N]);
+		Cost += Config.WeightTerminal * FVector::DistSquared(Positions[N], ReferencePoints[N]);
 	}
 
 	// 终端障碍物代价 + 终端步 MinObsDist
@@ -336,8 +336,21 @@ void UNMPCAvoidance::WarmStart()
 
 bool UNMPCAvoidance::ShouldUseWarmStart() const
 {
-	return bHasPreviousControls && PreviousControls.Num() == Config.PredictionSteps
-		&& ConsecutiveCostRiseCount < Config.WarmStartResetThreshold;
+	if (!bHasPreviousControls || PreviousControls.Num() != Config.PredictionSteps
+		|| ConsecutiveCostRiseCount >= Config.WarmStartResetThreshold)
+	{
+		return false;
+	}
+
+	// 若上一次的首步控制量极小，跳过温启动，避免零控制循环
+	// 这种情况下重新初始化（ComputeInitialControl）能给出更合理的起点
+	float FirstControlMag = PreviousControls[0].Size();
+	if (FirstControlMag < Config.StuckForceThreshold * 2.0f)
+	{
+		return false;
+	}
+
+	return true;
 }
 
 FVector UNMPCAvoidance::ComputeInitialControl(const TArray<FVector>& ReferencePoints) const
@@ -356,7 +369,7 @@ FVector UNMPCAvoidance::ComputeInitialControl(const TArray<FVector>& ReferencePo
 
 	if (!RefDir.IsNearlyZero())
 	{
-		return RefDir * Config.MaxAcceleration * 0.5f;
+		return RefDir * Config.MaxAcceleration * 0.85f;
 	}
 
 	return FVector::ZeroVector;
@@ -513,34 +526,44 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	float CurrentCost = MAX_FLT;
 	int32 FinalIter = 0;
 	bool bConverged = false;
+	float CostAtIterStart = MAX_FLT; // 本轮迭代开始时的代价
 	for (int32 Iter = 0; Iter < Config.MaxIterations; ++Iter)
 	{
 		FinalIter = Iter + 1;
-		// 投影到可行域
-		ProjectControls(Controls, CurrentVelocity);
-
-		// 前向仿真
-		TArray<FVector> Positions, Velocities;
-		ForwardSimulate(CurrentPosition, CurrentVelocity, Controls, Positions, Velocities);
-
-		// 计算代价
-		float Cost = ComputeCost(Positions, Velocities, Controls, RefPoints, Obstacles);
-
-		// 收敛检查
-		if (FMath::Abs(CurrentCost - Cost) < Config.ConvergenceTolerance && Iter > 0)
-		{
-			CurrentCost = Cost;
-			bConverged = true;
-			break;
-		}
-		CurrentCost = Cost;
 
 		// 计算梯度
 		TArray<FVector> Gradient;
-		ComputeGradient(CurrentPosition, CurrentVelocity, Controls, RefPoints, Obstacles, Gradient);
+		{
+			// 投影到可行域
+			ProjectControls(Controls, CurrentVelocity);
+
+			// 前向仿真
+			TArray<FVector> Positions, Velocities;
+			ForwardSimulate(CurrentPosition, CurrentVelocity, Controls, Positions, Velocities);
+
+			// 计算代价
+			CurrentCost = ComputeCost(Positions, Velocities, Controls, RefPoints, Obstacles);
+
+			// 收敛检查：比较本轮代价与上一轮开始时的代价
+			// 要求至少完成 3 轮梯度下降，避免初始值巧合导致的假收敛
+			if (Iter >= 3 && FMath::Abs(CostAtIterStart) > KINDA_SMALL_NUMBER)
+			{
+				float RelativeChange = FMath::Abs(CostAtIterStart - CurrentCost) / FMath::Abs(CostAtIterStart);
+				if (RelativeChange < 1e-4f)
+				{
+					bConverged = true;
+					break;
+				}
+			}
+			CostAtIterStart = CurrentCost;
+
+			// 计算梯度
+			ComputeGradient(CurrentPosition, CurrentVelocity, Controls, RefPoints, Obstacles, Gradient);
+		}
 
 		// 回溯线搜索
 		float StepSize = Config.InitialStepSize;
+		bool bImproved = false;
 		for (int32 BT = 0; BT < Config.MaxBacktrackSteps; ++BT)
 		{
 			TArray<FVector> TrialControls;
@@ -560,10 +583,18 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 			{
 				Controls = TrialControls;
 				CurrentCost = TrialCost;
+				bImproved = true;
 				break;
 			}
 
 			StepSize *= Config.BacktrackFactor;
+		}
+
+		// 线搜索连续未改进：已处于局部最优，提前退出
+		if (!bImproved)
+		{
+			bConverged = true;
+			break;
 		}
 	}
 

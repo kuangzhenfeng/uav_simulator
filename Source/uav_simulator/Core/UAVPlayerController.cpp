@@ -6,6 +6,8 @@
 #include "../MultiAgent/AgentManager.h"
 #include "../Debug/UAVLogConfig.h"
 #include "Kismet/GameplayStatics.h"
+#include "../Debug/DebugVisualizer.h"
+#include "../Planning/PlanningVisualizer.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUAVPlayerController, Log, All);
 
@@ -30,6 +32,7 @@ void AUAVPlayerController::BeginPlay()
 
 		// 绑定视角切换回调
 		SwitcherWidget->OnViewChanged.AddDynamic(this, &AUAVPlayerController::OnViewChanged);
+			SwitcherWidget->OnToggleDebug.AddDynamic(this, &AUAVPlayerController::OnToggleDebug);
 
 		// 默认高亮全局视角
 		SwitcherWidget->HighlightCurrentView(-1);
@@ -98,6 +101,39 @@ void AUAVPlayerController::SwitchView(int32 AgentID)
 	if (SwitcherWidget)
 	{
 		SwitcherWidget->HighlightCurrentView(CurrentViewAgentID);
+	}
+}
+
+void AUAVPlayerController::OnToggleDebug(int32 ToggleIndex)
+{
+	// 遍历所有 UAVPawn，切换对应组件的可视化属性
+	TArray<AActor*> FoundActors;
+	UGameplayStatics::GetAllActorsOfClass(this, AUAVPawn::StaticClass(), FoundActors);
+
+	for (AActor* Actor : FoundActors)
+	{
+		AUAVPawn* UAVPawn = Cast<AUAVPawn>(Actor);
+		if (!UAVPawn) continue;
+
+		switch (ToggleIndex)
+		{
+		case 0: // Vis - 规划可视化总开关
+			if (UPlanningVisualizer* Vis = UAVPawn->GetPlanningVisualizer())
+				Vis->ToggleVisualization();
+			break;
+		case 1: // Obs - 障碍物绘制
+			if (UPlanningVisualizer* Vis = UAVPawn->GetPlanningVisualizer())
+				Vis->ToggleShowObstacles();
+			break;
+		case 2: // Path - 路径绘制
+			if (UPlanningVisualizer* Vis = UAVPawn->GetPlanningVisualizer())
+				Vis->ToggleShowPath();
+			break;
+		case 3: // Dbg - UAV 状态调试信息
+			if (UDebugVisualizer* Dbg = UAVPawn->GetComponentByClass<UDebugVisualizer>())
+				Dbg->ToggleShowDebugInfo();
+			break;
+		}
 	}
 }
 
