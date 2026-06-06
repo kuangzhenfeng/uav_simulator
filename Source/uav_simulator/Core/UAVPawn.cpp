@@ -172,11 +172,11 @@ void AUAVPawn::BeginPlay()
 		NMPCComponent->Config.WeightReference = 0.4f;          // 降低参考跟踪权重
 		NMPCComponent->Config.WeightVelocity = 0.08f;          // 降低速度跟踪权重
 		NMPCComponent->Config.WeightTerminal = 0.8f;           // 终端代价保持不变
-		NMPCComponent->Config.WeightObstacle = 100.0f;         // 提高障碍物权重
-		NMPCComponent->Config.ObstacleSafeDistance = 300.0f;   // 安全距离设置为 3m
-		NMPCComponent->Config.ObstacleInfluenceDistance = 3500.0f; // 感知范围 35m，提前规划
-		NMPCComponent->Config.ObstacleAlpha = 0.13f;           // 衰减系数，平衡影响范围与梯度强度
-		NMPCComponent->Config.MaxObstacleCostPerStep = 1800.0f; // 单步障碍物代价上限
+		NMPCComponent->Config.WeightObstacle = 50.0f;          // 降低障碍物权重，避免过度避障
+		NMPCComponent->Config.ObstacleSafeDistance = 250.0f;   // 安全距离 2.5m
+		NMPCComponent->Config.ObstacleInfluenceDistance = 2000.0f; // 感知范围 20m
+		NMPCComponent->Config.ObstacleAlpha = 0.10f;           // 降低衰减系数，缩小障碍物影响范围
+		NMPCComponent->Config.MaxObstacleCostPerStep = 1200.0f; // 降低单步障碍物代价上限
 	}
 
 	// 多机协同注册
@@ -199,7 +199,30 @@ void AUAVPawn::BeginPlay()
 
 	UE_LOG(LogUAVActor, Log, TEXT("[Environment] WindField + sensors initialized"));
 
-}
+		// 出生点安全诊断：检测出生位置附近的所有障碍物
+		if (ObstacleManagerComponent)
+		{
+			const TArray<FObstacleInfo>& AllObs = ObstacleManagerComponent->GetAllObstacles();
+			UE_LOG(LogUAVActor, Log, TEXT("[SpawnSafety] UAV born at Pos=%s, total obstacles=%d"),
+				*CurrentState.Position.ToString(), AllObs.Num());
+			for (const FObstacleInfo& Obs : AllObs)
+			{
+				float D = NMPCComponent
+					? NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs)
+					: FVector::Dist(CurrentState.Position, Obs.Center) - Obs.Extents.GetMax() - Obs.SafetyMargin;
+				if (D < 500.0f)
+				{
+					UE_LOG(LogUAVActor, Warning,
+						TEXT("[SpawnSafety] Nearby obstacle: ID=%d, Type=%d, Center=%s, Extents=%s, "
+							 "SafetyMargin=%.0f, Dist=%.1fcm, LinkedActor=%s"),
+						Obs.ObstacleID, (int32)Obs.Type,
+						*Obs.Center.ToString(), *Obs.Extents.ToString(),
+						Obs.SafetyMargin, D,
+						Obs.LinkedActor.IsValid() ? *Obs.LinkedActor->GetName() : TEXT("none"));
+				}
+			}
+		}
+	}
 
 void AUAVPawn::SetPayloadMass(float NewPayloadMass)
 {
@@ -429,10 +452,41 @@ void AUAVPawn::FilterNearbyObstacles(TArray<FObstacleInfo>& OutObstacles)
 		return;
 	}
 
+	// 先获取范围内所有障碍物
+	TArray<FObstacleInfo> RawObstacles;
 	for (const FObstacleInfo& Obs : ObstacleManagerComponent->GetObstaclesInRange(
 		CurrentState.Position, NMPCComponent->Config.ObstacleInfluenceDistance * 2.0f))
 	{
 		if (Obs.Extents.GetMax() <= 5000.0f)
+		{
+			RawObstacles.Add(Obs);
+		}
+	}
+
+	// 空间去重：将距离 < 200cm 的障碍物合并为一个（取最近的）
+	// 解决感知障碍物重复注册导致的 ID 膨胀问题
+	constexpr float MergeDistance = 200.0f;
+	constexpr float MergeDistSq = MergeDistance * MergeDistance;
+
+	for (const FObstacleInfo& Obs : RawObstacles)
+	{
+		bool bMerged = false;
+		for (FObstacleInfo& Existing : OutObstacles)
+		{
+			if (FVector::DistSquared(Obs.Center, Existing.Center) < MergeDistSq)
+			{
+				// 保留离 UAV 更近的那个（更大的障碍物）
+				float DistNew = FVector::Dist(Obs.Center, CurrentState.Position);
+				float DistExisting = FVector::Dist(Existing.Center, CurrentState.Position);
+				if (DistNew < DistExisting)
+				{
+					Existing = Obs;
+				}
+				bMerged = true;
+				break;
+			}
+		}
+		if (!bMerged)
 		{
 			OutObstacles.Add(Obs);
 		}
@@ -647,21 +701,52 @@ FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float Cr
 void AUAVPawn::UpdateSpeedScaleForObstacles()
 {
 	const float ObsSafe = 300.0f;      // 安全距离 3m
-	const float ObsInfluence = 2000.0f; // 影响范围 20m，更早减速
+	const float ObsInfluence = 800.0f; // 影响范围 8m，缩小范围避免过度减速
 	float SpeedScale = 1.0f;
 
-	if (CachedNearestObsDist < ObsInfluence)
+	// 仅对前方的障碍物减速：排除 UAV 身后的障碍物
+	// 避免被出生点附近的障碍物锁死速度
+	FVector VelDir = CurrentState.Velocity.GetSafeNormal();
+	float EffectiveObsDist = CachedNearestObsDist;
+
+	if (bHasCachedNMPC && VelDir.SizeSquared() > KINDA_SMALL_NUMBER)
 	{
-		// 分段减速策略：<6m 激进减速至 20%，6-20m 渐进减速至 50%
-		if (CachedNearestObsDist < ObsSafe * 2.0f) // <6m: 激进减速至 20%
+		// 重新计算前方最近障碍物距离
+		if (ObstacleManagerComponent)
 		{
-			SpeedScale = FMath::Lerp(0.20f, 0.50f,
-				FMath::Clamp((CachedNearestObsDist - ObsSafe) / ObsSafe, 0.0f, 1.0f));
+			float ForwardMinDist = MAX_FLT;
+			for (const FObstacleInfo& Obs : ObstacleManagerComponent->GetObstaclesInRange(
+				CurrentState.Position, ObsInfluence * 2.0f))
+			{
+				if (Obs.Extents.GetMax() > 5000.0f) continue;
+
+				FVector ToObs = Obs.Center - CurrentState.Position;
+				float ForwardDot = FVector::DotProduct(ToObs.GetSafeNormal(), VelDir);
+
+				// 只对前方半球（dot > 0.3，约 ±72°）的障碍物减速
+				if (ForwardDot > 0.3f)
+				{
+					float Dist = NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs);
+					ForwardMinDist = FMath::Min(ForwardMinDist, Dist);
+				}
+			}
+			EffectiveObsDist = ForwardMinDist;
 		}
-		else // 6-20m: 渐进减速至 50%
+	}
+
+	if (EffectiveObsDist < ObsInfluence)
+	{
+		// 分段减速策略：近距离适度减速，远距离几乎不减速
+		// 让 NMPC 主导避障，速度缩放仅作为辅助安全机制
+		if (EffectiveObsDist < ObsSafe) // <3m: 减速至 50%
 		{
-			SpeedScale = FMath::Lerp(0.50f, 1.0f,
-				FMath::Clamp((CachedNearestObsDist - ObsSafe * 2.0f) / (ObsInfluence - ObsSafe * 2.0f), 0.0f, 1.0f));
+			SpeedScale = FMath::Lerp(0.50f, 0.70f,
+				FMath::Clamp(EffectiveObsDist / ObsSafe, 0.0f, 1.0f));
+		}
+		else // 3-8m: 渐进减速至 70%
+		{
+			SpeedScale = FMath::Lerp(0.70f, 1.0f,
+				FMath::Clamp((EffectiveObsDist - ObsSafe) / (ObsInfluence - ObsSafe), 0.0f, 1.0f));
 		}
 	}
 
@@ -670,21 +755,25 @@ void AUAVPawn::UpdateSpeedScaleForObstacles()
 
 FVector AUAVPawn::ApplyEmergencyBraking(const FVector& Acceleration)
 {
-	if (CachedNearestObsDist >= 1000.0f) // >10m: 无需干预
+	// 紧急制动仅在近距离真正危险时触发
+	// 阈值设计：基于实际制动距离，附加适度安全裕度
+	float CurrentSpeed = CurrentState.Velocity.Size();
+
+	// 低速时无需紧急制动（<200cm/s = 2m/s）：制动距离极短
+	if (CurrentSpeed < 200.0f)
 		return Acceleration;
 
-	float CurrentSpeed = CurrentState.Velocity.Size();
-	// 低速时（<150cm/s）无需紧急制动：制动距离极短（<14cm），物理上无意义
-	// 且会干扰 NMPC 正常控制输出，导致 UAV 停滞不前
-	if (CurrentSpeed < 150.0f)
+	// 距离 > 6m 时无需干预：NMPC 完全可以处理
+	if (CachedNearestObsDist >= 600.0f)
 		return Acceleration;
 
 	// 计算理论制动距离: d = v²/(2a)
 	const float MaxDecel = 400.0f; // cm/s²
 	float BrakingDist = (CurrentSpeed * CurrentSpeed) / (2.0f * MaxDecel);
 
-	// 安全裕度: 1.5倍制动距离 + 3m安全距离
-	float RequiredDist = BrakingDist * 1.5f + 300.0f;
+	// 安全裕度：2.0 倍制动距离 + 1m 基础距离
+	// 此公式确保只有在真正可能碰撞时才触发，不会干扰 NMPC 正常避障
+	float RequiredDist = BrakingDist * 2.0f + 100.0f;
 
 	if (CachedNearestObsDist < RequiredDist)
 	{
@@ -697,12 +786,12 @@ FVector AUAVPawn::ApplyEmergencyBraking(const FVector& Acceleration)
 
 		// 与NMPC加速度混合: 距离越近，制动权重越高
 		float BrakeWeight = FMath::Clamp(
-			(RequiredDist - CachedNearestObsDist) / RequiredDist, 0.0f, 1.0f);
+			(RequiredDist - CachedNearestObsDist) / RequiredDist, 0.0f, 0.9f);
 
 		FVector Result = Acceleration * (1.0f - BrakeWeight) + BrakeAccel * BrakeWeight;
 
-		UE_LOG_THROTTLE(0.2, LogUAVActor, Warning,
-			TEXT("[EmergencyBrake] Triggered! Dist=%.0fcm Speed=%.0fcm/s BrakeDist=%.0fcm Weight=%.2f"),
+		UE_LOG_THROTTLE(0.5, LogUAVActor, Warning,
+			TEXT("[EmergencyBrake] Dist=%.0fcm Speed=%.0fcm/s BrakeDist=%.0fcm Weight=%.2f"),
 			CachedNearestObsDist, CurrentSpeed, BrakingDist, BrakeWeight);
 
 		return Result;
@@ -1005,8 +1094,13 @@ void AUAVPawn::CheckCollision()
 		if (D < 0.0f)
 		{
 			UE_LOG(LogUAVActor, Warning,
-				TEXT("[Crash] UAV collided with obstacle ID=%d, dist=%.0fcm"),
-				Obs.ObstacleID, D);
+				TEXT("[Crash] UAV collided with obstacle ID=%d, Type=%d, Center=%s, Extents=%s, "
+					 "SafetyMargin=%.0f, Dist=%.1fcm, UAVPos=%s, LinkedActor=%s"),
+				Obs.ObstacleID, (int32)Obs.Type,
+				*Obs.Center.ToString(), *Obs.Extents.ToString(),
+				Obs.SafetyMargin, D,
+				*CurrentState.Position.ToString(),
+				Obs.LinkedActor.IsValid() ? *Obs.LinkedActor->GetName() : TEXT("none"));
 			TriggerCrash();
 			return;
 		}

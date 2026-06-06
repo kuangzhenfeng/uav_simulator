@@ -7,6 +7,7 @@
 #include "Logging/LogVerbosity.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Utility/Filter.h"
+#include "../Core/UAVPawn.h"
 
 UObstacleManager::UObstacleManager()
 {
@@ -71,9 +72,21 @@ int32 UObstacleManager::RegisterObstacleFromActor(AActor* Actor, EObstacleType T
 		return -1;
 	}
 
-	// 获取 Actor 的边界
+	// UAV 特殊处理：GetActorBounds 包含 CameraBoom 等子组件导致包围盒过大
+	const AUAVPawn* UAVActor = Cast<AUAVPawn>(Actor);
 	FVector Origin, BoxExtent;
-	Actor->GetActorBounds(false, Origin, BoxExtent);
+	float CollisionRadius = 0.0f;
+
+	if (UAVActor)
+	{
+		CollisionRadius = UAVActor->GetCollisionRadius();
+		Origin = Actor->GetActorLocation();
+		BoxExtent = FVector(CollisionRadius);
+	}
+	else
+	{
+		Actor->GetActorBounds(false, Origin, BoxExtent);
+	}
 
 	FObstacleInfo Obstacle;
 	Obstacle.Type = Type;
@@ -261,7 +274,18 @@ void UObstacleManager::UpdateDynamicObstacles(float DeltaTime)
 		{
 			AActor* Actor = Obstacle.LinkedActor.Get();
 			FVector Origin, BoxExtent;
-			Actor->GetActorBounds(false, Origin, BoxExtent);
+
+			// UAV 特殊处理
+			const AUAVPawn* UAVActor = Cast<AUAVPawn>(Actor);
+			if (UAVActor)
+			{
+				BoxExtent = FVector(UAVActor->GetCollisionRadius());
+				Origin = Actor->GetActorLocation();
+			}
+			else
+			{
+				Actor->GetActorBounds(false, Origin, BoxExtent);
+			}
 
 			const FVector PreviousCenter = Obstacle.Center;
 			Obstacle.Center = Origin;
@@ -353,14 +377,38 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 
 	UE_LOG_THROTTLE(5.0, LogUAVPlanning, Log, TEXT("[ObstacleManager] Registering perceived obstacle from actor: %s"), *Actor->GetName());
 
+	// UAV 特殊处理：GetActorBounds 包含子组件导致包围盒过大
+	const AUAVPawn* UAVActor = Cast<AUAVPawn>(Actor);
 	FVector Origin, BoxExtent;
-	Actor->GetActorBounds(false, Origin, BoxExtent);
+	if (UAVActor)
+	{
+		BoxExtent = FVector(UAVActor->GetCollisionRadius());
+		Origin = Actor->GetActorLocation();
+	}
+	else
+	{
+		Actor->GetActorBounds(false, Origin, BoxExtent);
+	}
 	const float CurrentTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 
-	// 尝试更新已存在的障碍物，如果找到则返回其ID
+	// 尝试更新已存在的障碍物：
+	// 优先按 LinkedActor 匹配；若 Actor 指针失效，则按中心距离匹配（同一物理物体）
+	constexpr float MergeDistSq = 200.0f * 200.0f; // 200cm 内视为同一障碍物
 	for (FObstacleInfo& Obstacle : Obstacles)
 	{
-		if (Obstacle.LinkedActor.Get() == Actor)
+		bool bSameActor = false;
+
+		if (Obstacle.LinkedActor.IsValid() && Obstacle.LinkedActor.Get() == Actor)
+		{
+			bSameActor = true;
+		}
+		else if (Obstacle.bIsPerceived && FVector::DistSquared(Obstacle.Center, Origin) < MergeDistSq)
+		{
+			// Actor 指针失效或不同，但空间位置重合 — 同一物理障碍物
+			bSameActor = true;
+		}
+
+		if (bSameActor)
 		{
 			const FVector PrevCenter = Obstacle.Center;
 			const float PrevTime = Obstacle.LastPerceivedTime;
@@ -371,14 +419,13 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 			Obstacle.Rotation = Actor->GetActorRotation();
 			Obstacle.Extents = ComputeObstacleExtentsFromBounds(Type, BoxExtent);
 			Obstacle.SafetyMargin = SafetyMargin;
+			Obstacle.LinkedActor = Actor; // 刷新指针
 			Obstacle.bIsPerceived = true;
 			Obstacle.bIsDynamic = true;
 			Obstacle.LastPerceivedTime = CurrentTime;
 
 			UpdateObstacleVelocity(Obstacle, PrevCenter, DeltaTime, Actor);
 
-			UE_LOG(LogUAVPlanning, Log, TEXT("[ObstacleManager] Refreshed perceived obstacle: ID=%d, Center=%s, Extents=%s, Velocity=%s"),
-				Obstacle.ObstacleID, *Obstacle.Center.ToString(), *Obstacle.Extents.ToString(), *Obstacle.Velocity.ToString());
 			return Obstacle.ObstacleID;
 		}
 	}

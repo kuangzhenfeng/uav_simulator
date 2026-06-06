@@ -4,6 +4,7 @@
 #include "../uav_simulator.h"
 #include "DrawDebugHelpers.h"
 #include "uav_simulator/Planning/ObstacleManager.h"
+#include "../Core/UAVPawn.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Utility/Filter.h"
 
@@ -193,28 +194,42 @@ TArray<FDetectedObstacle> UObstacleDetector::ClusterHitResults(const TArray<FHit
 			NewObstacle.DetectedActor = HitActor;
 			NewObstacle.Distance = Hit.Distance;
 
-			// 从 Actor 获取边界信息
-			FVector Origin, BoxExtent;
-			HitActor->GetActorBounds(false, Origin, BoxExtent);
-			NewObstacle.Center = Origin;
-			NewObstacle.EstimatedExtents = BoxExtent;
+				// UAV 特殊处理：GetActorBounds 包含 CameraBoom 等子组件，返回异常大的包围盒
+				// 使用 UAV 实际碰撞半径替代
+				FVector Origin, BoxExtent;
+				const AUAVPawn* HitUAV = Cast<AUAVPawn>(HitActor);
+				if (HitUAV)
+				{
+					float Radius = HitUAV->GetCollisionRadius();
+					NewObstacle.Center = HitActor->GetActorLocation();
+					NewObstacle.EstimatedExtents = FVector(Radius);
+				}
+				else
+				{
+					HitActor->GetActorBounds(false, Origin, BoxExtent);
+					NewObstacle.Center = Origin;
+					NewObstacle.EstimatedExtents = BoxExtent;
+				}
 
-			// 根据尺寸比例估算障碍物类型
-			float XYRatio = BoxExtent.X / FMath::Max(BoxExtent.Y, 1.0f);
-			float ZRatio = BoxExtent.Z / FMath::Max(BoxExtent.X, 1.0f);
+				// UAV 直接设为球体；非 UAV 根据尺寸比例估算类型
+				if (!HitUAV)
+				{
+					float XYRatio = BoxExtent.X / FMath::Max(BoxExtent.Y, 1.0f);
+					float ZRatio = BoxExtent.Z / FMath::Max(BoxExtent.X, 1.0f);
 
-			if (FMath::Abs(XYRatio - 1.0f) < 0.3f && FMath::Abs(ZRatio - 1.0f) < 0.3f)
-			{
-				NewObstacle.EstimatedType = EObstacleType::Sphere;
-			}
-			else if (FMath::Abs(XYRatio - 1.0f) < 0.3f && ZRatio > 1.5f)
-			{
-				NewObstacle.EstimatedType = EObstacleType::Cylinder;
-			}
-			else
-			{
-				NewObstacle.EstimatedType = EObstacleType::Box;
-			}
+					if (FMath::Abs(XYRatio - 1.0f) < 0.3f && FMath::Abs(ZRatio - 1.0f) < 0.3f)
+					{
+						NewObstacle.EstimatedType = EObstacleType::Sphere;
+					}
+					else if (FMath::Abs(XYRatio - 1.0f) < 0.3f && ZRatio > 1.5f)
+					{
+						NewObstacle.EstimatedType = EObstacleType::Cylinder;
+					}
+					else
+					{
+						NewObstacle.EstimatedType = EObstacleType::Box;
+					}
+				}
 
 			// 检查是否已在 ObstacleManager 中注册，记录真实 ID
 			if (ObstacleManagerRef)

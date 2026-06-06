@@ -6,6 +6,7 @@
 #include "GameFramework/Pawn.h"
 #include "UAVTypes.h"
 #include "UAVProductTypes.h"
+#include "UAVProductManager.h"
 #include "../Planning/NMPCAvoidance.h"
 #include "../MultiAgent/MultiAgentTypes.h"
 #include "Camera/CameraComponent.h"
@@ -153,6 +154,15 @@ public:
 
 	// NMPC stuck 状态查询
 	bool IsNMPCStuck() const { return bNMPCStuck; }
+
+		// 获取 UAV 碰撞半径（cm），基于 ArmLength + 安全余量
+		// 用于障碍物感知时替代 GetActorBounds 返回的过大包围盒
+		float GetCollisionRadius() const
+		{
+			// ArmLength 单位是 m，转换为 cm，乘以 2.5 得到机体等效半径（含桨叶）
+			const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
+			return Spec.ArmLength * 100.0f * 2.5f;
+		}
 
 	// ---- 多机协同接口 ----
 
@@ -311,6 +321,7 @@ private:
 
 	// stuck 逃逸冷却：stuck 时延长不求解时间，让逃逸加速度持续生效
 	float StuckEscapeCooldown = 0.0f;
+
 
 	// 缓存最近障碍物距离（cm），用于偏差保护和减速决策
 	float CachedNearestObsDist = MAX_FLT;
