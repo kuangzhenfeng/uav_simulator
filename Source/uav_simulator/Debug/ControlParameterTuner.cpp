@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ControlParameterTuner.h"
+#include "../uav_simulator.h"
 #include "../Control/AttitudeController.h"
 #include "../Control/PositionController.h"
 #include "../Core/UAVPawn.h"
@@ -34,6 +35,7 @@ void UControlParameterTuner::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void UControlParameterTuner::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_ControlParameterTuner);
 	if (bStepTestActive)
 		TickStepTest(DeltaTime);
 	if (AutoTunePhase != EAutoTunePhase::Idle)

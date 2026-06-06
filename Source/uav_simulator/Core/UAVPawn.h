@@ -8,6 +8,8 @@
 #include "UAVProductTypes.h"
 #include "../Planning/NMPCAvoidance.h"
 #include "../MultiAgent/MultiAgentTypes.h"
+#include "Camera/CameraComponent.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "UAVPawn.generated.h"
 
 class UUAVDynamics;
@@ -246,6 +248,13 @@ protected:
 	// 风速计传感器
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensor Components")
 	TObjectPtr<UAnemometerSensor> AnemometerSensor;
+
+	// 跟随相机系统
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
+	TObjectPtr<USpringArmComponent> CameraBoom;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UAV Components")
+	TObjectPtr<UCameraComponent> FollowCamera;
 
 	// NMPC 避障组件（全程接管轨迹跟踪+避障）
 	UPROPERTY()

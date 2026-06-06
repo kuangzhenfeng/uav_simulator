@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TrajectoryOptimizer.h"
+#include "../uav_simulator.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 
 UTrajectoryOptimizer::UTrajectoryOptimizer()
@@ -17,6 +18,7 @@ void UTrajectoryOptimizer::BeginPlay()
 void UTrajectoryOptimizer::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_TrajectoryOptimizer);
 }
 
 FTrajectory UTrajectoryOptimizer::OptimizeTrajectory(const TArray<FVector>& Waypoints, float MaxVelocity, float MaxAcceleration)

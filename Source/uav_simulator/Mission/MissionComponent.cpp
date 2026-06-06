@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MissionComponent.h"
+#include "../uav_simulator.h"
 #include "uav_simulator/Core/UAVPawn.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 
@@ -34,6 +35,7 @@ void UMissionComponent::BeginPlay()
 void UMissionComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_MissionComponent);
 
 	// 只在运行状态且启用自动检测时检查航点
 	if (bAutoCheckWaypoints && MissionState == EMissionState::Running)

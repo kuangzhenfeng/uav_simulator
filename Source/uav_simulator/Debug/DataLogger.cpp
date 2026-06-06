@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DataLogger.h"
+#include "../uav_simulator.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HAL/PlatformFileManager.h"
@@ -18,6 +19,7 @@ void UDataLogger::BeginPlay()
 void UDataLogger::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_DataLogger);
 }
 
 void UDataLogger::StartRecording()

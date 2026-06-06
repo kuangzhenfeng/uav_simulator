@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "StateEstimator.h"
+#include "../uav_simulator.h"
 
 UStateEstimator::UStateEstimator()
 {
@@ -64,6 +65,7 @@ void UStateEstimator::InitializeMatrices()
 void UStateEstimator::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_StateEstimator);
 }
 
 void UStateEstimator::Predict(const FVector& Acceleration, const FVector& AngularVelocity, float DeltaTime)

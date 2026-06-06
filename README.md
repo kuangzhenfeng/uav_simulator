@@ -129,6 +129,20 @@
 - 轨迹、障碍物与 NMPC 预测轨迹可视化
 - HUD 状态显示
 
+### 视角切换
+- UMG 按钮面板：屏幕左下角显示视角切换按钮
+- 全局视角：自由观察模式（默认）
+- 无人机跟随视角：第三人称相机（SpringArm + CameraComponent）
+- 平滑视角过渡：0.5秒 blend 切换
+- 动态按钮列表：根据无人机数量自动更新
+
+### 多机协同
+- Agent 管理：注册、状态查询、邻居检测
+- 编队控制：线形、V形、环形、菱形编队
+- 联合 NMPC：Leader 统一求解，协调多机轨迹
+- 任务分配：MILP 求解器优化任务分配
+- CBF-QP 安全滤波：保证多机间最小安全距离
+
 ## 项目结构
 
 ```
@@ -143,8 +157,9 @@ uav_simulator/
 │   ├── AI/             # AI 控制器与行为树节点
 │   ├── Debug/          # 调试与可视化工具
 │   ├── Tests/          # 单元测试
-│   ├── MultiAgent/   # 多机协同（AgentManager、CBF-QP、编队控制）
-│   ├── Environment/   # 环境模拟（风场、天气）
+│   ├── MultiAgent/     # 多机协同（AgentManager、CBF-QP、编队控制）
+│   ├── UI/             # 用户界面（视角切换 Widget）
+│   ├── Environment/    # 环境模拟（风场、天气）
 │   └── Utility/        # 工具函数
 ├── Content/
 │   ├── UAV/            # UAV 蓝图与 AI 资产

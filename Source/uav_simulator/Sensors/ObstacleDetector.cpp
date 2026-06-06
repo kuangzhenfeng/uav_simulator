@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ObstacleDetector.h"
+#include "../uav_simulator.h"
 #include "DrawDebugHelpers.h"
 #include "uav_simulator/Planning/ObstacleManager.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
@@ -29,6 +30,7 @@ void UObstacleDetector::BeginPlay()
 void UObstacleDetector::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_ObstacleDetector);
 
 	if (!bEnabled)
 	{

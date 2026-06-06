@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "FormationComponent.h"
+#include "../uav_simulator.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 
 UFormationComponent::UFormationComponent()
@@ -22,6 +23,7 @@ void UFormationComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_FormationComponent);
 
 	if (!bIsTransitioning)
 	{

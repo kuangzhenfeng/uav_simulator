@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "WindField.h"
+#include "../uav_simulator.h"
 #include "../Debug/UAVLogConfig.h"
 
 // 环境日志类别（仅在 WindField 中使用时局部声明）
@@ -58,6 +59,7 @@ void UWindField::SetWindConfig(const FWindConfig& InConfig)
 void UWindField::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_WindField);
 
 	if (!Config.bEnabled)
 	{

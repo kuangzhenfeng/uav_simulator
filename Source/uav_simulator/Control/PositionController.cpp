@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PositionController.h"
+#include "../uav_simulator.h"
 #include "../Debug/UAVLogConfig.h"
 #include "../Utility/Filter.h"
 
@@ -18,6 +19,7 @@ void UPositionController::BeginPlay()
 void UPositionController::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_PositionController);
 }
 
 void UPositionController::ComputeControl(const FUAVState& CurrentState, const FVector& InTargetPosition,

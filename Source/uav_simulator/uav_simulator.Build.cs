@@ -8,9 +8,9 @@ public class uav_simulator : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "AIModule", "GameplayTasks", "NavigationSystem" });
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "AIModule", "GameplayTasks", "NavigationSystem", "UMG" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] {  });
+		PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
 
 		// 测试模块依赖（仅编辑器构建）
 		if (Target.bBuildEditor)

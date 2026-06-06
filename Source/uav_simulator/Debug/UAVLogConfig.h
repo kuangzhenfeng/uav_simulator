@@ -55,3 +55,6 @@ DECLARE_LOG_CATEGORY_EXTERN(LogUAVMission, Log, All);
 
 // Multi-agent coordination log
 DECLARE_LOG_CATEGORY_EXTERN(LogUAVMultiAgent, Log, All);
+
+// Camera system log
+DECLARE_LOG_CATEGORY_EXTERN(LogUAVCamera, Log, All);

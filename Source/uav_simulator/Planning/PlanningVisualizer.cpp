@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PlanningVisualizer.h"
+#include "../uav_simulator.h"
 #include "DrawDebugHelpers.h"
 
 UPlanningVisualizer::UPlanningVisualizer()
@@ -17,6 +18,7 @@ void UPlanningVisualizer::BeginPlay()
 void UPlanningVisualizer::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_PlanningVisualizer);
 
 	if (bEnableVisualization)
 	{

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DebugVisualizer.h"
+#include "../uav_simulator.h"
 #include "DrawDebugHelpers.h"
 
 UDebugVisualizer::UDebugVisualizer()
@@ -17,6 +18,7 @@ void UDebugVisualizer::BeginPlay()
 void UDebugVisualizer::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_DebugVisualizer);
 
 	// 绘制持久化轨迹
 	if (bShowPlannedPath)

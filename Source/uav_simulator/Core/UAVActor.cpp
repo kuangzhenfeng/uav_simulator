@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UAVActor.h"
+#include "../uav_simulator.h"
 #include "../Physics/UAVDynamics.h"
 #include "../Sensors/SensorBase.h"
 #include "../Control/AttitudeController.h"
@@ -44,6 +45,8 @@ void AUAVActor::BeginPlay()
 void AUAVActor::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	SCOPE_CYCLE_COUNTER(STAT_UAVActorTick);
 
 	// 更新传感器
 	UpdateSensors(DeltaTime);

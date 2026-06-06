@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UAVPawn.h"
+#include "../uav_simulator.h"
 #include "UAVProductManager.h"
 #include "../Physics/UAVDynamics.h"
 #include "../Sensors/SensorBase.h"
@@ -104,6 +105,19 @@ AUAVPawn::AUAVPawn()
 	AnemometerSensor = CreateDefaultSubobject<UAnemometerSensor>(TEXT("AnemometerSensor"));
 	Sensors.Add(AnemometerSensor);
 
+	// 创建跟随相机系统
+	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
+	CameraBoom->SetupAttachment(RootComponent);
+	CameraBoom->TargetArmLength = 300.0f;
+	CameraBoom->bUsePawnControlRotation = false;
+	CameraBoom->bEnableCameraLag = true;
+	CameraBoom->CameraLagSpeed = 10.0f;
+	CameraBoom->SetRelativeRotation(FRotator(-20.0f, 0.0f, 0.0f));
+
+	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
+	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+	FollowCamera->bUsePawnControlRotation = false;
+
 	// 初始化状态
 	CurrentState = FUAVState();
 	TargetAttitude = FRotator::ZeroRotator;
@@ -201,6 +215,8 @@ void AUAVPawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	SCOPE_CYCLE_COUNTER(STAT_UAVPawnTick);
+
 	// 子步积分：将大帧拆成固定 0.02s 步长，保证物理精度的同时支持时间加速
 	const float FixedStep = 0.02f;
 	float Remaining = FMath::Min(DeltaTime, 1.0f); // 最多1秒防止卡顿帧
@@ -211,36 +227,53 @@ void AUAVPawn::Tick(float DeltaTime)
 		// 炸机状态：仅更新物理（自由落体），跳过控制
 		if (FlightState == EFlightState::Crashed)
 		{
-			UpdatePhysics(Step);
+			{
+				SCOPE_CYCLE_COUNTER(STAT_PawnPhysicsUpdate);
+				UpdatePhysics(Step);
+			}
 			SetActorLocation(CurrentState.Position);
 			SetActorRotation(CurrentState.Rotation);
 			Remaining -= Step;
 			continue;
 		}
 
-		// Phase 14: 计算风阻力加速度并传递给动力学组件
-		if (WindFieldComponent && DynamicsComponent)
 		{
-			FVector WindAccel = WindFieldComponent->ComputeWindDragAcceleration(
-				CurrentState.Velocity, CurrentState.Position, DynamicsComponent->GetMass());
-			DynamicsComponent->SetExternalWindAcceleration(WindAccel);
+			SCOPE_CYCLE_COUNTER(STAT_PhysicsSubStep);
+
+			// Phase 14: 计算风阻力加速度并传递给动力学组件
+			if (WindFieldComponent && DynamicsComponent)
+			{
+				FVector WindAccel = WindFieldComponent->ComputeWindDragAcceleration(
+					CurrentState.Velocity, CurrentState.Position, DynamicsComponent->GetMass());
+				DynamicsComponent->SetExternalWindAcceleration(WindAccel);
+			}
+
+			{
+				SCOPE_CYCLE_COUNTER(STAT_PawnSensorUpdate);
+				UpdateSensors(Step);
+			}
+			{
+				SCOPE_CYCLE_COUNTER(STAT_PawnControllerUpdate);
+				UpdateController(Step);
+			}
+			{
+				SCOPE_CYCLE_COUNTER(STAT_PawnPhysicsUpdate);
+				UpdatePhysics(Step);
+			}
+
+			// 碰撞检测
+			CheckCollision();
+
+			SetActorLocation(CurrentState.Position);
+			SetActorRotation(CurrentState.Rotation);
 		}
-
-		UpdateSensors(Step);
-		UpdateController(Step);
-		UpdatePhysics(Step);
-
-		// 碰撞检测
-		CheckCollision();
-
-		SetActorLocation(CurrentState.Position);
-		SetActorRotation(CurrentState.Rotation);
 		Remaining -= Step;
 	}
 
 	// 更新稳定性评分
 	if (StabilityScorerComponent)
 	{
+		SCOPE_CYCLE_COUNTER(STAT_StabilityScorer);
 		StabilityScorerComponent->UpdateFlightScore(CurrentState, ObstacleManagerComponent);
 		StabilityScorerComponent->DrawScoreHUD(GetActorLocation());
 	}
@@ -248,6 +281,7 @@ void AUAVPawn::Tick(float DeltaTime)
 	// 更新调试可视化
 	if (DebugVisualizerComponent)
 	{
+		SCOPE_CYCLE_COUNTER(STAT_PawnDebugDraw);
 		// 绘制UAV状态（坐标轴、速度向量）
 		DebugVisualizerComponent->DrawUAVState(CurrentState, GetActorLocation());
 		// 绘制飞行轨迹历史
@@ -264,6 +298,7 @@ void AUAVPawn::Tick(float DeltaTime)
 	// 更新规划可视化
 	if (PlanningVisualizerComponent)
 	{
+		SCOPE_CYCLE_COUNTER(STAT_PawnPlanningDraw);
 		// 如果有活动轨迹，设置持久化轨迹用于绘制
 		if (TrajectoryTrackerComponent && TrajectoryTrackerComponent->IsTracking())
 		{
@@ -290,6 +325,7 @@ void AUAVPawn::Tick(float DeltaTime)
 	{
 		if (AUAVHUD* UAVHUDInstance = Cast<AUAVHUD>(PC->GetHUD()))
 		{
+			SCOPE_CYCLE_COUNTER(STAT_PawnHUDUpdate);
 			UAVHUDInstance->SetUAVState(CurrentState);
 			if (DynamicsComponent)
 			{

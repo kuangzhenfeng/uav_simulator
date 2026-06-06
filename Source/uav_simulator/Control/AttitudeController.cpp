@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AttitudeController.h"
+#include "../uav_simulator.h"
 #include "../Debug/UAVLogConfig.h"
 
 UAttitudeController::UAttitudeController()
@@ -17,6 +18,7 @@ void UAttitudeController::BeginPlay()
 void UAttitudeController::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_AttitudeController);
 }
 
 FMotorOutput UAttitudeController::ComputeControl(const FUAVState& CurrentState, const FRotator& TargetAttitude, float DeltaTime)

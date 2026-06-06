@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TrajectoryTracker.h"
+#include "../uav_simulator.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Core/UAVPawn.h"
 #include "uav_simulator/Utility/Filter.h"
@@ -96,6 +97,7 @@ void UTrajectoryTracker::HandleOvertimeCompletion(float DeltaTime)
 void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_TrajectoryTracker);
 
 	// 与 UAVPawn::Tick 保持一致的步长上限，防止首帧大步长导致轨迹时间跳变
 	DeltaTime = FMath::Min(DeltaTime, 0.02f);

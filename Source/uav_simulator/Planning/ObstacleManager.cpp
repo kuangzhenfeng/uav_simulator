@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ObstacleManager.h"
+#include "../uav_simulator.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "Logging/LogVerbosity.h"
@@ -24,6 +25,7 @@ void UObstacleManager::BeginPlay()
 void UObstacleManager::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SCOPE_CYCLE_COUNTER(STAT_ObstacleManager);
 
 	if (bAutoUpdateDynamicObstacles)
 	{

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UAVDynamics.h"
+#include "../uav_simulator.h"
 #include "../Debug/UAVLogConfig.h"
 
 UUAVDynamics::UUAVDynamics()
@@ -33,6 +34,7 @@ FUAVState UUAVDynamics::UpdateDynamics(const FUAVState& CurrentState, float Delt
 
 FUAVState UUAVDynamics::IntegrateRK4(const FUAVState& State, float DeltaTime)
 {
+	SCOPE_CYCLE_COUNTER(STAT_RK4Integration);
 	// RK4四阶龙格-库塔积分
 	FUAVState k1 = ComputeDerivative(State, 0.0f);
 	FUAVState k2 = ComputeDerivative(AddStates(State, ScaleState(k1, DeltaTime * 0.5f)), DeltaTime * 0.5f);
