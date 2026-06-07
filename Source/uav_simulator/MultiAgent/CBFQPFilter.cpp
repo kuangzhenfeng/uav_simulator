@@ -3,6 +3,83 @@
 #include "CBFQPFilter.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 
+namespace
+{
+float ComputeObstacleDistanceAndGradient(const FVector& Point, const FObstacleInfo& Obs,
+    float StaticSafetyDistance, FVector& OutGradient)
+{
+    float Distance = MAX_FLT;
+    switch (Obs.Type)
+    {
+    case EObstacleType::Sphere:
+    {
+        const FVector Delta = Point - Obs.Center;
+        const float Dist = Delta.Size();
+        Distance = Dist - Obs.Extents.X - Obs.SafetyMargin - StaticSafetyDistance;
+        OutGradient = Dist > KINDA_SMALL_NUMBER ? Delta / Dist : FVector::UpVector;
+        break;
+    }
+    default:
+    {
+        const FVector Delta = Point - Obs.Center;
+        const float Dist = Delta.Size();
+        Distance = Dist - Obs.Extents.GetMax() - Obs.SafetyMargin - StaticSafetyDistance;
+        OutGradient = Dist > KINDA_SMALL_NUMBER ? Delta / Dist : FVector::UpVector;
+        break;
+    }
+    }
+    return Distance;
+}
+
+FVector ComputeExecutableEscapeAcceleration(const FVector& EscapeDir, const FCBFQPConfig& Config)
+{
+    FVector Direction = EscapeDir.GetSafeNormal();
+    if (Direction.IsNearlyZero())
+    {
+        Direction = FVector::UpVector;
+    }
+
+    constexpr float GravityAcceleration = 980.0f; // cm/s²
+    constexpr int32 TiltFacetCount = 16;
+    constexpr int32 VerticalSamples = 128;
+    const float SafeAccel = FMath::Max(Config.MaxAccelerationQP, 1.0f);
+    const float MinVerticalAccel = -FMath::Min(GravityAcceleration, SafeAccel);
+    const float FacetScale = FMath::Cos(PI / static_cast<float>(TiltFacetCount));
+    const float TiltSlope = FMath::Max(0.0f,
+        FMath::Tan(FMath::DegreesToRadians(Config.MaxTiltAngleDeg))) * FacetScale;
+
+    const FVector2D HorizontalDirection(Direction.X, Direction.Y);
+    const float HorizontalWeight = HorizontalDirection.Size();
+    const FVector HorizontalUnit = HorizontalWeight > KINDA_SMALL_NUMBER
+        ? FVector(Direction.X / HorizontalWeight, Direction.Y / HorizontalWeight, 0.0f)
+        : FVector::ZeroVector;
+
+    FVector BestAcceleration = FVector::ZeroVector;
+    float BestScore = -MAX_FLT;
+    for (int32 Index = 0; Index <= VerticalSamples; ++Index)
+    {
+        const float Alpha = static_cast<float>(Index) / static_cast<float>(VerticalSamples);
+        const float CandidateZ = FMath::Lerp(MinVerticalAccel, SafeAccel, Alpha);
+        const float MagnitudeHorizontal = FMath::Sqrt(FMath::Max(0.0f,
+            SafeAccel * SafeAccel - CandidateZ * CandidateZ));
+        const float TiltHorizontal = TiltSlope * FMath::Max(0.0f, GravityAcceleration + CandidateZ);
+        const float CandidateHorizontal = HorizontalWeight > KINDA_SMALL_NUMBER
+            ? FMath::Min(MagnitudeHorizontal, TiltHorizontal)
+            : 0.0f;
+
+        const FVector Candidate = HorizontalUnit * CandidateHorizontal + FVector(0.0f, 0.0f, CandidateZ);
+        const float Score = FVector::DotProduct(Candidate, Direction);
+        if (Score > BestScore)
+        {
+            BestScore = Score;
+            BestAcceleration = Candidate;
+        }
+    }
+
+    return BestAcceleration;
+}
+}
+
 UCBFQPFilter::UCBFQPFilter()
 {
 }
@@ -1046,6 +1123,175 @@ FCBFQPResult UCBFQPFilter::Filter(
     }
 
     Result.SolveStatus = Status;
+    if (AgentCount > 0 && Result.MinHValue < 0.0f &&
+        (Result.SolveStatus == ECBFQPStatus::Solved ||
+            Result.SolveStatus == ECBFQPStatus::SolvedWithSlack))
+    {
+        Result.SolveStatus = ECBFQPStatus::MaxIterations;
+    }
+    if (Result.SolveStatus == ECBFQPStatus::SolvedWithSlack)
+    {
+        const float StaticSlackDegradedThreshold = Config.MaxAccelerationQP * 0.25f;
+        const float AgentSlackDegradedThreshold = Config.MaxAccelerationQP * Config.DSafe * 0.25f;
+        if (Result.StaticSlack > StaticSlackDegradedThreshold ||
+            Result.AgentSlack > AgentSlackDegradedThreshold)
+        {
+            Result.SolveStatus = ECBFQPStatus::MaxIterations;
+        }
+    }
+
+    if (Result.SolveStatus == ECBFQPStatus::Solved ||
+        Result.SolveStatus == ECBFQPStatus::SolvedWithSlack)
+    {
+        auto ComputeStaticDistanceAndGradient = [](const FVector& Point, const FObstacleInfo& Obs,
+            float& OutDistance, FVector& OutGradient)
+        {
+            switch (Obs.Type)
+            {
+            case EObstacleType::Sphere:
+            {
+                const FVector Delta = Point - Obs.Center;
+                const float Dist = Delta.Size();
+                OutDistance = Dist - Obs.Extents.X - Obs.SafetyMargin;
+                OutGradient = Dist > KINDA_SMALL_NUMBER ? Delta / Dist : FVector::UpVector;
+                return;
+            }
+            case EObstacleType::Box:
+            {
+                const FVector LocalPoint = Obs.Rotation.UnrotateVector(Point - Obs.Center);
+                FVector Clamped;
+                Clamped.X = FMath::Clamp(LocalPoint.X, -Obs.Extents.X, Obs.Extents.X);
+                Clamped.Y = FMath::Clamp(LocalPoint.Y, -Obs.Extents.Y, Obs.Extents.Y);
+                Clamped.Z = FMath::Clamp(LocalPoint.Z, -Obs.Extents.Z, Obs.Extents.Z);
+
+                FVector LocalGrad;
+                if (LocalPoint.Equals(Clamped, KINDA_SMALL_NUMBER))
+                {
+                    const float PenX = Obs.Extents.X - FMath::Abs(LocalPoint.X);
+                    const float PenY = Obs.Extents.Y - FMath::Abs(LocalPoint.Y);
+                    const float PenZ = Obs.Extents.Z - FMath::Abs(LocalPoint.Z);
+                    const float MinPen = FMath::Min3(PenX, PenY, PenZ);
+                    OutDistance = -MinPen - Obs.SafetyMargin;
+
+                    if (PenX <= PenY && PenX <= PenZ)
+                    {
+                        LocalGrad = FVector(LocalPoint.X > 0.0f ? 1.0f : -1.0f, 0.0f, 0.0f);
+                    }
+                    else if (PenY <= PenX && PenY <= PenZ)
+                    {
+                        LocalGrad = FVector(0.0f, LocalPoint.Y > 0.0f ? 1.0f : -1.0f, 0.0f);
+                    }
+                    else
+                    {
+                        LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0.0f ? 1.0f : -1.0f);
+                    }
+                }
+                else
+                {
+                    OutDistance = FVector::Dist(LocalPoint, Clamped) - Obs.SafetyMargin;
+                    LocalGrad = (LocalPoint - Clamped).GetSafeNormal();
+                }
+                OutGradient = Obs.Rotation.RotateVector(LocalGrad);
+                return;
+            }
+            case EObstacleType::Cylinder:
+            {
+                const FVector LocalPoint = Obs.Rotation.UnrotateVector(Point - Obs.Center);
+                const float HDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
+                const float VDist = FMath::Abs(LocalPoint.Z);
+                const float HPen = HDist - Obs.Extents.X;
+                const float VPen = VDist - Obs.Extents.Z;
+
+                FVector LocalGrad;
+                if (HPen < 0.0f && VPen < 0.0f)
+                {
+                    OutDistance = FMath::Max(HPen, VPen) - Obs.SafetyMargin;
+                    if (FMath::Abs(HPen) <= FMath::Abs(VPen))
+                    {
+                        LocalGrad = HDist > KINDA_SMALL_NUMBER
+                            ? FVector(LocalPoint.X, LocalPoint.Y, 0.0f).GetSafeNormal()
+                            : FVector(1.0f, 0.0f, 0.0f);
+                    }
+                    else
+                    {
+                        LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0.0f ? 1.0f : -1.0f);
+                    }
+                }
+                else if (HPen < 0.0f)
+                {
+                    OutDistance = VPen - Obs.SafetyMargin;
+                    LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0.0f ? 1.0f : -1.0f);
+                }
+                else if (VPen < 0.0f)
+                {
+                    OutDistance = HPen - Obs.SafetyMargin;
+                    LocalGrad = HDist > KINDA_SMALL_NUMBER
+                        ? FVector(LocalPoint.X, LocalPoint.Y, 0.0f).GetSafeNormal()
+                        : FVector(1.0f, 0.0f, 0.0f);
+                }
+                else
+                {
+                    OutDistance = FMath::Sqrt(HPen * HPen + VPen * VPen) - Obs.SafetyMargin;
+                    const FVector2D HDir = HDist > KINDA_SMALL_NUMBER
+                        ? FVector2D(LocalPoint.X, LocalPoint.Y).GetSafeNormal()
+                        : FVector2D(1.0f, 0.0f);
+                    const float VSign = LocalPoint.Z > 0.0f ? 1.0f : -1.0f;
+                    LocalGrad = FVector(HDir.X * HPen, HDir.Y * HPen, VSign * VPen).GetSafeNormal();
+                }
+                OutGradient = Obs.Rotation.RotateVector(LocalGrad);
+                return;
+            }
+            default:
+            {
+                const FVector Delta = Point - Obs.Center;
+                const float Dist = Delta.Size();
+                OutDistance = Dist - Obs.Extents.GetMax() - Obs.SafetyMargin;
+                OutGradient = Dist > KINDA_SMALL_NUMBER ? Delta / Dist : FVector::UpVector;
+                return;
+            }
+            }
+        };
+
+        constexpr float ControlStepSeconds = 0.02f;
+        for (const FObstacleInfo& Obs : DedupedStaticObstacles)
+        {
+            float Distance = MAX_FLT;
+            FVector Gradient = FVector::ZeroVector;
+            ComputeStaticDistanceAndGradient(MyState.Position, Obs, Distance, Gradient);
+
+            const float EmergencyFilteredDistance = FMath::Max(50.0f, Config.DSafeStatic * 0.25f);
+            if (Result.bWasFiltered && Distance <= EmergencyFilteredDistance)
+            {
+                Result.SolveStatus = ECBFQPStatus::MaxIterations;
+                break;
+            }
+
+            const FVector RelativeVelocity = MyState.Velocity - (Obs.bIsDynamic ? Obs.Velocity : FVector::ZeroVector);
+            const float NormalSpeed = FVector::DotProduct(Gradient, RelativeVelocity);
+            const FVector TangentialVelocity = RelativeVelocity - Gradient * NormalSpeed;
+            const float MaxBrakeAccel = FMath::Max(Config.MaxAccelerationQP, 1.0f);
+            const float RequiredTurningDistance = TangentialVelocity.SizeSquared() / (2.0f * MaxBrakeAccel);
+            if (Result.bWasFiltered && Distance <= EmergencyFilteredDistance + RequiredTurningDistance)
+            {
+                Result.SolveStatus = ECBFQPStatus::MaxIterations;
+                break;
+            }
+
+            const float ClosingSpeed = FMath::Max(0.0f, -NormalSpeed);
+            if (ClosingSpeed <= KINDA_SMALL_NUMBER)
+            {
+                continue;
+            }
+
+            const float RequiredStoppingDistance = ClosingSpeed * ControlStepSeconds
+                + (ClosingSpeed * ClosingSpeed) / (2.0f * MaxBrakeAccel);
+            if (Distance <= RequiredStoppingDistance)
+            {
+                Result.SolveStatus = ECBFQPStatus::MaxIterations;
+                break;
+            }
+        }
+    }
     Result.KKTResidual = KKTRes;
     Result.MaxConstraintViolation = MaxViol;
     Result.SolveTimeMs = static_cast<float>((FPlatformTime::Seconds() - StartTime) * 1000.0);
@@ -1055,4 +1301,86 @@ FCBFQPResult UCBFQPFilter::Filter(
     bHasPreviousQPSolution = true;
 
     return Result;
+}
+
+FVector UCBFQPFilter::ComputeDegradedSafeAcceleration(
+    const FUAVState& MyState,
+    const TArray<FObstacleInfo>& StaticObstacles,
+    const FCBFQPConfig& Config) const
+{
+    FVector EscapeDir = FVector::ZeroVector;
+    float MinDistance = MAX_FLT;
+    for (const FObstacleInfo& Obs : StaticObstacles)
+    {
+        FVector Gradient = FVector::ZeroVector;
+        const float Distance = ComputeObstacleDistanceAndGradient(
+            MyState.Position, Obs, 0.0f, Gradient);
+        if (Distance < MinDistance)
+        {
+            MinDistance = Distance;
+            EscapeDir = Gradient;
+        }
+    }
+
+    const float SafeAccel = FMath::Max(Config.MaxAccelerationQP, 1.0f);
+    if (EscapeDir.IsNearlyZero())
+    {
+        const FVector VelDir = MyState.Velocity.GetSafeNormal();
+        EscapeDir = VelDir.IsNearlyZero() ? FVector::UpVector : -VelDir;
+    }
+
+    return ComputeExecutableEscapeAcceleration(EscapeDir, Config);
+}
+
+FVector UCBFQPFilter::ComputeDegradedSafeAcceleration(
+    const FUAVState& MyState,
+    const TArray<FAgentStateSnapshot>& NeighborStates,
+    const TArray<FObstacleInfo>& StaticObstacles,
+    const FCBFQPConfig& Config) const
+{
+    enum class ERiskSource
+    {
+        None,
+        StaticObstacle,
+        Neighbor
+    };
+
+    FVector EscapeDir = FVector::ZeroVector;
+    float MinDistance = MAX_FLT;
+    ERiskSource BestSource = ERiskSource::None;
+
+    for (const FObstacleInfo& Obs : StaticObstacles)
+    {
+        FVector Gradient = FVector::ZeroVector;
+        const float Distance = ComputeObstacleDistanceAndGradient(
+            MyState.Position, Obs, 0.0f, Gradient);
+        if (Distance < MinDistance)
+        {
+            MinDistance = Distance;
+            EscapeDir = Gradient;
+            BestSource = ERiskSource::StaticObstacle;
+        }
+    }
+
+    for (const FAgentStateSnapshot& Neighbor : NeighborStates)
+    {
+        const FVector Delta = MyState.Position - Neighbor.State.Position;
+        const float Distance = Delta.Size() - Config.DSafe;
+        if (Distance < MinDistance)
+        {
+            MinDistance = Distance;
+            EscapeDir = Delta.GetSafeNormal();
+            BestSource = ERiskSource::Neighbor;
+        }
+    }
+
+    if (EscapeDir.IsNearlyZero())
+    {
+        if (BestSource == ERiskSource::None)
+        {
+            return ComputeDegradedSafeAcceleration(MyState, StaticObstacles, Config);
+        }
+    }
+
+    return ComputeExecutableEscapeAcceleration(EscapeDir, Config);
 }

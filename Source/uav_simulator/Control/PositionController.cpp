@@ -155,33 +155,25 @@ void UPositionController::AccelerationToControl(const FVector& DesiredAccelerati
 	float DesiredRoll = 0.0f;
 	if (!ThrustVector.IsNearlyZero())
 	{
-		FVector ThrustDirection = ThrustVector.GetSafeNormal();
-		DesiredPitch = FMath::Asin(-ThrustDirection.X) * (180.0f / PI);
-		DesiredRoll = FMath::Asin(ThrustDirection.Y / FMath::Cos(DesiredPitch * PI / 180.0f)) * (180.0f / PI);
+		const FVector ThrustDirection = ThrustVector.GetSafeNormal();
+		const FVector YawLocalThrustDirection = FRotator(0.0f, CurrentYaw, 0.0f).UnrotateVector(ThrustDirection);
+		DesiredPitch = FMath::Asin(-YawLocalThrustDirection.X) * (180.0f / PI);
+		DesiredRoll = FMath::Asin(YawLocalThrustDirection.Y / FMath::Cos(DesiredPitch * PI / 180.0f)) * (180.0f / PI);
 		DesiredPitch = FMath::Clamp(DesiredPitch, -MaxTiltAngle, MaxTiltAngle);
 		DesiredRoll = FMath::Clamp(DesiredRoll, -MaxTiltAngle, MaxTiltAngle);
 	}
 
-	// 限制姿态变化率，防止目标姿态突变导致控制饱和
-	const float MaxAttitudeRate = 50.0f; // deg/s
-	const float DeltaTime = 0.02f; // 假设 50Hz 控制频率
-	const float MaxDelta = MaxAttitudeRate * DeltaTime; // 每帧最大变化量
+	// 限制姿态变化率，避免突变
+	const float MaxAttitudeRate = 150.0f; // deg/s，允许安全滤波后的姿态在约0.2s内到位
+	const float DeltaTime = 0.02f; // 假设50Hz
+	const float MaxDelta = MaxAttitudeRate * DeltaTime;
 
-	// 计算姿态变化量
-	float RollDelta = DesiredRoll - LastDesiredAttitude.Roll;
-	float PitchDelta = DesiredPitch - LastDesiredAttitude.Pitch;
+	float RollDelta = FMath::FindDeltaAngleDegrees(LastDesiredAttitude.Roll, DesiredRoll);
+	float PitchDelta = FMath::FindDeltaAngleDegrees(LastDesiredAttitude.Pitch, DesiredPitch);
 
-	// 归一化角度差到 [-180, 180]
-	while (RollDelta > 180.0f) RollDelta -= 360.0f;
-	while (RollDelta < -180.0f) RollDelta += 360.0f;
-	while (PitchDelta > 180.0f) PitchDelta -= 360.0f;
-	while (PitchDelta < -180.0f) PitchDelta += 360.0f;
-
-	// 限制变化率
 	RollDelta = FMath::Clamp(RollDelta, -MaxDelta, MaxDelta);
 	PitchDelta = FMath::Clamp(PitchDelta, -MaxDelta, MaxDelta);
 
-	// 应用限制后的姿态
 	OutAttitude.Roll = LastDesiredAttitude.Roll + RollDelta;
 	OutAttitude.Pitch = LastDesiredAttitude.Pitch + PitchDelta;
 	OutAttitude.Yaw = CurrentYaw;

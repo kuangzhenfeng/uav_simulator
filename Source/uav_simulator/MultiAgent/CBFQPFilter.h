@@ -164,6 +164,23 @@ public:
 		float& OutMaxViolation,
 		int32& OutIterations) const;
 
+	/**
+	 * 计算降级安全加速度，优先沿最近静态障碍法线逃逸。
+	 */
+	FVector ComputeDegradedSafeAcceleration(
+		const FUAVState& MyState,
+		const TArray<FObstacleInfo>& StaticObstacles,
+		const FCBFQPConfig& Config) const;
+
+	/**
+	 * 计算降级安全加速度，同时考虑机间安全距离违反。
+	 */
+	FVector ComputeDegradedSafeAcceleration(
+		const FUAVState& MyState,
+		const TArray<FAgentStateSnapshot>& NeighborStates,
+		const TArray<FObstacleInfo>& StaticObstacles,
+		const FCBFQPConfig& Config) const;
+
 private:
 	// 上次 QP 解（用于热启动）
 	TArray<float> PreviousQPSolution;

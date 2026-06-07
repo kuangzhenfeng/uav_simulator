@@ -345,4 +345,62 @@ bool FPositionControllerMultiDirectionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ==================== 加速度到姿态 yaw 映射测试 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPositionControllerAccelerationToControlYawMappingTest,
+	"UAVSimulator.Control.PositionController.AccelerationToControlYawMapping",
+	UAV_TEST_FLAGS)
+
+bool FPositionControllerAccelerationToControlYawMappingTest::RunTest(const FString& Parameters)
+{
+	UPositionController* Controller = NewObject<UPositionController>();
+	Controller->MaxTiltAngle = 30.0f;
+	Controller->Reset();
+
+	FRotator DesiredAttitude;
+	float Thrust = 0.0f;
+
+	// 期望加速度是世界坐标系 +X。即使当前 yaw=90°，姿态旋出的机体 Z 轴也应朝世界 +X 倾斜。
+	for (int32 i = 0; i < 40; ++i)
+	{
+		Controller->AccelerationToControl(FVector(500.0f, 0.0f, 0.0f), 90.0f, DesiredAttitude, Thrust);
+	}
+
+	const FVector WorldThrustDirection = DesiredAttitude.RotateVector(FVector::UpVector).GetSafeNormal();
+
+	TestTrue(TEXT("World thrust direction should tilt toward world +X when yaw is 90 degrees"),
+		WorldThrustDirection.X > 0.35f);
+	UAV_TEST_FLOAT_EQUAL(WorldThrustDirection.Y, 0.0f, 0.10f);
+	TestTrue(TEXT("Thrust should remain within normalized actuator range"), Thrust >= 0.0f && Thrust <= 1.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPositionControllerAccelerationToControlSafetyTiltRateTest,
+	"UAVSimulator.Control.PositionController.AccelerationToControlSafetyTiltRate",
+	UAV_TEST_FLAGS)
+
+bool FPositionControllerAccelerationToControlSafetyTiltRateTest::RunTest(const FString& Parameters)
+{
+	UPositionController* Controller = NewObject<UPositionController>();
+	Controller->MaxTiltAngle = 30.0f;
+	Controller->Reset();
+
+	FRotator DesiredAttitude;
+	float Thrust = 0.0f;
+
+	// NMPC/CBF 输出大横向安全加速度时，姿态目标应在 0.2s 内接近完整安全姿态。
+	for (int32 i = 0; i < 10; ++i)
+	{
+		Controller->AccelerationToControl(FVector(0.0f, 800.0f, 0.0f), 0.0f, DesiredAttitude, Thrust);
+	}
+
+	TestTrue(TEXT("Direct acceleration control should reach safe roll command within 0.2 seconds"),
+		FMath::Abs(DesiredAttitude.Roll) > 25.0f);
+	UAV_TEST_FLOAT_EQUAL(DesiredAttitude.Pitch, 0.0f, 0.1f);
+	TestTrue(TEXT("Thrust should remain within normalized actuator range"), Thrust >= 0.0f && Thrust <= 1.0f);
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

@@ -134,11 +134,13 @@ public:
 	bool IsCrashed() const { return FlightState == EFlightState::Crashed; }
 
 #if WITH_DEV_AUTOMATION_TESTS
-	// 测试专用：允许自动化测试触发炸机并检查残骸状态
+	// 测试专用：允许自动化测试触发炸机、检查残骸状态并验证偏差保护
 	void TestTriggerCrash() { TriggerCrash(); }
 	void SetUAVStateForTest(const FUAVState& InState);
 	void RecordSafeCrashPoseForTest() { RecordSafeFlightState(); }
 	AUAVWreckActor* GetActiveWreckActorForTest() const { return ActiveWreckActor; }
+	void SetNearestObstacleDistanceForTest(float InDistance) { CachedNearestObsDist = InDistance; }
+	FVector ApplyHardLimitCorrectionForTest(const FVector& Acceleration, float CrossTrackDev);
 #endif
 
 	// 获取轨迹跟踪组件
@@ -458,6 +460,7 @@ private:
 		bool  bMetricsCBFActiveThisFrame = false;
 
 		// 横向偏差指标
+		float MetricsCurrentCrossTrackDev = 0.0f;
 		float MetricsMaxCrossTrackDev = 0.0f;
 		float MetricsHighDeviationTimer = 0.0f;
 		bool  bMetricsInSevereDeviation = false;

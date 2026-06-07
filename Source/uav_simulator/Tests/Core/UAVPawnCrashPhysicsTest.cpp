@@ -366,4 +366,52 @@ bool FUAVPawnStateFollowsWreckAfterPhysicsTickTest::RunTest(const FString& Param
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAVPawnHardLimitPrioritizesCrossTrackCorrectionTest,
+	"UAVSimulator.Core.UAVPawn.HardLimitPrioritizesCrossTrackCorrection",
+	UAV_TEST_FLAGS)
+
+bool FUAVPawnHardLimitPrioritizesCrossTrackCorrectionTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CreateUAVCrashTestWorld(TEXT("UAVPawnHardLimitPrioritizesCrossTrackCorrection"));
+	TestNotNull(TEXT("World should be created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	AUAVPawn* Pawn = SpawnCrashTestPawn(World, FVector(0.0f, -1600.0f, 1000.0f));
+	TestNotNull(TEXT("Pawn should spawn"), Pawn);
+	if (!Pawn)
+	{
+		DestroyUAVCrashTestWorld(World);
+		return false;
+	}
+
+	FTrajectory Trajectory = UAVTestHelpers::CreateLinearTrajectory(
+		FVector(0.0f, 0.0f, 1000.0f),
+		FVector(5000.0f, 0.0f, 1000.0f),
+		5.0f,
+		10);
+	Pawn->SetTrajectory(Trajectory);
+	Pawn->StartTrajectoryTracking();
+
+	FUAVState State;
+	State.Position = FVector(0.0f, -1600.0f, 1000.0f);
+	State.Rotation = FRotator::ZeroRotator;
+	State.Velocity = FVector(900.0f, 100.0f, 0.0f);
+	Pawn->SetUAVStateForTest(State);
+	Pawn->SetNearestObstacleDistanceForTest(MAX_FLT);
+
+	const FVector NominalAccel(450.0f, -300.0f, 0.0f);
+	const FVector CorrectedAccel = Pawn->ApplyHardLimitCorrectionForTest(NominalAccel, 1600.0f);
+
+	TestTrue(TEXT("Severe deviation should suppress along-track acceleration to reserve tilt authority"),
+		FMath::Abs(CorrectedAccel.X) < 1.0f);
+	TestTrue(TEXT("Severe deviation should command acceleration back toward the trajectory"),
+		CorrectedAccel.Y > 400.0f);
+
+	DestroyUAVCrashTestWorld(World);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

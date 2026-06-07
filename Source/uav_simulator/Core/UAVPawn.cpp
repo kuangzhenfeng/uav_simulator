@@ -263,6 +263,11 @@ void AUAVPawn::SetUAVStateForTest(const FUAVState& InState)
 	CurrentState = InState;
 	SetActorLocationAndRotation(CurrentState.Position, CurrentState.Rotation, false, nullptr, ETeleportType::TeleportPhysics);
 }
+
+FVector AUAVPawn::ApplyHardLimitCorrectionForTest(const FVector& Acceleration, float CrossTrackDev)
+{
+	return ApplyHardLimitCorrection(Acceleration, CrossTrackDev);
+}
 #endif
 
 void AUAVPawn::Tick(float DeltaTime)
@@ -819,7 +824,8 @@ FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float Cr
 		HardLimit = FMath::Lerp(120.0f, 130.0f, ProximityRatio);
 	}
 
-	// 偏差超过硬限制时，用固定强度（600 cm/s²）+ 速度阻尼强制拉回
+	// 偏差超过硬限制时，用固定强度（600 cm/s²）+ 速度阻尼强制拉回。
+	// 严重横向偏差阶段优先保留倾角预算给回轨方向，避免前向加速度挤占可执行横向加速度。
 	if (CrossTrackDev > HardLimit)
 	{
 		FVector CorrDir(0.0f, YError, ZError);
@@ -827,6 +833,7 @@ FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float Cr
 		constexpr float Kd = 1.5f;
 		float YVelError = -CurrentState.Velocity.Y;
 		float ZVelError = -CurrentState.Velocity.Z;
+		Result.X = 0.0f;
 		Result.Y = CorrDir.Y * 600.0f + Kd * YVelError;
 		Result.Z = CorrDir.Z * 600.0f + Kd * ZVelError;
 	}
@@ -898,6 +905,7 @@ FVector AUAVPawn::ApplyDeviationProtection(const FVector& NMPCAcceleration)
 	float CrossTrackDev = FMath::Sqrt(YError * YError + ZError * ZError);
 
 	// 持久化横向偏差用于指标统计
+	MetricsCurrentCrossTrackDev = CrossTrackDev;
 	MetricsMaxCrossTrackDev = FMath::Max(MetricsMaxCrossTrackDev, CrossTrackDev);
 
 	// 仅在极端偏差时记录警告（阈值提高到 5m）
@@ -924,6 +932,20 @@ FVector AUAVPawn::ApplyDeviationProtection(const FVector& NMPCAcceleration)
 		{
 			Result = ApplyHardLimitCorrection(Result, CrossTrackDev);
 		}
+	}
+
+	if (CrossTrackDev > 500.0f)
+	{
+		UE_LOG_THROTTLE(0.5, LogUAVMetrics, Log,
+			TEXT("[DEVIATION_DETAIL] Agent=%d Dev=%.1f MaxDev=%.1f Pos=(%.0f,%.0f,%.0f) Desired=(%.0f,%.0f,%.0f) ErrorYZ=(%.0f,%.0f) Vel=(%.0f,%.0f,%.0f) InAccel=(%.0f,%.0f,%.0f) ProtectedAccel=(%.0f,%.0f,%.0f) ObsDist=%.0f"),
+			AgentID, CrossTrackDev, MetricsMaxCrossTrackDev,
+			CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
+			DesiredPos.X, DesiredPos.Y, DesiredPos.Z,
+			YError, ZError,
+			CurrentState.Velocity.X, CurrentState.Velocity.Y, CurrentState.Velocity.Z,
+			NMPCAcceleration.X, NMPCAcceleration.Y, NMPCAcceleration.Z,
+			Result.X, Result.Y, Result.Z,
+			CachedNearestObsDist);
 	}
 
 	return Result;
@@ -1147,40 +1169,9 @@ void AUAVPawn::UpdateController(float DeltaTime)
 								CBFResult.MaxConstraintViolation, CBFResult.StaticSlack,
 								CBFResult.StaticConstraintCount, CBFResult.AgentConstraintCount);
 
-							// 降级：QP 失败时只保留统一安全层内的保守制动。
-							const FVector VelDir = CurrentState.Velocity.GetSafeNormal();
-							const float Speed = CurrentState.Velocity.Size();
-							if (Speed > 100.0f)
-							{
-								constexpr float DegradedBrakeAccel = 400.0f;
-								FVector BrakeAccel = -VelDir * DegradedBrakeAccel;
-
-								FVector WorstObsDir = FVector::ZeroVector;
-								float MinDist = MAX_FLT;
-								for (const FObstacleInfo& Obs : ObsForCBF)
-								{
-									// 使用统一有符号距离函数，支持球、旋转盒和圆柱。
-									const float D = NMPCComponent
-										? NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs)
-										: FVector::Dist(CurrentState.Position, Obs.Center) - Obs.Extents.GetMax() - Obs.SafetyMargin;
-									if (D < MinDist)
-									{
-										MinDist = D;
-										WorstObsDir = (CurrentState.Position - Obs.Center).GetSafeNormal();
-									}
-								}
-								if (WorstObsDir.IsNormalized() && FVector::DotProduct(BrakeAccel, -WorstObsDir) > 0.0f)
-								{
-									FVector EscapeDir = WorstObsDir - VelDir * FVector::DotProduct(WorstObsDir, VelDir);
-									if (EscapeDir.SizeSquared() < 1.0f)
-									{
-										EscapeDir = FVector::CrossProduct(VelDir, FVector::UpVector);
-									}
-									EscapeDir.Normalize();
-									BrakeAccel = EscapeDir * DegradedBrakeAccel;
-								}
-								EffectiveAccel = BrakeAccel;
-							}
+							// 降级：QP 不可执行时沿最近风险源法线逃逸，机间风险优先于静态障碍。
+							EffectiveAccel = CBFQPFilter->ComputeDegradedSafeAcceleration(
+								CurrentState, NeighborStates, ObsForCBF, CBFQPConfig);
 						}
 
 						// 记录统一安全层的最终输出；degraded 制动属于安全层内部，不应触发 AfterCBF 完整性告警。
@@ -1750,7 +1741,7 @@ void AUAVPawn::UpdateMetricsLog(float DeltaTime)
 	}
 
 	// ---- 横向偏差严重度 ----
-	if (MetricsMaxCrossTrackDev > 1000.0f) // > 10m
+	if (MetricsCurrentCrossTrackDev > 1000.0f) // > 10m
 	{
 		MetricsHighDeviationTimer += DeltaTime;
 		bMetricsInSevereDeviation = true;
@@ -1759,7 +1750,7 @@ void AUAVPawn::UpdateMetricsLog(float DeltaTime)
 			bMetricsTriggeredSevere = true;
 			UE_LOG(LogUAVMetrics, Warning,
 				TEXT("[DEVIATION_SEVERE] Agent=%d Dev=%.1f Duration=%.1f Reason=Over10m20s"),
-				AgentID, MetricsMaxCrossTrackDev, MetricsHighDeviationTimer);
+				AgentID, MetricsCurrentCrossTrackDev, MetricsHighDeviationTimer);
 		}
 	}
 	else
@@ -1771,12 +1762,12 @@ void AUAVPawn::UpdateMetricsLog(float DeltaTime)
 		}
 	}
 
-	if (MetricsMaxCrossTrackDev > 1500.0f && !bMetricsTriggeredSevere)
+	if (MetricsCurrentCrossTrackDev > 1500.0f && !bMetricsTriggeredSevere)
 	{
 		bMetricsTriggeredSevere = true;
 		UE_LOG(LogUAVMetrics, Warning,
 			TEXT("[DEVIATION_SEVERE] Agent=%d Dev=%.1f Reason=Over15m"),
-			AgentID, MetricsMaxCrossTrackDev);
+			AgentID, MetricsCurrentCrossTrackDev);
 	}
 
 	// ---- 避障恢复追踪 ----

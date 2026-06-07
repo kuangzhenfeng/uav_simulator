@@ -647,6 +647,43 @@ bool FCBFQPFilter_HeadOnZeroCollision::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ==================== Filter: 机间安全距离违反触发降级 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_AgentSafetyViolationTriggersDegradedStatus,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_AgentSafetyViolationTriggersDegradedStatus",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_AgentSafetyViolationTriggersDegradedStatus::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafe = 500.0f;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.QPMaxIterations = 100;
+	Config.QPKKTTolerance = 1e-3f;
+
+	// 复现仿真日志中的 MinH < 0：邻机已经进入机间安全距离。
+	// 这种状态不能作为普通求解结果继续执行，否则上层不会进入保守逃逸。
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector(0, 800, 0));
+
+	TArray<FAgentStateSnapshot> Neighbors;
+	Neighbors.Add(UAVTestHelpers::CreateAgentSnapshot(
+		1, FVector(250, 0, 0), FVector(0, -800, 0)));
+
+	FCBFQPResult Result = Filter->Filter(
+		FVector::ZeroVector, MyState, Neighbors, TArray<FObstacleInfo>(), Config);
+
+	TestTrue(TEXT("Agent safety violation should enter degraded status"),
+		Result.SolveStatus == ECBFQPStatus::MaxIterations ||
+		Result.SolveStatus == ECBFQPStatus::NumericalFailure);
+	TestTrue(TEXT("Regression setup should have negative inter-agent h"),
+		Result.MinHValue < 0.0f);
+
+	return true;
+}
+
 // ==================== Filter: 邻机障碍去重 ====================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_DeduplicatesNeighborObstacle,
@@ -742,6 +779,351 @@ bool FCBFQPFilter_TripleMerge::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Status should be Solved or SolvedWithSlack"),
 		Result.SolveStatus == ECBFQPStatus::Solved ||
 		Result.SolveStatus == ECBFQPStatus::SolvedWithSlack);
+
+	return true;
+}
+
+// ==================== Filter: 静态障碍大 slack 触发降级 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_StaticLargeSlackTriggersDegradedStatus,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_StaticLargeSlackTriggersDegradedStatus",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_StaticLargeSlackTriggersDegradedStatus::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafeStatic = 200.0f;
+	Config.StaticInfluenceDistance = 2000.0f;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.QPMaxIterations = 100;
+	Config.QPKKTTolerance = 1e-3f;
+
+	// 已非常接近静态障碍并高速逼近，HOCBF 约束超出执行器可行域。
+	// 这种状态不能靠大 slack 被标记为正常求解，否则上层不会进入保守逃逸。
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector(600, 0, 0));
+
+	TArray<FObstacleInfo> Obstacles;
+	Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(1, FVector(260, 0, 0), 50.0f, 50.0f));
+
+	FCBFQPResult Result = Filter->Filter(
+		FVector(-400, 0, 0), MyState,
+		TArray<FAgentStateSnapshot>(), Obstacles, Config);
+
+	TestTrue(TEXT("Large static slack should be reported as degraded status"),
+		Result.SolveStatus == ECBFQPStatus::MaxIterations ||
+		Result.SolveStatus == ECBFQPStatus::NumericalFailure);
+	TestTrue(TEXT("Regression setup should require large static slack"),
+		Result.StaticSlack > Config.MaxAccelerationQP * 0.25f);
+
+	return true;
+}
+
+// ==================== Filter: 静态障碍离散时间即将穿透触发降级 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_StaticImminentDiscretePenetrationTriggersDegradedStatus,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_StaticImminentDiscretePenetrationTriggersDegradedStatus",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_StaticImminentDiscretePenetrationTriggersDegradedStatus::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafeStatic = 200.0f;
+	Config.StaticInfluenceDistance = 2000.0f;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.QPMaxIterations = 100;
+	Config.QPKKTTolerance = 1e-3f;
+
+	// 球体真实碰撞距离只剩 1cm，且当前速度会在一个 50Hz 控制周期内穿透安全裕度。
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector(100, 0, 0));
+
+	TArray<FObstacleInfo> Obstacles;
+	Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(1, FVector(101, 0, 0), 50.0f, 50.0f));
+
+	FCBFQPResult Result = Filter->Filter(
+		FVector::ZeroVector, MyState,
+		TArray<FAgentStateSnapshot>(), Obstacles, Config);
+
+	TestTrue(TEXT("Imminent one-step static penetration should enter degraded status"),
+		Result.SolveStatus == ECBFQPStatus::MaxIterations ||
+		Result.SolveStatus == ECBFQPStatus::NumericalFailure);
+
+	return true;
+}
+
+// ==================== Filter: 静态障碍近碰撞滤波触发降级 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_StaticEmergencyFilteredNearCollisionTriggersDegradedStatus,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_StaticEmergencyFilteredNearCollisionTriggersDegradedStatus",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_StaticEmergencyFilteredNearCollisionTriggersDegradedStatus::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafeStatic = 200.0f;
+	Config.StaticInfluenceDistance = 2000.0f;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.QPMaxIterations = 100;
+	Config.QPKKTTolerance = 1e-3f;
+
+	// 真实碰撞净空只剩 30cm，虽然 HOCBF 仍可给出一个数学可行的修正，
+	// 但安全层已经主动覆盖标称加速度，应进入降级制动给姿态执行留出余量。
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector::ZeroVector);
+
+	TArray<FObstacleInfo> Obstacles;
+	Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(1, FVector(130, 0, 0), 50.0f, 50.0f));
+
+	FCBFQPResult Result = Filter->Filter(
+		FVector(300, 0, 0), MyState,
+		TArray<FAgentStateSnapshot>(), Obstacles, Config);
+
+	TestTrue(TEXT("Emergency near-collision filtering should enter degraded status"),
+		Result.SolveStatus == ECBFQPStatus::MaxIterations ||
+		Result.SolveStatus == ECBFQPStatus::NumericalFailure);
+	TestTrue(TEXT("Regression setup should require safety filtering"), Result.bWasFiltered);
+
+	return true;
+}
+
+// ==================== Filter: 静态障碍高速近距离掠过触发降级 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_StaticHighSpeedNearCollisionTriggersDegradedStatus,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_StaticHighSpeedNearCollisionTriggersDegradedStatus",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_StaticHighSpeedNearCollisionTriggersDegradedStatus::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafeStatic = 200.0f;
+	Config.StaticInfluenceDistance = 2000.0f;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.QPMaxIterations = 100;
+	Config.QPKKTTolerance = 1e-3f;
+
+	// 真实净空还有 300cm，但切向速度已经需要约 4m 的加速度预算才能重定向，
+	// 继续执行普通 QP 修正会把降级留到姿态执行已经来不及的阶段。
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector(0, 800, 0));
+
+	TArray<FObstacleInfo> Obstacles;
+	Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(1, FVector(400, 0, 0), 50.0f, 50.0f));
+
+	FCBFQPResult Result = Filter->Filter(
+		FVector(300, 0, 0), MyState,
+		TArray<FAgentStateSnapshot>(), Obstacles, Config);
+
+	TestTrue(TEXT("High-speed near-collision filtering should enter degraded status"),
+		Result.SolveStatus == ECBFQPStatus::MaxIterations ||
+		Result.SolveStatus == ECBFQPStatus::NumericalFailure);
+	TestTrue(TEXT("Regression setup should require safety filtering"), Result.bWasFiltered);
+
+	return true;
+}
+
+// ==================== Degraded: 近障碍逃逸加速度 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_DegradedSafeAccelerationUsesFullStaticEscape,
+	"UAVSimulator.MultiAgent.CBFQPFilter.DegradedSafeAccelerationUsesFullStaticEscape",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_DegradedSafeAccelerationUsesFullStaticEscape::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafeStatic = 200.0f;
+	Config.MaxAccelerationQP = 800.0f;
+
+	// 近障碍时，速度主要沿切向运动。单纯沿速度反向制动不能增加真实净空，
+	// 降级安全加速度必须直接沿最近障碍法线逃逸。
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector(0, 600, 0));
+
+	TArray<FObstacleInfo> Obstacles;
+	Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(1, FVector(120, 0, 0), 50.0f, 50.0f));
+
+	const FVector EscapeAccel = Filter->ComputeDegradedSafeAcceleration(MyState, Obstacles, Config);
+	const FVector AwayFromObstacle = FVector(-1, 0, 0);
+
+	constexpr float GravityAcceleration = 980.0f;
+	constexpr int32 TiltFacetCount = 16;
+	const float FacetScale = FMath::Cos(PI / static_cast<float>(TiltFacetCount));
+	const float TiltSlope = FMath::Tan(FMath::DegreesToRadians(Config.MaxTiltAngleDeg));
+	const float ExecutableHorizontalAccel = TiltSlope * FacetScale * (GravityAcceleration + EscapeAccel.Z);
+
+	TestTrue(TEXT("Degraded acceleration should point away from the nearest static obstacle"),
+		FVector::DotProduct(EscapeAccel, AwayFromObstacle) > ExecutableHorizontalAccel * 0.9f);
+	TestTrue(TEXT("Degraded acceleration should stay inside QP acceleration budget"),
+		EscapeAccel.Size() <= Config.MaxAccelerationQP + 1.0f);
+
+	return true;
+}
+
+// ==================== Degraded: 静态障碍近于邻机时优先静态逃逸 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_DegradedSafeAccelerationPrefersNearestStaticRisk,
+	"UAVSimulator.MultiAgent.CBFQPFilter.DegradedSafeAccelerationPrefersNearestStaticRisk",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_DegradedSafeAccelerationPrefersNearestStaticRisk::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafe = 500.0f;
+	Config.DSafeStatic = 200.0f;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.MaxTiltAngleDeg = 30.0f;
+
+	// 邻机在安全距离之外，静态障碍已经极近时，降级逃逸必须选择静态障碍法线。
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector(0, 600, 0));
+
+	TArray<FAgentStateSnapshot> Neighbors;
+	Neighbors.Add(UAVTestHelpers::CreateAgentSnapshot(
+		1, FVector(-2000, 0, 0), FVector::ZeroVector));
+
+	TArray<FObstacleInfo> Obstacles;
+	Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(1, FVector(120, 0, 0), 50.0f, 50.0f));
+
+	const FVector EscapeAccel = Filter->ComputeDegradedSafeAcceleration(
+		MyState, Neighbors, Obstacles, Config);
+
+	TestTrue(TEXT("Nearest static risk should win over a far safe neighbor"),
+		FVector::DotProduct(EscapeAccel, FVector(-1, 0, 0)) > 500.0f);
+
+	return true;
+}
+
+// ==================== Degraded: 机间安全违反沿邻机法线逃逸 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_DegradedSafeAccelerationUsesAgentEscape,
+	"UAVSimulator.MultiAgent.CBFQPFilter.DegradedSafeAccelerationUsesAgentEscape",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_DegradedSafeAccelerationUsesAgentEscape::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafe = 500.0f;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.MaxTiltAngleDeg = 30.0f;
+
+	// 邻机已经进入 DSafe，且没有静态障碍时，降级逃逸必须沿机间法线远离邻机。
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector(0, 600, 0));
+
+	TArray<FAgentStateSnapshot> Neighbors;
+	Neighbors.Add(UAVTestHelpers::CreateAgentSnapshot(
+		1, FVector(250, 0, 0), FVector::ZeroVector));
+
+	const FVector EscapeAccel = Filter->ComputeDegradedSafeAcceleration(
+		MyState, Neighbors, TArray<FObstacleInfo>(), Config);
+	const float HorizontalAccel = FVector2D(EscapeAccel.X, EscapeAccel.Y).Size();
+
+	constexpr float GravityAcceleration = 980.0f;
+	constexpr int32 TiltFacetCount = 16;
+	const float FacetScale = FMath::Cos(PI / static_cast<float>(TiltFacetCount));
+	const float TiltSlope = FMath::Tan(FMath::DegreesToRadians(Config.MaxTiltAngleDeg));
+	const float ExecutableHorizontalAccel = TiltSlope * FacetScale * (GravityAcceleration + EscapeAccel.Z);
+
+	TestTrue(TEXT("Degraded acceleration should point away from the unsafe neighbor"),
+		FVector::DotProduct(EscapeAccel, FVector(-1, 0, 0)) > ExecutableHorizontalAccel * 0.9f);
+	TestTrue(TEXT("Agent degraded acceleration should stay inside the executable tilt cone"),
+		HorizontalAccel <= ExecutableHorizontalAccel + 1.0f);
+
+	return true;
+}
+
+// ==================== Degraded: 逃逸加速度满足倾角可执行域 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_DegradedSafeAccelerationMaximizesExecutableHorizontalEscape,
+	"UAVSimulator.MultiAgent.CBFQPFilter.DegradedSafeAccelerationMaximizesExecutableHorizontalEscape",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_DegradedSafeAccelerationMaximizesExecutableHorizontalEscape::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafeStatic = 200.0f;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.MaxTiltAngleDeg = 30.0f;
+
+	// 障碍物略高于本机时，简单沿三维法线逃逸会给出向下加速度，降低水平可执行预算。
+	// 降级模式应在倾角锥内最大化逃逸法线投影，用上推换取更强水平逃逸。
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector(0, 600, 0));
+
+	TArray<FObstacleInfo> Obstacles;
+	Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(1, FVector(120, 0, 30), 50.0f, 50.0f));
+
+	const FVector EscapeAccel = Filter->ComputeDegradedSafeAcceleration(MyState, Obstacles, Config);
+	const float HorizontalAccel = FVector2D(EscapeAccel.X, EscapeAccel.Y).Size();
+
+	constexpr float GravityAcceleration = 980.0f;
+	constexpr int32 TiltFacetCount = 16;
+	const float FacetScale = FMath::Cos(PI / static_cast<float>(TiltFacetCount));
+	const float TiltSlope = FMath::Tan(FMath::DegreesToRadians(Config.MaxTiltAngleDeg));
+	const float ExecutableHorizontalAccel = TiltSlope * FacetScale * (GravityAcceleration + EscapeAccel.Z);
+
+	TestTrue(TEXT("Degraded acceleration should use upward thrust to increase horizontal escape authority"),
+		EscapeAccel.Z > 0.0f);
+	TestTrue(TEXT("Degraded acceleration should produce stronger executable horizontal escape"),
+		HorizontalAccel > 600.0f);
+	TestTrue(TEXT("Optimized degraded acceleration should stay inside the executable tilt cone"),
+		HorizontalAccel <= ExecutableHorizontalAccel + 1.0f);
+	TestTrue(TEXT("Optimized degraded acceleration should still point away from the obstacle"),
+		FVector::DotProduct(EscapeAccel, FVector(-1, 0, 0)) > 600.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_DegradedSafeAccelerationRespectsTiltCone,
+	"UAVSimulator.MultiAgent.CBFQPFilter.DegradedSafeAccelerationRespectsTiltCone",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_DegradedSafeAccelerationRespectsTiltCone::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafeStatic = 200.0f;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.MaxTiltAngleDeg = 30.0f;
+
+	// 纯水平逃逸若直接给满 800cm/s²，会超过 30° 倾角对应的可执行水平加速度。
+	// 降级输出必须和正常 QP 共用同一执行器可行域，否则姿态环会兑现不了安全层意图。
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 0), FVector(0, 600, 0));
+
+	TArray<FObstacleInfo> Obstacles;
+	Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(1, FVector(120, 0, 0), 50.0f, 50.0f));
+
+	const FVector EscapeAccel = Filter->ComputeDegradedSafeAcceleration(MyState, Obstacles, Config);
+	const float HorizontalAccel = FVector2D(EscapeAccel.X, EscapeAccel.Y).Size();
+
+	constexpr float GravityAcceleration = 980.0f;
+	constexpr int32 TiltFacetCount = 16;
+	const float FacetScale = FMath::Cos(PI / static_cast<float>(TiltFacetCount));
+	const float TiltSlope = FMath::Tan(FMath::DegreesToRadians(Config.MaxTiltAngleDeg));
+	const float ExecutableHorizontalAccel = TiltSlope * FacetScale * (GravityAcceleration + EscapeAccel.Z);
+
+	TestTrue(TEXT("Degraded acceleration should stay inside the executable tilt cone"),
+		HorizontalAccel <= ExecutableHorizontalAccel + 1.0f);
+	TestTrue(TEXT("Degraded acceleration should still point away from the nearest static obstacle"),
+		FVector::DotProduct(EscapeAccel, FVector(-1, 0, 0)) > ExecutableHorizontalAccel * 0.9f);
 
 	return true;
 }
