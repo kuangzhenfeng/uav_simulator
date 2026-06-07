@@ -117,156 +117,13 @@ bool FCBQPBuildConstraintsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// ==================== QP 求解器测试 ====================
+// ==================== Filter: 静态障碍 CBF 方向性测试 ====================
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPSolverProjectionTest,
-	"UAVSimulator.MultiAgent.CBFQPFilter.QPSolver_Projection",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_StaticApproachingSphere,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_StaticApproachingSphere",
 	UAV_TEST_FLAGS)
 
-bool FCBFQPSolverProjectionTest::RunTest(const FString& Parameters)
-{
-	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
-
-	// 标称加速度指向邻居（不安全方向）
-	FVector NominalAccel(-500.0f, 0.0f, 0.0f);
-
-	// 约束：A·u ≤ b，阻止向邻居方向加速
-	TArray<FVector> Normals;
-	Normals.Add(FVector(-1, 0, 0)); // 法线指向 -X
-
-	TArray<float> Bounds;
-	Bounds.Add(-100.0f); // A·u ≤ -100 → -ux ≤ -100 → ux ≥ 100
-
-	FCBFQPConfig Config;
-	Config.MaxIterations = 50;
-
-	FVector SafeAccel = Filter->SolveProjectedGradientQP(
-		NominalAccel, Normals, Bounds, Config);
-
-	// 滤波后 X 分量应满足 ux >= 100
-	TestTrue(TEXT("Filtered X should be >= 100"),
-		SafeAccel.X >= 99.0f);
-
-	return true;
-}
-
-// ==================== Filter 全流程测试 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilterFullPipelineTest,
-	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_FullPipeline",
-	UAV_TEST_FLAGS)
-
-bool FCBFQPFilterFullPipelineTest::RunTest(const FString& Parameters)
-{
-	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
-
-	FCBFQPConfig Config;
-	Config.DSafe = 500.0f;
-	Config.bEnabled = true;
-
-		// ---- 测试 1：有逼近邻居，应触发滤波 ----
-		{
-			FUAVState MyState = UAVTestHelpers::CreateUAVState(
-				FVector(0, 0, 0), FVector(100, 0, 0));
-
-			TArray<FAgentStateSnapshot> Neighbors;
-			Neighbors.Add(UAVTestHelpers::CreateAgentSnapshot(
-				1, FVector(300, 0, 0), FVector(-100, 0, 0)));
-
-			// 加速度指向邻居（+X 方向），CBF 应将其推离
-			FVector NominalAccel(200, 0, 0);
-			FCBFQPResult Result = Filter->Filter(NominalAccel, MyState, Neighbors, Config);
-
-			// 安全加速度的 X 分量应比标称值小（远离邻居方向）
-			TestTrue(TEXT("SafeAccel.X should be less than nominal when approaching neighbor"),
-				Result.SafeAcceleration.X < NominalAccel.X);
-		}
-
-	// ---- 测试 2：无邻居，不应滤波 ----
-	{
-		FUAVState MyState = UAVTestHelpers::CreateUAVState(
-			FVector(0, 0, 0), FVector(100, 0, 0));
-
-		TArray<FAgentStateSnapshot> NoNeighbors;
-		FVector NominalAccel(100, 0, 0);
-		FCBFQPResult Result = Filter->Filter(NominalAccel, MyState, NoNeighbors, Config);
-
-		TestFalse(TEXT("Should not filter with no neighbors"), Result.bWasFiltered);
-	}
-
-	return true;
-}
-
-// ==================== 方向性测试：对向逼近 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPDirectionalApproachingTest,
-	"UAVSimulator.MultiAgent.CBFQPFilter.Directional_Approaching",
-	UAV_TEST_FLAGS)
-
-bool FCBFQPDirectionalApproachingTest::RunTest(const FString& Parameters)
-{
-	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
-
-	FCBFQPConfig Config;
-	Config.DSafe = 500.0f;
-
-	// 两机对向飞行：本机在原点向+X飞，邻居在(600,0,0)向-X飞
-	FUAVState MyState = UAVTestHelpers::CreateUAVState(
-		FVector(0, 0, 0), FVector(200, 0, 0));
-
-	TArray<FAgentStateSnapshot> Neighbors;
-	Neighbors.Add(UAVTestHelpers::CreateAgentSnapshot(
-		1, FVector(600, 0, 0), FVector(-200, 0, 0)));
-
-	// NMPC 想向+X加速（朝向邻居）
-	FVector NominalAccel(300, 0, 0);
-	FCBFQPResult Result = Filter->Filter(NominalAccel, MyState, Neighbors, Config);
-
-	// CBF 应将加速度推离邻居：SafeAccel.X 应小于 NominalAccel.X
-	TestTrue(TEXT("Approaching: SafeAccel.X should be less than nominal"),
-		Result.SafeAcceleration.X < NominalAccel.X);
-
-	return true;
-}
-
-// ==================== 方向性测试：远离运动 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPDirectionalSeparatingTest,
-	"UAVSimulator.MultiAgent.CBFQPFilter.Directional_Separating",
-	UAV_TEST_FLAGS)
-
-bool FCBFQPDirectionalSeparatingTest::RunTest(const FString& Parameters)
-{
-	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
-
-	FCBFQPConfig Config;
-	Config.DSafe = 500.0f;
-
-	// 两机远离：本机在原点向-X飞，邻居在(1000,0,0)向+X飞（已远离）
-	FUAVState MyState = UAVTestHelpers::CreateUAVState(
-		FVector(0, 0, 0), FVector(-100, 0, 0));
-
-	TArray<FAgentStateSnapshot> Neighbors;
-	Neighbors.Add(UAVTestHelpers::CreateAgentSnapshot(
-		1, FVector(1000, 0, 0), FVector(100, 0, 0)));
-
-	// 向-X加速（远离邻居）
-	FVector NominalAccel(-200, 0, 0);
-	FCBFQPResult Result = Filter->Filter(NominalAccel, MyState, Neighbors, Config);
-
-	// 远离时 h 增大，CBF 不应限制
-	TestFalse(TEXT("Separating: should not filter"), Result.bWasFiltered);
-
-	return true;
-}
-
-// ==================== FilterV2: 静态障碍 CBF 方向性测试 ====================
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilterV2_StaticApproachingSphere,
-	"UAVSimulator.MultiAgent.CBFQPFilter.FilterV2_StaticApproachingSphere",
-	UAV_TEST_FLAGS)
-
-bool FCBFQPFilterV2_StaticApproachingSphere::RunTest(const FString& Parameters)
+bool FCBFQPFilter_StaticApproachingSphere::RunTest(const FString& Parameters)
 {
 	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
 
@@ -287,7 +144,7 @@ bool FCBFQPFilterV2_StaticApproachingSphere::RunTest(const FString& Parameters)
 	// NMPC 输出向 +X 加速（朝向球体）
 	FVector NominalAccel(300, 0, 0);
 
-	FCBFQPResult Result = Filter->FilterV2(
+	FCBFQPResult Result = Filter->Filter(
 		NominalAccel, MyState,
 		TArray<FAgentStateSnapshot>(), Obstacles, Config);
 
@@ -300,13 +157,13 @@ bool FCBFQPFilterV2_StaticApproachingSphere::RunTest(const FString& Parameters)
 	return true;
 }
 
-// ==================== FilterV2: 静态障碍 CBF 远离不激活 ====================
+// ==================== Filter: 静态障碍 CBF 远离不激活 ====================
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilterV2_StaticSeparatingNoFilter,
-	"UAVSimulator.MultiAgent.CBFQPFilter.FilterV2_StaticSeparatingNoFilter",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_StaticSeparatingNoFilter,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_StaticSeparatingNoFilter",
 	UAV_TEST_FLAGS)
 
-bool FCBFQPFilterV2_StaticSeparatingNoFilter::RunTest(const FString& Parameters)
+bool FCBFQPFilter_StaticSeparatingNoFilter::RunTest(const FString& Parameters)
 {
 	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
 
@@ -326,7 +183,7 @@ bool FCBFQPFilterV2_StaticSeparatingNoFilter::RunTest(const FString& Parameters)
 	// 向 -X 加速（远离球体）
 	FVector NominalAccel(-200, 0, 0);
 
-	FCBFQPResult Result = Filter->FilterV2(
+	FCBFQPResult Result = Filter->Filter(
 		NominalAccel, MyState,
 		TArray<FAgentStateSnapshot>(), Obstacles, Config);
 
@@ -337,13 +194,13 @@ bool FCBFQPFilterV2_StaticSeparatingNoFilter::RunTest(const FString& Parameters)
 	return true;
 }
 
-// ==================== FilterV2: 多约束（静态 + 机间）同时激活 ====================
+// ==================== Filter: 多约束（静态 + 机间）同时激活 ====================
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilterV2_MultiConstraint,
-	"UAVSimulator.MultiAgent.CBFQPFilter.FilterV2_MultiConstraint",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_MultiConstraint,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_MultiConstraint",
 	UAV_TEST_FLAGS)
 
-bool FCBFQPFilterV2_MultiConstraint::RunTest(const FString& Parameters)
+bool FCBFQPFilter_MultiConstraint::RunTest(const FString& Parameters)
 {
 	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
 
@@ -369,7 +226,7 @@ bool FCBFQPFilterV2_MultiConstraint::RunTest(const FString& Parameters)
 	// NMPC 输出同时朝向球体和邻居的加速度
 	FVector NominalAccel(300, 200, 0);
 
-	FCBFQPResult Result = Filter->FilterV2(
+	FCBFQPResult Result = Filter->Filter(
 		NominalAccel, MyState, Neighbors, Obstacles, Config);
 
 	// 应同时有静态和机间约束
@@ -386,13 +243,13 @@ bool FCBFQPFilterV2_MultiConstraint::RunTest(const FString& Parameters)
 	return true;
 }
 
-// ==================== FilterV2: Slack 激活测试 ====================
+// ==================== Filter: Slack 激活测试 ====================
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilterV2_SlackActivation,
-	"UAVSimulator.MultiAgent.CBFQPFilter.FilterV2_SlackActivation",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_SlackActivation,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_SlackActivation",
 	UAV_TEST_FLAGS)
 
-bool FCBFQPFilterV2_SlackActivation::RunTest(const FString& Parameters)
+bool FCBFQPFilter_SlackActivation::RunTest(const FString& Parameters)
 {
 	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
 
@@ -415,7 +272,7 @@ bool FCBFQPFilterV2_SlackActivation::RunTest(const FString& Parameters)
 
 	FVector NominalAccel(400, 0, 0);
 
-	FCBFQPResult Result = Filter->FilterV2(
+	FCBFQPResult Result = Filter->Filter(
 		NominalAccel, MyState,
 		TArray<FAgentStateSnapshot>(), Obstacles, Config);
 
@@ -429,13 +286,13 @@ bool FCBFQPFilterV2_SlackActivation::RunTest(const FString& Parameters)
 	return true;
 }
 
-// ==================== FilterV2: 降级模式测试 ====================
+// ==================== Filter: 降级模式测试 ====================
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilterV2_DegradedMode,
-	"UAVSimulator.MultiAgent.CBFQPFilter.FilterV2_DegradedMode",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_DegradedMode,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_DegradedMode",
 	UAV_TEST_FLAGS)
 
-bool FCBFQPFilterV2_DegradedMode::RunTest(const FString& Parameters)
+bool FCBFQPFilter_DegradedMode::RunTest(const FString& Parameters)
 {
 	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
 
@@ -450,7 +307,7 @@ bool FCBFQPFilterV2_DegradedMode::RunTest(const FString& Parameters)
 
 	FVector NominalAccel(100, 50, 0);
 
-	FCBFQPResult Result = Filter->FilterV2(
+	FCBFQPResult Result = Filter->Filter(
 		NominalAccel, MyState,
 		TArray<FAgentStateSnapshot>(), TArray<FObstacleInfo>(), Config);
 
@@ -459,6 +316,45 @@ bool FCBFQPFilterV2_DegradedMode::RunTest(const FString& Parameters)
 		Result.SolveStatus == ECBFQPStatus::Solved);
 	UAV_TEST_FLOAT_EQUAL(Result.SafeAcceleration.X, NominalAccel.X, 5.0f);
 	UAV_TEST_FLOAT_EQUAL(Result.SafeAcceleration.Y, NominalAccel.Y, 5.0f);
+
+	return true;
+}
+
+// ==================== Filter: 倾角可执行加速度锥 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_RespectsTiltAccelerationCone,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_RespectsTiltAccelerationCone",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_RespectsTiltAccelerationCone::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.QPMaxIterations = 100;
+	Config.QPKKTTolerance = 1e-3f;
+
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 1000), FVector::ZeroVector);
+
+	// 该标称加速度满足旧的逐轴盒约束，但在 uz=-800 时水平加速度超过 30 度倾角可执行锥。
+	FVector NominalAccel(800, 800, -800);
+
+	FCBFQPResult Result = Filter->Filter(
+		NominalAccel, MyState,
+		TArray<FAgentStateSnapshot>(), TArray<FObstacleInfo>(), Config);
+
+	const float Gravity = 980.0f;
+	const float MaxTiltRad = FMath::DegreesToRadians(30.0f);
+	const float TiltLimitedHorizontal = FMath::Tan(MaxTiltRad) *
+		FMath::Max(0.0f, Gravity + Result.SafeAcceleration.Z);
+
+	TestTrue(TEXT("Safe acceleration should stay inside the 30-degree executable tilt cone"),
+		Result.SafeAcceleration.Size2D() <= TiltLimitedHorizontal + 5.0f);
+	TestTrue(TEXT("Solve status should remain valid"),
+		Result.SolveStatus == ECBFQPStatus::Solved ||
+		Result.SolveStatus == ECBFQPStatus::SolvedWithSlack);
 
 	return true;
 }
@@ -623,6 +519,8 @@ bool FCBFQPASQP_DenseMixedScale::RunTest(const FString& Parameters)
 		FMath::Abs(Z[0]) <= Config.MaxAccelerationQP + 1.0f &&
 		FMath::Abs(Z[1]) <= Config.MaxAccelerationQP + 1.0f &&
 		FMath::Abs(Z[2]) <= Config.MaxAccelerationQP + 1.0f);
+	TestTrue(TEXT("Dense mixed-scale QP should use acceleration instead of large agent slack when feasible"),
+		Z.Num() >= 5 && Z[4] <= 1000.0f);
 
 	return true;
 }
@@ -667,13 +565,13 @@ bool FCBFQPBuildStatic_SphereConstraints::RunTest(const FString& Parameters)
 	return true;
 }
 
-// ==================== FilterV2: 对向逼近零碰撞 ====================
+// ==================== Filter: 对向逼近零碰撞 ====================
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilterV2_HeadOnZeroCollision,
-	"UAVSimulator.MultiAgent.CBFQPFilter.FilterV2_HeadOnZeroCollision",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_HeadOnZeroCollision,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_HeadOnZeroCollision",
 	UAV_TEST_FLAGS)
 
-bool FCBFQPFilterV2_HeadOnZeroCollision::RunTest(const FString& Parameters)
+bool FCBFQPFilter_HeadOnZeroCollision::RunTest(const FString& Parameters)
 {
 	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
 
@@ -694,7 +592,7 @@ bool FCBFQPFilterV2_HeadOnZeroCollision::RunTest(const FString& Parameters)
 	// NMPC 想继续向 +X 加速（朝向邻居）
 	FVector NominalAccel(400, 0, 0);
 
-	FCBFQPResult Result = Filter->FilterV2(
+	FCBFQPResult Result = Filter->Filter(
 		NominalAccel, MyState, Neighbors, TArray<FObstacleInfo>(), Config);
 
 	// CBF 应显著减小朝向邻居的加速度
@@ -702,17 +600,73 @@ bool FCBFQPFilterV2_HeadOnZeroCollision::RunTest(const FString& Parameters)
 		Result.SafeAcceleration.X < NominalAccel.X * 0.5f);
 	TestTrue(TEXT("Should have agent constraint"),
 		Result.AgentConstraintCount > 0);
+	TestTrue(TEXT("Head-on feasible QP should converge without degraded status"),
+		Result.SolveStatus == ECBFQPStatus::Solved ||
+		Result.SolveStatus == ECBFQPStatus::SolvedWithSlack);
+	TestTrue(TEXT("Head-on feasible QP should not rely on large agent slack"),
+		Result.AgentSlack <= 1000.0f);
 
 	return true;
 }
 
-// ==================== FilterV2: 三机汇聚多约束 ====================
+// ==================== Filter: 邻机障碍去重 ====================
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilterV2_TripleMerge,
-	"UAVSimulator.MultiAgent.CBFQPFilter.FilterV2_TripleMerge",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_DeduplicatesNeighborObstacle,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_DeduplicatesNeighborObstacle",
 	UAV_TEST_FLAGS)
 
-bool FCBFQPFilterV2_TripleMerge::RunTest(const FString& Parameters)
+bool FCBFQPFilter_DeduplicatesNeighborObstacle::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.DSafe = 500.0f;
+	Config.DSafeStatic = 200.0f;
+	Config.StaticInfluenceDistance = 2000.0f;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.QPMaxIterations = 100;
+	Config.QPKKTTolerance = 1e-3f;
+
+	// 复现日志中的三机初始布局：邻机同时作为通信邻居和障碍物进入安全层。
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, -300, 1000), FVector(300, 0, 0));
+
+	TArray<FAgentStateSnapshot> Neighbors;
+	Neighbors.Add(UAVTestHelpers::CreateAgentSnapshot(
+		1, FVector(600, 0, 1000), FVector(-100, 0, 0),
+		FRotator::ZeroRotator, FVector::ZeroVector, FVector(-200, 0, 0)));
+
+	TArray<FObstacleInfo> Obstacles;
+	FObstacleInfo DuplicateUAVObstacle = UAVTestHelpers::CreateSphereObstacle(
+		5, FVector(600, 0, 1000), 112.5f, 50.0f);
+	DuplicateUAVObstacle.bIsDynamic = true;
+	DuplicateUAVObstacle.Velocity = FVector(-100, 0, 0);
+	Obstacles.Add(DuplicateUAVObstacle);
+
+	FVector NominalAccel(420, -7, 9);
+	FCBFQPResult Result = Filter->Filter(
+		NominalAccel, MyState, Neighbors, Obstacles, Config);
+
+	TestEqual(TEXT("Duplicate neighbor obstacle should be handled only by agent CBF"),
+		Result.StaticConstraintCount, 0);
+	TestEqual(TEXT("Duplicate neighbor should still have one agent constraint"),
+		Result.AgentConstraintCount, 1);
+	TestTrue(TEXT("Deduplicated mixed input should converge"),
+		Result.SolveStatus == ECBFQPStatus::Solved ||
+		Result.SolveStatus == ECBFQPStatus::SolvedWithSlack);
+	TestTrue(TEXT("Deduplicated mixed input should not rely on large agent slack"),
+		Result.AgentSlack <= 1000.0f);
+
+	return true;
+}
+
+// ==================== Filter: 三机汇聚多约束 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_TripleMerge,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_TripleMerge",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_TripleMerge::RunTest(const FString& Parameters)
 {
 	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
 
@@ -735,7 +689,7 @@ bool FCBFQPFilterV2_TripleMerge::RunTest(const FString& Parameters)
 	// 向原点加速（朝向两个邻居）
 	FVector NominalAccel(200, 200, 0);
 
-	FCBFQPResult Result = Filter->FilterV2(
+	FCBFQPResult Result = Filter->Filter(
 		NominalAccel, MyState, Neighbors, TArray<FObstacleInfo>(), Config);
 
 	// 三机汇聚: 应有 2 个机间约束

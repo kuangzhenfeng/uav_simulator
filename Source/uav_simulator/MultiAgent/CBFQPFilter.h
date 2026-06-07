@@ -82,8 +82,7 @@ struct FCBFQPResult
  * - 约束: h_ddot + α₁·h_dot + α₀·h ≥ 0
  * - QP: min ||u - u_nmpc||² + ρ·ξ² s.t. A_k·z ≤ b_k, z = [u, ξ_s, ξ_a]
  *
- * FilterV2: 统一处理静态障碍 HOCBF + 机间 CBF，使用可行初值 Active-Set QP
- * Filter:   旧接口，仅处理机间约束，使用投影梯度法
+ * Filter: 统一处理静态障碍 HOCBF + 机间 CBF，使用可行初值 Active-Set QP
  */
 UCLASS(BlueprintType)
 class UAV_SIMULATOR_API UCBFQPFilter : public UObject
@@ -95,9 +94,10 @@ public:
 
 	/**
 	 * 对 NMPC 输出进行安全滤波
-	 * @param NominalAcceleration NMPC 输出的期望加速度 (cm/s²)
+	 * @param NominalAcceleration NMPC 输出加速度
 	 * @param MyState 本机状态
 	 * @param NeighborStates 邻居状态列表
+	 * @param StaticObstacles 静态障碍物列表
 	 * @param Config CBF-QP 配置
 	 * @return 滤波结果
 	 */
@@ -105,6 +105,7 @@ public:
 		const FVector& NominalAcceleration,
 		const FUAVState& MyState,
 		const TArray<FAgentStateSnapshot>& NeighborStates,
+		const TArray<FObstacleInfo>& StaticObstacles,
 		const FCBFQPConfig& Config);
 
 	// ---- 内部方法 (public for testing) ----
@@ -132,34 +133,6 @@ public:
 		const FCBFQPConfig& Config,
 		TArray<FVector>& OutConstraintNormals,
 		TArray<float>& OutConstraintBounds) const;
-
-	/**
-	 * 投影梯度 QP 求解器（旧实现，保留向后兼容）
-	 * min ||u - u_nominal||²  s.t. A_k · u ≤ b_k
-	 */
-	FVector SolveProjectedGradientQP(
-		const FVector& NominalAccel,
-		const TArray<FVector>& ConstraintNormals,
-		const TArray<float>& ConstraintBounds,
-		const FCBFQPConfig& Config) const;
-
-	// ---- 统一 QP 接口 ----
-
-	/**
-	 * 统一安全滤波: 同时处理静态障碍 + 机间 CBF
-	 * @param NominalAcceleration NMPC 输出加速度
-	 * @param MyState 本机状态
-	 * @param NeighborStates 邻居状态列表
-	 * @param StaticObstacles 静态障碍物列表
-	 * @param Config CBF-QP 配置
-	 * @return 滤波结果
-	 */
-	FCBFQPResult FilterV2(
-		const FVector& NominalAcceleration,
-		const FUAVState& MyState,
-		const TArray<FAgentStateSnapshot>& NeighborStates,
-		const TArray<FObstacleInfo>& StaticObstacles,
-		const FCBFQPConfig& Config);
 
 	/**
 	 * 构建静态障碍 HOCBF 约束

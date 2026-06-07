@@ -132,10 +132,6 @@ struct FCBFQPConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|Solver")
 	float ConvergenceTolerance = 0.1f;
 
-	// 是否启用（旧接口，Mode=Disabled 时等效于 bEnabled=false）
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP")
-	bool bEnabled = true;
-
 	// ---- 静态障碍 CBF 参数 ----
 
 	// 静态障碍安全距离 (cm)
@@ -175,6 +171,10 @@ struct FCBFQPConfig
 	// 加速度上界 (cm/s²)，用于 QP 内约束
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|QP")
 	float MaxAccelerationQP = 800.0f;
+
+	// QP 内可执行倾角上界 (deg)，需与位置控制器倾角限制保持一致
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|QP")
+	float MaxTiltAngleDeg = 30.0f;
 
 	// QP 最大迭代次数
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|QP")

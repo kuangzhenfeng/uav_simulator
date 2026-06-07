@@ -155,9 +155,9 @@
 - CBF-QP 安全滤波：
   - 统一 HOCBF 安全层（静态障碍 + 机间）
   - 可行初值 Primal Active-Set QP 求解器 + Warm Start
+  - 倾角可执行加速度域约束
   - Slack 变量保证可行性
   - Shadow mode 迁移
-  - 投影梯度 QP 求解器
 
 ### 任务管理
 - 航点 CRUD 操作

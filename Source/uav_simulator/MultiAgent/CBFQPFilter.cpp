@@ -7,97 +7,6 @@ UCBFQPFilter::UCBFQPFilter()
 {
 }
 
-FCBFQPResult UCBFQPFilter::Filter(
-	const FVector& NominalAcceleration,
-	const FUAVState& MyState,
-	const TArray<FAgentStateSnapshot>& NeighborStates,
-	const FCBFQPConfig& Config)
-{
-	const double StartTime = FPlatformTime::Seconds();
-	FCBFQPResult Result;
-	Result.SafeAcceleration = NominalAcceleration;
-
-	if (NeighborStates.Num() == 0)
-	{
-		// 无邻居，直接通过
-		return Result;
-	}
-
-	// 构建 CBF 约束
-	TArray<FVector> ConstraintNormals;
-	TArray<float> ConstraintBounds;
-	BuildCBFConstraints(MyState, NeighborStates, Config, ConstraintNormals, ConstraintBounds);
-
-	if (ConstraintNormals.Num() == 0)
-	{
-		// 无活跃约束
-		return Result;
-	}
-
-	// 计算真实最小 h 值（诊断）
-	Result.MinHValue = MAX_FLT;
-	for (const FAgentStateSnapshot& Neighbor : NeighborStates)
-	{
-		float HVal = ComputeHValue(MyState.Position, Neighbor.State.Position, Config.DSafe);
-		Result.MinHValue = FMath::Min(Result.MinHValue, HVal);
-	}
-
-	// 检查是否需要滤波：当前加速度是否违反任何约束
-	bool bNeedsFiltering = false;
-	for (int32 k = 0; k < ConstraintNormals.Num(); ++k)
-	{
-		float Violation = FVector::DotProduct(ConstraintNormals[k], NominalAcceleration) - ConstraintBounds[k];
-		if (Violation > 0.0f)
-		{
-			bNeedsFiltering = true;
-			break;
-		}
-	}
-
-	if (!bNeedsFiltering)
-	{
-		// 所有约束已满足，无需滤波
-		return Result;
-	}
-
-	// 求解 QP
-	Result.SafeAcceleration = SolveProjectedGradientQP(
-		NominalAcceleration, ConstraintNormals, ConstraintBounds, Config);
-	Result.bWasFiltered = true;
-
-	// 安全加速度限幅：当 h 严重为负时，限制朝向邻居的加速度分量
-	// 防止投影梯度法在多约束时产生朝向邻居的残余加速度
-	FVector SafeAccel = Result.SafeAcceleration;
-	for (int32 k = 0; k < ConstraintNormals.Num(); ++k)
-	{
-		if (ConstraintBounds[k] < 0.0f) // h < 0: 安全距离已违反
-		{
-			FVector Normal = ConstraintNormals[k].GetSafeNormal();
-			float DotAccel = FVector::DotProduct(SafeAccel, Normal);
-			if (DotAccel > 0.0f)
-			{
-				// 加速度有朝向邻居的分量，强制反转为排斥方向
-				SafeAccel -= DotAccel * Normal;
-			}
-		}
-	}
-	Result.SafeAcceleration = SafeAccel;
-
-	// 统计活跃约束
-	for (int32 k = 0; k < ConstraintNormals.Num(); ++k)
-	{
-		float Violation = FVector::DotProduct(ConstraintNormals[k], NominalAcceleration) - ConstraintBounds[k];
-		if (Violation > 0.0f)
-		{
-			++Result.ActiveConstraintCount;
-		}
-	}
-
-	Result.SolveTimeMs = static_cast<float>((FPlatformTime::Seconds() - StartTime) * 1000.0);
-
-	return Result;
-}
-
 float UCBFQPFilter::ComputeHValue(const FVector& Pi, const FVector& Pj, float DSafe) const
 {
 	float DistSq = FVector::DistSquared(Pi, Pj);
@@ -169,53 +78,6 @@ void UCBFQPFilter::BuildCBFConstraints(
 	}
 }
 
-FVector UCBFQPFilter::SolveProjectedGradientQP(
-	const FVector& NominalAccel,
-	const TArray<FVector>& ConstraintNormals,
-	const TArray<float>& ConstraintBounds,
-	const FCBFQPConfig& Config) const
-{
-	// 投影梯度法求解:
-	// min ||u - u_nominal||²
-	// s.t. A_k · u ≤ b_k  for all k
-	//
-	// 算法: 逐个投影违反约束的超平面，直到收敛
-	// 对于 ≤3 个约束，2-5 次迭代即可收敛
-
-	FVector U = NominalAccel;
-
-	for (int32 Iter = 0; Iter < Config.MaxIterations; ++Iter)
-	{
-		FVector U_Prev = U;
-		bool bAllSatisfied = true;
-
-		for (int32 k = 0; k < ConstraintNormals.Num(); ++k)
-		{
-			float Violation = FVector::DotProduct(ConstraintNormals[k], U) - ConstraintBounds[k];
-
-			if (Violation > 0.0f)
-			{
-				// 约束违反，投影到超平面
-				float NormalNormSq = ConstraintNormals[k].SizeSquared();
-				if (NormalNormSq > KINDA_SMALL_NUMBER)
-				{
-					U = U - (Violation / NormalNormSq) * ConstraintNormals[k];
-				}
-				bAllSatisfied = false;
-			}
-		}
-
-		// 收敛检查
-		if (bAllSatisfied || (U - U_Prev).SizeSquared() < Config.ConvergenceTolerance * Config.ConvergenceTolerance)
-		{
-			break;
-		}
-	}
-
-	return U;
-}
-
-
 // ========== Active-Set QP 求解器 ==========
 
 void UCBFQPFilter::SolveActiveSetQP(
@@ -280,6 +142,27 @@ void UCBFQPFilter::SolveActiveSetQP(
             Z[i],
             -static_cast<double>(Config.MaxAccelerationQP),
             static_cast<double>(Config.MaxAccelerationQP));
+    }
+
+    // Active-Set 要求初始点可行；这里将初值投影到和 Filter 中相同的倾角可执行锥内。
+    if (N >= 3)
+    {
+        constexpr double GravityAcceleration = 980.0;
+        constexpr int32 TiltFacetCount = 16;
+        const double FacetScale = FMath::Cos(PI / static_cast<double>(TiltFacetCount));
+        const double TiltSlope = FMath::Max(
+            0.0,
+            FMath::Tan(FMath::DegreesToRadians(static_cast<double>(Config.MaxTiltAngleDeg)))) * FacetScale;
+
+        Z[2] = FMath::Max(Z[2], -GravityAcceleration);
+        const double MaxHorizontal = TiltSlope * FMath::Max(0.0, GravityAcceleration + Z[2]);
+        const double HorizontalNorm = FMath::Sqrt(Z[0] * Z[0] + Z[1] * Z[1]);
+        if (HorizontalNorm > MaxHorizontal && HorizontalNorm > KINDA_SMALL_NUMBER)
+        {
+            const double Scale = MaxHorizontal / HorizontalNorm;
+            Z[0] *= Scale;
+            Z[1] *= Scale;
+        }
     }
 
     // RowScale: 计算约束行向量的 L2 范数（下限为 1，避免除零）
@@ -878,7 +761,7 @@ void UCBFQPFilter::BuildStaticObstacleConstraints(
 
 // ========== 统一 Filter ==========
 
-FCBFQPResult UCBFQPFilter::FilterV2(
+FCBFQPResult UCBFQPFilter::Filter(
     const FVector& NominalAcceleration,
     const FUAVState& MyState,
     const TArray<FAgentStateSnapshot>& NeighborStates,
@@ -895,9 +778,38 @@ FCBFQPResult UCBFQPFilter::FilterV2(
     TArray<float> AllAFlat;  // 行优先 A 矩阵
     TArray<float> AllBounds; // b 向量
 
+    // 通信邻机已经由机间 CBF 处理。若同一 UAV 又被障碍管理器注册为小型障碍，
+    // 这里按空间重合去重，避免同一物体同时生成静态约束和机间约束。
+    TArray<FObstacleInfo> DedupedStaticObstacles;
+    DedupedStaticObstacles.Reserve(StaticObstacles.Num());
+    for (const FObstacleInfo& Obs : StaticObstacles)
+    {
+        bool bMatchesNeighbor = false;
+        const float ObstacleRadius = Obs.Extents.GetMax();
+        const float MatchDistance = FMath::Max(ObstacleRadius + Obs.SafetyMargin, 150.0f);
+        const bool bUAVSizedObstacle = ObstacleRadius <= Config.DSafe * 0.5f;
+
+        if (bUAVSizedObstacle)
+        {
+            for (const FAgentStateSnapshot& Neighbor : NeighborStates)
+            {
+                if (FVector::DistSquared(Obs.Center, Neighbor.State.Position) <= MatchDistance * MatchDistance)
+                {
+                    bMatchesNeighbor = true;
+                    break;
+                }
+            }
+        }
+
+        if (!bMatchesNeighbor)
+        {
+            DedupedStaticObstacles.Add(Obs);
+        }
+    }
+
     // 1. 静态障碍 HOCBF 约束
     TArray<float> StaticAFlat, StaticBounds;
-    BuildStaticObstacleConstraints(MyState, StaticObstacles, Config, StaticAFlat, StaticBounds);
+    BuildStaticObstacleConstraints(MyState, DedupedStaticObstacles, Config, StaticAFlat, StaticBounds);
     int32 StaticCount = StaticBounds.Num();
     AllAFlat.Append(StaticAFlat);
     AllBounds.Append(StaticBounds);
@@ -956,6 +868,34 @@ FCBFQPResult UCBFQPFilter::FilterV2(
         AllAFlat.Append(RowPosZ, 5); AllBounds.Add(AMax);
         float RowNegZ[] = {0, 0, -1, 0, 0};
         AllAFlat.Append(RowNegZ, 5); AllBounds.Add(AMax);
+    }
+
+    // 5. 执行器倾角锥约束：d·u_xy ≤ tan(θ)·(g + u_z)
+    // 使用 16 边形线性近似，保证 QP 输出可由位置控制器的倾角限制执行。
+    {
+        constexpr float GravityAcceleration = 980.0f; // cm/s²
+        const float MaxTiltRad = FMath::DegreesToRadians(Config.MaxTiltAngleDeg);
+        const float TiltSlope = FMath::Max(0.0f, FMath::Tan(MaxTiltRad));
+
+        // 避免要求负推力方向的倾角锥，和 AccelerationToControl 的重力补偿语义保持一致。
+        float RowMinVertical[] = {0, 0, -1, 0, 0};
+        AllAFlat.Append(RowMinVertical, 5);
+        AllBounds.Add(GravityAcceleration);
+
+        constexpr int32 TiltFacetCount = 16;
+        const float FacetScale = FMath::Cos(PI / static_cast<float>(TiltFacetCount));
+        for (int32 Facet = 0; Facet < TiltFacetCount; ++Facet)
+        {
+            const float Angle = 2.0f * PI * static_cast<float>(Facet) / static_cast<float>(TiltFacetCount);
+            const float Row[] = {
+                FMath::Cos(Angle),
+                FMath::Sin(Angle),
+                -TiltSlope * FacetScale,
+                0.0f,
+                0.0f};
+            AllAFlat.Append(Row, 5);
+            AllBounds.Add(TiltSlope * GravityAcceleration * FacetScale);
+        }
     }
 
     int32 M = AllBounds.Num();

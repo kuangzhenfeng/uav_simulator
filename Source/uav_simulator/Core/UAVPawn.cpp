@@ -839,53 +839,6 @@ void AUAVPawn::UpdateSpeedScaleForObstacles()
 	TrajectoryTrackerComponent->SetSpeedScale(SpeedScale);
 }
 
-FVector AUAVPawn::ApplyEmergencyBraking(const FVector& Acceleration)
-{
-	// 紧急制动仅在近距离真正危险时触发
-	// 阈值设计：基于实际制动距离，附加适度安全裕度
-	float CurrentSpeed = CurrentState.Velocity.Size();
-
-	// 低速时无需紧急制动（<200cm/s = 2m/s）：制动距离极短
-	if (CurrentSpeed < 150.0f)
-		return Acceleration;
-
-	// 距离 > 6m 时无需干预：NMPC 完全可以处理
-	if (CachedNearestObsDist >= 250.0f)
-		return Acceleration;
-
-	// 计算理论制动距离: d = v²/(2a)
-	const float MaxDecel = 400.0f; // cm/s²
-	float BrakingDist = (CurrentSpeed * CurrentSpeed) / (2.0f * MaxDecel);
-
-	// 安全裕度：2.0 倍制动距离 + 1m 基础距离
-	// 此公式确保只有在真正可能碰撞时才触发，不会干扰 NMPC 正常避障
-	float RequiredDist = BrakingDist * 1.1f + 25.0f;
-
-	if (CachedNearestObsDist < RequiredDist)
-	{
-		// 触发紧急制动: 沿速度反方向施加最大减速度
-		FVector VelDir = CurrentState.Velocity.GetSafeNormal();
-		float BrakeIntensity = FMath::Clamp(
-			1.0f - CachedNearestObsDist / RequiredDist, 0.0f, 1.0f);
-
-		FVector BrakeAccel = -VelDir * MaxDecel * BrakeIntensity;
-
-		// 与NMPC加速度混合: 距离越近，制动权重越高
-		float BrakeWeight = FMath::Clamp(
-			(RequiredDist - CachedNearestObsDist) / RequiredDist, 0.0f, 0.8f);
-
-		FVector Result = Acceleration * (1.0f - BrakeWeight) + BrakeAccel * BrakeWeight;
-
-		UE_LOG_THROTTLE(0.5, LogUAVActor, Warning,
-			TEXT("[EmergencyBrake] Dist=%.0fcm Speed=%.0fcm/s BrakeDist=%.0fcm Weight=%.2f"),
-			CachedNearestObsDist, CurrentSpeed, BrakingDist, BrakeWeight);
-
-		return Result;
-	}
-
-	return Acceleration;
-}
-
 FVector AUAVPawn::ApplyDeviationProtection(const FVector& NMPCAcceleration)
 {
 	FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
@@ -1057,37 +1010,67 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			FVector EffectiveAccel = ApplyDeviationProtection(SmoothedNMPCAcceleration);
 			EffectiveAccel = ApplyVelocityClamp(EffectiveAccel);
 
-			// ---- CBF-QP 统一安全滤波 ----
-			bMetricsCBFActiveThisFrame = false;
-			bool bMetricsCBFDegraded = false;
-			FVector CBFAccelSnapshot = FVector::ZeroVector;
-				// 支持 ShadowLog (只记录)/Active (修改控制)/Disabled 模式
+				// ---- CBF-QP 统一安全滤波 ----
+				bMetricsCBFActiveThisFrame = false;
+				FVector CBFAccelSnapshot = FVector::ZeroVector;
+
 				if (CBFQPFilter && CBFQPConfig.Mode != ECBFMode::Disabled)
 				{
-					// 收集障碍物（静态和动态障碍均通过 CBF 处理，动态障碍使用相对速度）
+					// 单机和多机共用同一条安全滤波路径：单机时邻机列表为空。
 					TArray<FObstacleInfo> ObsForCBF;
 					if (ObstacleManagerComponent)
 					{
 						const TArray<FObstacleInfo>& AllObs = ObstacleManagerComponent->GetAllObstacles();
 						for (const FObstacleInfo& Obs : AllObs)
 						{
-							float Dist = NMPCComponent
+							const float Dist = NMPCComponent
 								? NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs)
 								: FVector::Dist(CurrentState.Position, Obs.Center) - Obs.Extents.GetMax();
 							if (Dist < CBFQPConfig.StaticInfluenceDistance)
+							{
 								ObsForCBF.Add(Obs);
+							}
 						}
 					}
 
-					// 收集邻居状态
 					TArray<FAgentStateSnapshot> NeighborStates;
-					if (bIsMultiAgentMode && CommunicationComponent)
+					if (CommunicationComponent)
 					{
 						NeighborStates = CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 6.0f);
 					}
 
-					FCBFQPResult CBFResult = CBFQPFilter->FilterV2(
+					FCBFQPResult CBFResult = CBFQPFilter->Filter(
 						EffectiveAccel, CurrentState, NeighborStates, ObsForCBF, CBFQPConfig);
+
+					// 诊断日志：只在障碍物约束或 slack 介入时输出，避免高频噪声。
+					if (ObsForCBF.Num() > 0 || CBFResult.StaticSlack > 1.0f || CBFResult.AgentSlack > 1.0f)
+					{
+						float NearestObsDist = MAX_FLT;
+						FVector NearestObsDir = FVector::ZeroVector;
+						for (const FObstacleInfo& Obs : ObsForCBF)
+						{
+							const float D = FVector::Dist(CurrentState.Position, Obs.Center) - Obs.Extents.GetMax() - Obs.SafetyMargin;
+							if (D < NearestObsDist)
+							{
+								NearestObsDist = D;
+								NearestObsDir = (CurrentState.Position - Obs.Center).GetSafeNormal();
+							}
+						}
+
+						const float NomMag = EffectiveAccel.Size();
+						const float CBFMag = CBFResult.SafeAcceleration.Size();
+						const float NomToward = (NearestObsDir.IsNormalized() && NomMag > 1.0f)
+							? -FVector::DotProduct(EffectiveAccel, NearestObsDir) : 0.0f;
+						const float CBFToward = (NearestObsDir.IsNormalized() && CBFMag > 1.0f)
+							? -FVector::DotProduct(CBFResult.SafeAcceleration, NearestObsDir) : 0.0f;
+						UE_LOG(LogUAVMetrics, Log,
+							TEXT("[CBF_DETAIL] Agent=%d ObsCount=%d NearDist=%.1f NomAccel=(%.0f,%.0f,%.0f) CBFAccel=(%.0f,%.0f,%.0f) NomToward=%.1f CBFToward=%.1f StaticSlack=%.1f AgentSlack=%.1f Status=%d"),
+							AgentID, ObsForCBF.Num(), NearestObsDist,
+							EffectiveAccel.X, EffectiveAccel.Y, EffectiveAccel.Z,
+							CBFResult.SafeAcceleration.X, CBFResult.SafeAcceleration.Y, CBFResult.SafeAcceleration.Z,
+							NomToward, CBFToward,
+							CBFResult.StaticSlack, CBFResult.AgentSlack, (int32)CBFResult.SolveStatus);
+					}
 
 					if (CBFResult.bWasFiltered || CBFResult.StaticConstraintCount > 0 || CBFResult.AgentConstraintCount > 0)
 					{
@@ -1102,12 +1085,9 @@ void AUAVPawn::UpdateController(float DeltaTime)
 
 					if (CBFQPConfig.Mode == ECBFMode::Active)
 					{
-						// Active 模式: 使用 QP 求解的安全加速度
+						// Active 模式：使用 QP 求解的安全加速度。
 						EffectiveAccel = CBFResult.SafeAcceleration;
-						CBFAccelSnapshot = EffectiveAccel;
 
-						bMetricsCBFDegraded = true;
-						// QP 求解失败时进入降级模式
 						if (CBFResult.SolveStatus == ECBFQPStatus::NumericalFailure ||
 							CBFResult.SolveStatus == ECBFQPStatus::MaxIterations)
 						{
@@ -1117,23 +1097,22 @@ void AUAVPawn::UpdateController(float DeltaTime)
 								CBFResult.MaxConstraintViolation, CBFResult.StaticSlack,
 								CBFResult.StaticConstraintCount, CBFResult.AgentConstraintCount);
 
-							// 降级: 保守制动
-							FVector VelDir = CurrentState.Velocity.GetSafeNormal();
-							float Speed = CurrentState.Velocity.Size();
+							// 降级：QP 失败时只保留统一安全层内的保守制动。
+							const FVector VelDir = CurrentState.Velocity.GetSafeNormal();
+							const float Speed = CurrentState.Velocity.Size();
 							if (Speed > 100.0f)
 							{
-								// 制动幅度不超过模型真实最大加速度能力
 								constexpr float DegradedBrakeAccel = 400.0f;
 								FVector BrakeAccel = -VelDir * DegradedBrakeAccel;
 
-								// 验证制动方向不会朝向最近障碍物
-								// 若制动方向指向障碍物，改为垂直于速度的逃逸方向
 								FVector WorstObsDir = FVector::ZeroVector;
 								float MinDist = MAX_FLT;
 								for (const FObstacleInfo& Obs : ObsForCBF)
 								{
-									// ä½¿ç¨ç»ä¸æç¬¦å·è·ç¦»å½æ°ï¼æ¯æçãæè½¬çååæ±
-								float D = NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs);
+									// 使用统一有符号距离函数，支持球、旋转盒和圆柱。
+									const float D = NMPCComponent
+										? NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs)
+										: FVector::Dist(CurrentState.Position, Obs.Center) - Obs.Extents.GetMax() - Obs.SafetyMargin;
 									if (D < MinDist)
 									{
 										MinDist = D;
@@ -1142,7 +1121,6 @@ void AUAVPawn::UpdateController(float DeltaTime)
 								}
 								if (WorstObsDir.IsNormalized() && FVector::DotProduct(BrakeAccel, -WorstObsDir) > 0.0f)
 								{
-									// 制动会朝向障碍物：改为垂直逃逸
 									FVector EscapeDir = WorstObsDir - VelDir * FVector::DotProduct(WorstObsDir, VelDir);
 									if (EscapeDir.SizeSquared() < 1.0f)
 									{
@@ -1155,124 +1133,17 @@ void AUAVPawn::UpdateController(float DeltaTime)
 							}
 						}
 
-						// 注意：不再对 QP 输出做幅值限幅
-						// QP 已有逐轴约束 |u_i| <= MaxAccelerationQP，事后限幅会破坏 CBF 障碍约束
-					}
-					else // ShadowLog 模式: 记录诊断，但继续执行旧安全链
-					{
-						if (bIsMultiAgentMode && CBFQPFilter && CBFQPConfig.bEnabled)
-						{
-							TArray<FAgentStateSnapshot> LegacyNeighbors =
-								CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 6.0f);
-							if (LegacyNeighbors.Num() > 0)
-							{
-								FCBFQPResult LegacyResult = CBFQPFilter->Filter(
-									EffectiveAccel, CurrentState, LegacyNeighbors, CBFQPConfig);
-								if (LegacyResult.bWasFiltered)
-								{
-									EffectiveAccel = LegacyResult.SafeAcceleration;
-									bMetricsCBFActiveThisFrame = true;
-								}
-							}
-						}
-						EffectiveAccel = ApplyEmergencyBraking(EffectiveAccel);
-						{
-							float AccelMag = EffectiveAccel.Size();
-							if (AccelMag > 800.0f)
-								EffectiveAccel *= 800.0f / AccelMag;
-						}
-						if (bIsMultiAgentMode && CommunicationComponent)
-						{
-							TArray<FAgentStateSnapshot> RepelNeighbors =
-								CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 2.0f);
-							for (const FAgentStateSnapshot& Neighbor : RepelNeighbors)
-							{
-								float Dist = FVector::Dist(CurrentState.Position, Neighbor.State.Position);
-								float RepelThreshold = CBFQPConfig.DSafe;
-								if (Dist < RepelThreshold && Dist > 1.0f)
-								{
-									FVector RepelDir = (CurrentState.Position - Neighbor.State.Position).GetSafeNormal();
-									float Ratio = 1.0f - (Dist / RepelThreshold);
-									float RepelStrength = FMath::Lerp(400.0f, 2000.0f, Ratio);
-									EffectiveAccel += RepelDir * RepelStrength;
-									FVector ToNeighbor = (Neighbor.State.Position - CurrentState.Position).GetSafeNormal();
-									float VelToward = FVector::DotProduct(CurrentState.Velocity, ToNeighbor);
-									if (VelToward > 0.0f)
-									{
-										float DampStrength = FMath::Lerp(200.0f, 800.0f, Ratio);
-										EffectiveAccel -= ToNeighbor * FMath::Min(VelToward * 2.0f, DampStrength);
-									}
-								}
-							}
-						}
-					}
-				}
-				else
-				{
-					// 旧安全链 (Mode == Disabled 时使用)
-					if (bIsMultiAgentMode && CBFQPFilter && CBFQPConfig.bEnabled)
-					{
-						TArray<FAgentStateSnapshot> NeighborStates =
-							CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 6.0f);
-						if (NeighborStates.Num() > 0)
-						{
-							FCBFQPResult CBFResult = CBFQPFilter->Filter(
-								EffectiveAccel, CurrentState, NeighborStates, CBFQPConfig);
-							if (CBFResult.bWasFiltered)
-							{
-								UE_LOG(LogUAVMultiAgent, Log,
-									TEXT("[CBF-QP] Agent %d: filtered accel, minH=%.0f"),
-									AgentID, CBFResult.MinHValue);
-							}
-							EffectiveAccel = CBFResult.SafeAcceleration;
-						}
-					}
+						// 记录统一安全层的最终输出；degraded 制动属于安全层内部，不应触发 AfterCBF 完整性告警。
+						CBFAccelSnapshot = EffectiveAccel;
 
-					// 紧急制动层（旧安全链）
-					EffectiveAccel = ApplyEmergencyBraking(EffectiveAccel);
-
-					// 加速度幅值限制（旧安全链）
-					{
-						float AccelMag = EffectiveAccel.Size();
-						const float MaxAccelCmd = 800.0f;
-						if (AccelMag > MaxAccelCmd)
-							EffectiveAccel *= MaxAccelCmd / AccelMag;
-					}
-
-					// 紧急排斥（旧安全链）
-					if (bIsMultiAgentMode && CommunicationComponent)
-					{
-						TArray<FAgentStateSnapshot> Neighbors =
-							CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 2.0f);
-						for (const FAgentStateSnapshot& Neighbor : Neighbors)
-						{
-							float Dist = FVector::Dist(CurrentState.Position, Neighbor.State.Position);
-							float RepelThreshold = CBFQPConfig.DSafe;
-							if (Dist < RepelThreshold && Dist > 1.0f)
-							{
-								FVector RepelDir = (CurrentState.Position - Neighbor.State.Position).GetSafeNormal();
-								float Ratio = 1.0f - (Dist / RepelThreshold);
-								float RepelStrength = FMath::Lerp(400.0f, 2000.0f, Ratio);
-								EffectiveAccel += RepelDir * RepelStrength;
-
-									FVector ToNeighbor = (Neighbor.State.Position - CurrentState.Position).GetSafeNormal();
-									float VelToward = FVector::DotProduct(CurrentState.Velocity, ToNeighbor);
-									if (VelToward > 0.0f)
-									{
-										float DampStrength = FMath::Lerp(200.0f, 800.0f, Ratio);
-										EffectiveAccel -= ToNeighbor * FMath::Min(VelToward * 2.0f, DampStrength);
-									}
-							UE_LOG_THROTTLE(0.5, LogUAVMultiAgent, Warning,
-								TEXT("[CBF-QP] Agent %d: EMERGENCY repel from %d, Dist=%.0fcm, Strength=%.0f"),
-								AgentID, Neighbor.AgentID, Dist, RepelStrength);
-							}
-						}
+						// 注意：不再对 QP 输出做幅值限幅。
+						// QP 已有逐轴约束 |u_i| <= MaxAccelerationQP，事后限幅会破坏 CBF 障碍约束。
 					}
 				}
 
 				// 计算期望角加速度（用于前馈控制）
-			FRotator DesiredAngularAccel = ComputeAngularAccelerationFromLinearAccel(
-				EffectiveAccel, CurrentState.Rotation.Yaw);
+				FRotator DesiredAngularAccel = ComputeAngularAccelerationFromLinearAccel(
+					EffectiveAccel, CurrentState.Rotation.Yaw);
 
 			// CBF 完整性检查：Active 模式下，确保 CBF 输出未被意外修改
 			if (CBFQPConfig.Mode == ECBFMode::Active && bMetricsCBFActiveThisFrame)

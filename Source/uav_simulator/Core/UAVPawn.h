@@ -392,9 +392,6 @@ private:
 	FVector ApplyHardLimitCorrection(const FVector& Acceleration, float CrossTrackDev);
 	void UpdateSpeedScaleForObstacles();
 
-	// 紧急制动
-	FVector ApplyEmergencyBraking(const FVector& Acceleration);
-
 	// 速度钳位
 	FVector ApplyVelocityClamp(const FVector& Acceleration);
 
