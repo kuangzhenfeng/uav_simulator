@@ -235,6 +235,12 @@ void UCBFQPFilter::SolveActiveSetQP(
     OutMaxViolation = MAX_FLT;
     OutIterations = 0;
 
+    if (N <= 0 || M < 0 || H.Num() != N * N || G.Num() != N ||
+        A.Num() != M * N || B.Num() != M)
+    {
+        return;
+    }
+
     // 无约束: 直接求解对角 Hessian
     if (M == 0)
     {
@@ -246,95 +252,436 @@ void UCBFQPFilter::SolveActiveSetQP(
         return;
     }
 
-    // 初始解: 无约束最优 z0 = H^{-1} * (-g)，对角 Hessian
-    // 注意: 不直接用上帧解覆盖，否则约束可行时立即返回旧解，
-    // 忽略新标称加速度方向（P1 热启动冻结修复）
+    const double FeasibilityTolerance =
+        FMath::Max(static_cast<double>(Config.QPKKTTolerance), 1e-6);
+    const double ActiveTolerance = FeasibilityTolerance * 10.0;
+    const double DirectionTolerance = 1e-8;
+    const double DualTolerance = 1e-7;
+
+    // 从无约束最优解 z* = -H⁻¹g 出发
+    TArray<double> Z;
+    Z.SetNumZeroed(N);
+
+    // 构造无约束最优解
     for (int32 i = 0; i < N; ++i)
-        OutZ[i] = (H[i * N + i] > KINDA_SMALL_NUMBER) ? -G[i] / H[i * N + i] : 0.0f;
-
-    // 使用逐约束循环投影（Dykstra-like），直到所有约束满足
-    // 对角 Hessian 加权投影: z_i = z_i - (a_k·z - b_k) / (a_k' · diag(H)^{-1} . a_k) * (1/H_ii) * a_k_i
-    // 简化为: z = z - alpha * a_k, 其中 alpha = violation / (sum_j a_k_j^2 / H_jj)
-    int32 MaxIter = Config.QPMaxIterations;
-    bool bConverged = false;
-
-    for (int32 Iter = 0; Iter < MaxIter; ++Iter)
     {
-        OutIterations = Iter + 1;
+        const double Hii = H[i * N + i];
+        if (Hii <= KINDA_SMALL_NUMBER)
+        {
+            // Hessian 对角线退化 → 无唯一最优解，放弃
+            return;
+        }
+        Z[i] = -static_cast<double>(G[i]) / Hii;
+    }
+    // 将前 3 个分量（ux, uy, uz）钳位到执行器边界，保证物理可行
+    for (int32 i = 0; i < FMath::Min(N, 3); ++i)
+    {
+        Z[i] = FMath::Clamp(
+            Z[i],
+            -static_cast<double>(Config.MaxAccelerationQP),
+            static_cast<double>(Config.MaxAccelerationQP));
+    }
 
-        // 找最大违反约束
-        float MaxViolation = -MAX_FLT;
-        int32 WorstK = -1;
+    // RowScale: 计算约束行向量的 L2 范数（下限为 1，避免除零）
+    // 用于将约束残差归一化，使得不同量纲的约束具有可比性
+    auto RowScale = [&](int32 ConstraintIndex)
+    {
+        double NormSq = 0.0;
+        for (int32 j = 0; j < N; ++j)
+        {
+            const double Value = A[ConstraintIndex * N + j];
+            NormSq += Value * Value;
+        }
+        return FMath::Max(1.0, FMath::Sqrt(NormSq));
+    };
 
+    // ConstraintValue: 计算约束 k 在 Point 处的值 = A_k·Point - B_k
+    // > 0 表示违反约束（A·z ≤ b），= 0 表示恰好激活
+    auto ConstraintValue = [&](int32 ConstraintIndex, const TArray<double>& Point)
+    {
+        double Value = -static_cast<double>(B[ConstraintIndex]);
+        for (int32 j = 0; j < N; ++j)
+        {
+            Value += static_cast<double>(A[ConstraintIndex * N + j]) * Point[j];
+        }
+        return Value;
+    };
+
+    // ExpandSlackForFeasibility: 对指定 slack 变量（z[3]=ξ_static 或 z[4]=ξ_agent），
+    // 遍历所有使用该 slack 的约束，计算使所有约束满足所需的最小 slack 值。
+    // 前提：slack 在约束中系数为负（如 -1），即 A_k = [..., -1, ...] 意味着
+    //   A_k·z ≤ B_k  ⟹  ... - ξ_s ≤ B_k  ⟹  ξ_s ≥ (... - B_k) / 1
+    // 当 SlackCoeff >= 0（不使用此 slack 或方向错误）时跳过。
+    auto ExpandSlackForFeasibility = [&](int32 SlackIndex)
+    {
+        double RequiredSlack = FMath::Max(0.0, Z[SlackIndex]);
         for (int32 k = 0; k < M; ++k)
         {
-            float AZ = 0.0f;
-            for (int32 j = 0; j < N; ++j)
-                AZ += A[k * N + j] * OutZ[j];
-            float Viol = AZ - B[k];
-            if (Viol > MaxViolation)
+            const double SlackCoeff = A[k * N + SlackIndex];
+            if (SlackCoeff >= -KINDA_SMALL_NUMBER)
             {
-                MaxViolation = Viol;
-                WorstK = k;
+                continue;
             }
+
+            double ValueWithoutSlack = -static_cast<double>(B[k]);
+            for (int32 j = 0; j < N; ++j)
+            {
+                if (j != SlackIndex)
+                {
+                    ValueWithoutSlack += static_cast<double>(A[k * N + j]) * Z[j];
+                }
+            }
+            RequiredSlack = FMath::Max(
+                RequiredSlack, ValueWithoutSlack / -SlackCoeff);
         }
+        Z[SlackIndex] = RequiredSlack;
+    };
 
-        OutMaxViolation = FMath::Max(0.0f, MaxViolation);
+    // 如果 N >= 5（即决策变量含 ξ_static=z[3] 和 ξ_agent=z[4]），
+    // 通过扩展 slack 变量保证初始点可行
+    if (N >= 5)
+    {
+        Z[3] = 0.0;
+        Z[4] = 0.0;
+        ExpandSlackForFeasibility(3);
+        ExpandSlackForFeasibility(4);
+    }
 
-        if (MaxViolation < Config.QPKKTTolerance)
+    // 初始可行性检查：归一化残差超过容限时直接返回失败
+    // （正常调用路径下，slack 扩展应保证通过此检查）
+    double InitialMaxNormalizedViolation = 0.0;
+    for (int32 k = 0; k < M; ++k)
+    {
+        InitialMaxNormalizedViolation = FMath::Max(
+            InitialMaxNormalizedViolation,
+            ConstraintValue(k, Z) / RowScale(k));
+    }
+    if (InitialMaxNormalizedViolation > FeasibilityTolerance)
+    {
+        return;
+    }
+
+    TArray<int32> ActiveSet;
+
+    auto ContainsConstraint = [&](int32 ConstraintIndex)
+    {
+        return ActiveSet.Contains(ConstraintIndex);
+    };
+
+    // IsLinearlyIndependent: 使用 Modified Gram-Schmidt (MGS) 检查候选约束行
+    // 是否与当前活跃集中已有约束线性无关。RowScale 归一化后进行正交化，
+    // 残差范数 <= 1e-12 时判定为线性相关，拒绝加入活跃集。
+    auto IsLinearlyIndependent = [&](int32 CandidateIndex)
+    {
+        TArray<TArray<double>> Basis;
+        Basis.Reserve(N);
+
+        auto AddRowToBasis = [&](int32 ConstraintIndex)
         {
-            bConverged = true;
-            break;
+            TArray<double> Vector;
+            Vector.SetNumZeroed(N);
+            const double Scale = RowScale(ConstraintIndex);
+            for (int32 j = 0; j < N; ++j)
+            {
+                Vector[j] = static_cast<double>(A[ConstraintIndex * N + j]) / Scale;
+            }
+
+            for (const TArray<double>& BasisVector : Basis)
+            {
+                double Projection = 0.0;
+                for (int32 j = 0; j < N; ++j)
+                {
+                    Projection += Vector[j] * BasisVector[j];
+                }
+                for (int32 j = 0; j < N; ++j)
+                {
+                    Vector[j] -= Projection * BasisVector[j];
+                }
+            }
+
+            double NormSq = 0.0;
+            for (double Value : Vector)
+            {
+                NormSq += Value * Value;
+            }
+            if (NormSq <= 1e-12)
+            {
+                return false;
+            }
+
+            const double InvNorm = 1.0 / FMath::Sqrt(NormSq);
+            for (double& Value : Vector)
+            {
+                Value *= InvNorm;
+            }
+            Basis.Add(MoveTemp(Vector));
+            return true;
+        };
+
+        for (int32 ConstraintIndex : ActiveSet)
+        {
+            AddRowToBasis(ConstraintIndex);
         }
+        return AddRowToBasis(CandidateIndex);
+    };
 
-        if (WorstK < 0)
+    // 初始化活跃集：找到所有在初始点处"近似激活"（归一化残差 ≈ 0）的约束，
+    // 跳过线性相关的约束，活跃集大小不超过 N（满秩）。
+    for (int32 k = 0; k < M && ActiveSet.Num() < N; ++k)
+    {
+        const double NormalizedResidual = ConstraintValue(k, Z) / RowScale(k);
+        if (FMath::Abs(NormalizedResidual) <= ActiveTolerance &&
+            IsLinearlyIndependent(k))
         {
-            bConverged = true;
-            break;
-        }
-
-        // Hessian 加权投影到约束 WorstK 的超平面
-        // alpha = (a_k . z - b_k) / (sum_j a_k_j^2 / H_jj)
-        float Denom = 0.0f;
-        float Violation = 0.0f;
-        for (int32 j = 0; j < N; ++j)
-        {
-            float Akj = A[WorstK * N + j];
-            float Hjj = H[j * N + j];
-            Denom += Akj * Akj / FMath::Max(Hjj, KINDA_SMALL_NUMBER);
-            Violation += Akj * OutZ[j];
-        }
-        Violation -= B[WorstK];
-
-        if (Denom < KINDA_SMALL_NUMBER)
-            continue;
-
-        float Alpha = Violation / Denom;
-
-        for (int32 j = 0; j < N; ++j)
-        {
-            float Akj = A[WorstK * N + j];
-            float Hjj = H[j * N + j];
-            OutZ[j] -= Alpha * Akj / FMath::Max(Hjj, KINDA_SMALL_NUMBER);
-        }
-
-        // NaN 检查
-        bool bHasNaN = false;
-        for (int32 i = 0; i < N; ++i)
-        {
-            if (!FMath::IsFinite(OutZ[i])) { bHasNaN = true; break; }
-        }
-        if (bHasNaN)
-        {
-            OutStatus = ECBFQPStatus::NumericalFailure;
-            for (int32 i = 0; i < N; ++i)
-                OutZ[i] = (H[i * N + i] > KINDA_SMALL_NUMBER) ? -G[i] / H[i * N + i] : 0.0f;
-            return;
+            ActiveSet.Add(k);
         }
     }
 
-    // 设置求解状态
-    if (bConverged)
+    // SolveKKT: 求解 KKT 系统（活跃集固定的等式约束 QP）
+    // 增广矩阵布局 (Dimension × (Dimension+1))：
+    //   [  H   A_c^T | -g ]   其中 A_c = 活跃约束矩阵（行归一化）
+    //   [ A_c    0   |  0 ]   g = H·z + G 是当前梯度
+    // 使用 Gauss-Jordan 全消元（带部分主元选取）求解方向 d 和乘子 λ。
+    auto SolveKKT = [&](TArray<double>& OutDirection, TArray<double>& OutMultipliers)
+    {
+        const int32 ActiveCount = ActiveSet.Num();
+        const int32 Dimension = N + ActiveCount;
+        const int32 AugmentedStride = Dimension + 1;
+        TArray<double> Augmented;
+        Augmented.SetNumZeroed(Dimension * AugmentedStride);
+
+        TArray<double> Gradient;
+        Gradient.SetNumZeroed(N);
+        for (int32 i = 0; i < N; ++i)
+        {
+            Gradient[i] = G[i];
+            for (int32 j = 0; j < N; ++j)
+            {
+                Gradient[i] += static_cast<double>(H[i * N + j]) * Z[j];
+                Augmented[i * AugmentedStride + j] = H[i * N + j];
+            }
+            Augmented[i * AugmentedStride + Dimension] = -Gradient[i];
+        }
+
+        for (int32 ActiveIndex = 0; ActiveIndex < ActiveCount; ++ActiveIndex)
+        {
+            const int32 ConstraintIndex = ActiveSet[ActiveIndex];
+            const double Scale = RowScale(ConstraintIndex);
+            for (int32 j = 0; j < N; ++j)
+            {
+                const double Value =
+                    static_cast<double>(A[ConstraintIndex * N + j]) / Scale;
+                Augmented[j * AugmentedStride + N + ActiveIndex] = Value;
+                Augmented[(N + ActiveIndex) * AugmentedStride + j] = Value;
+            }
+        }
+
+        for (int32 Column = 0; Column < Dimension; ++Column)
+        {
+            int32 PivotRow = Column;
+            double PivotMagnitude =
+                FMath::Abs(Augmented[Column * AugmentedStride + Column]);
+            for (int32 Row = Column + 1; Row < Dimension; ++Row)
+            {
+                const double CandidateMagnitude =
+                    FMath::Abs(Augmented[Row * AugmentedStride + Column]);
+                if (CandidateMagnitude > PivotMagnitude)
+                {
+                    PivotMagnitude = CandidateMagnitude;
+                    PivotRow = Row;
+                }
+            }
+            if (PivotMagnitude <= 1e-10)
+            {
+                return false;
+            }
+
+            if (PivotRow != Column)
+            {
+                for (int32 Entry = Column; Entry <= Dimension; ++Entry)
+                {
+                    Swap(
+                        Augmented[Column * AugmentedStride + Entry],
+                        Augmented[PivotRow * AugmentedStride + Entry]);
+                }
+            }
+
+            const double Pivot = Augmented[Column * AugmentedStride + Column];
+            for (int32 Entry = Column; Entry <= Dimension; ++Entry)
+            {
+                Augmented[Column * AugmentedStride + Entry] /= Pivot;
+            }
+
+            for (int32 Row = 0; Row < Dimension; ++Row)
+            {
+                if (Row == Column)
+                {
+                    continue;
+                }
+                const double Factor = Augmented[Row * AugmentedStride + Column];
+                if (FMath::Abs(Factor) <= 1e-15)
+                {
+                    continue;
+                }
+                for (int32 Entry = Column; Entry <= Dimension; ++Entry)
+                {
+                    Augmented[Row * AugmentedStride + Entry] -=
+                        Factor * Augmented[Column * AugmentedStride + Entry];
+                }
+            }
+        }
+
+        OutDirection.SetNumZeroed(N);
+        for (int32 i = 0; i < N; ++i)
+        {
+            OutDirection[i] = Augmented[i * AugmentedStride + Dimension];
+        }
+        OutMultipliers.SetNumZeroed(ActiveCount);
+        for (int32 i = 0; i < ActiveCount; ++i)
+        {
+            OutMultipliers[i] =
+                Augmented[(N + i) * AugmentedStride + Dimension];
+        }
+        return true;
+    };
+
+    // Active-Set 主迭代循环
+    // 每轮：求解 KKT → 检查方向范数 → 非零时计算步长并前进 → 零时检查对偶可行性
+    bool bConverged = false;
+    TArray<double> Direction;
+    TArray<double> Multipliers;
+    const int32 MaxIterations = FMath::Max(Config.QPMaxIterations, 1);
+
+    for (int32 Iter = 0; Iter < MaxIterations; ++Iter)
+    {
+        OutIterations = Iter + 1;
+
+        // KKT 奇异时移除最后加入的约束，重试
+        if (!SolveKKT(Direction, Multipliers))
+        {
+            if (ActiveSet.Num() > 0)
+            {
+                ActiveSet.Pop(EAllowShrinking::No);
+                continue;
+            }
+            return;
+        }
+
+        double DirectionNormSq = 0.0;
+        for (double Value : Direction)
+        {
+            DirectionNormSq += Value * Value;
+        }
+
+        // 方向 d ≈ 0：当前点是活跃集约束下的驻点
+        if (DirectionNormSq <= DirectionTolerance * DirectionTolerance)
+        {
+            // 对偶可行性检查：所有活跃约束的乘子应 >= 0（不等式约束的 KKT 条件）
+            // 找到最违反的乘子（最负），若不存在则收敛
+            int32 RemoveIndex = INDEX_NONE;
+            double MostNegativeMultiplier = -DualTolerance;
+            for (int32 i = 0; i < Multipliers.Num(); ++i)
+            {
+                if (Multipliers[i] < MostNegativeMultiplier)
+                {
+                    MostNegativeMultiplier = Multipliers[i];
+                    RemoveIndex = i;
+                }
+            }
+
+            if (RemoveIndex == INDEX_NONE)
+            {
+                // 所有乘子 >= 0：KKT 条件完全满足，最优解已找到
+                bConverged = true;
+                break;
+            }
+
+            // 移除最违反的约束，释放自由度
+            ActiveSet.RemoveAt(RemoveIndex, 1, EAllowShrinking::No);
+            continue;
+        }
+
+        // 非零方向：计算最大可行步长（ratio test）
+        // Step = min over inactive k: -ConstraintValue(k, Z) / (A_k · d)
+        // 找到使新约束首次被违反的步长
+        double Step = 1.0;
+        int32 BlockingConstraint = INDEX_NONE;
+        for (int32 k = 0; k < M; ++k)
+        {
+            if (ContainsConstraint(k))
+            {
+                continue;
+            }
+
+            // A_k · d > 0 时沿 d 方向会违反约束 k，需要计算最大可行步长
+            double DirectionalDerivative = 0.0;
+            for (int32 j = 0; j < N; ++j)
+            {
+                DirectionalDerivative +=
+                    static_cast<double>(A[k * N + j]) * Direction[j];
+            }
+            if (DirectionalDerivative <= 1e-12 * RowScale(k))
+            {
+                continue;
+            }
+
+            // Margin = -ConstraintValue(k, Z) = B_k - A_k·Z（到约束边界的余量）
+            const double Margin = -ConstraintValue(k, Z);
+            const double CandidateStep = Margin / DirectionalDerivative;
+            if (CandidateStep < Step)
+            {
+                Step = FMath::Max(0.0, CandidateStep);
+                BlockingConstraint = k;
+            }
+        }
+
+        // 沿方向前进 Step 步
+        for (int32 j = 0; j < N; ++j)
+        {
+            Z[j] += Step * Direction[j];
+        }
+
+        // 将 blocking constraint 加入活跃集（如果线性无关且未满秩）
+        if (BlockingConstraint != INDEX_NONE &&
+            ActiveSet.Num() < N &&
+            IsLinearlyIndependent(BlockingConstraint))
+        {
+            ActiveSet.Add(BlockingConstraint);
+        }
+    }
+
+    // 将 double 解转换为 float 输出，同时检查 NaN/Inf
+    OutZ.SetNumZeroed(N);
+    for (int32 i = 0; i < N; ++i)
+    {
+        if (!FMath::IsFinite(Z[i]))
+        {
+            return;
+        }
+        OutZ[i] = static_cast<float>(Z[i]);
+    }
+
+    // 计算最终约束违反量（原始尺度用于诊断，归一化尺度用于收敛判定）
+    double MaxNormalizedViolation = 0.0;
+    OutMaxViolation = 0.0f;
+    for (int32 k = 0; k < M; ++k)
+    {
+        double RawViolation = -static_cast<double>(B[k]);
+        for (int32 j = 0; j < N; ++j)
+        {
+            RawViolation +=
+                static_cast<double>(A[k * N + j]) * OutZ[j];
+        }
+        OutMaxViolation = FMath::Max(
+            OutMaxViolation, static_cast<float>(RawViolation));
+        MaxNormalizedViolation = FMath::Max(
+            MaxNormalizedViolation, RawViolation / RowScale(k));
+    }
+    // 约束违反量截断到 0（解满足约束时无违反）
+    OutMaxViolation = FMath::Max(0.0f, OutMaxViolation);
+
+    // 状态判定：收敛且可行 → Solved/SolvedWithSlack，否则 → MaxIterations
+    if (bConverged && MaxNormalizedViolation <= FeasibilityTolerance)
     {
         bool bHasSlack = false;
         if (N >= 5)
@@ -349,16 +696,28 @@ void UCBFQPFilter::SolveActiveSetQP(
         OutStatus = ECBFQPStatus::MaxIterations;
     }
 
-    // 计算 KKT 残差: ||H·z + g|| (梯度范数)
-    OutKKTResidual = 0.0f;
+    // 驻点残差: ‖∇_z L‖ = ‖Hz + g + Σ λ_k · A_k / RowScale_k‖
+    // 使用活跃集乘子和原始约束行（带 RowScale 归一化）计算，
+    // 比单纯用梯度范数更准确反映 KKT 条件的满足程度。
+    double StationaritySq = 0.0;
     for (int32 i = 0; i < N; ++i)
     {
-        float Grad_i = G[i];
+        double Gradient = G[i];
         for (int32 j = 0; j < N; ++j)
-            Grad_i += H[i * N + j] * OutZ[j];
-        OutKKTResidual += Grad_i * Grad_i;
+        {
+            Gradient += static_cast<double>(H[i * N + j]) * OutZ[j];
+        }
+        for (int32 ActiveIndex = 0; ActiveIndex < ActiveSet.Num() &&
+            ActiveIndex < Multipliers.Num(); ++ActiveIndex)
+        {
+            const int32 ConstraintIndex = ActiveSet[ActiveIndex];
+            Gradient += Multipliers[ActiveIndex] *
+                static_cast<double>(A[ConstraintIndex * N + i]) /
+                RowScale(ConstraintIndex);
+        }
+        StationaritySq += Gradient * Gradient;
     }
-    OutKKTResidual = FMath::Sqrt(OutKKTResidual);
+    OutKKTResidual = static_cast<float>(FMath::Sqrt(StationaritySq));
 }
 
 // ========== 静态障碍 HOCBF 约束 ==========
@@ -673,4 +1032,3 @@ FCBFQPResult UCBFQPFilter::FilterV2(
 
     return Result;
 }
-

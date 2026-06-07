@@ -73,6 +73,11 @@ void AMultiAgentGameMode::Tick(float DeltaTime)
 		TaskMonitorInstance->Update(DeltaTime, GetAllAgentStates());
 	}
 
+	// 每 5s 输出任务进度汇总
+	UE_LOG_THROTTLE(5.0, LogUAVMetrics, Log,
+		TEXT("[TASK_SUMMARY] Completed=%d Total=%d"),
+		TaskMonitorInstance ? TaskMonitorInstance->GetCompletedTaskCount() : 0,
+		TaskMonitorInstance ? TaskMonitorInstance->GetTotalTaskCount() : 0);
 }
 
 int32 AMultiAgentGameMode::RegisterAgent(AUAVPawn* Agent)

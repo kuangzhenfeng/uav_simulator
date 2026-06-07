@@ -157,6 +157,9 @@ void AUAVPawn::BeginPlay()
 		PositionControllerComponent->SingleMotorMaxThrust = Spec.MaxThrust;
 		UE_LOG(LogUAVActor, Log, TEXT("[Model] %s | Mass=%.1fkg | MaxThrust=%.1fN | MaxVel=%.0fcm/s"),
 			*Spec.ModelName, Spec.Mass, Spec.MaxThrust, Spec.MaxVelocity);
+
+		// 缓存 MaxVelocity 用于速度比例指标
+		MetricsMaxVelocity = Spec.MaxVelocity;
 	}
 
 	// 接线PID调参组件
@@ -307,6 +310,12 @@ void AUAVPawn::Tick(float DeltaTime)
 			SetActorRotation(CurrentState.Rotation);
 		}
 		Remaining -= Step;
+	}
+
+	// 更新仿真指标
+	if (FlightState != EFlightState::Crashed)
+	{
+		UpdateMetricsLog(DeltaTime);
 	}
 
 	// 更新稳定性评分
@@ -597,6 +606,14 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 	bHasCachedNMPC = true;
 	bHasCachedNMPCTarget = true;
 
+	// 收集 NMPC 求解时间用于分位数统计
+	MetricsSolveTimes.Add(Result.Diagnostics.SolveTimeMs);
+	if (MetricsSolveTimes.Num() > 1000) { MetricsSolveTimes.RemoveAt(0); }
+
+	// Stuck 事件计数
+	if (bNMPCStuck && !bMetricsPrevStuck) { MetricsNMPCStuckCount++; }
+	bMetricsPrevStuck = bNMPCStuck;
+
 	// 缓存最近障碍物距离
 	CachedNearestObsDist = MAX_FLT;
 	bool bInsideObstacle = false;
@@ -691,13 +708,16 @@ void AUAVPawn::HandleStuckEscape(
 FVector AUAVPawn::LimitLateralAcceleration(const FVector& Acceleration)
 {
 	FVector Result = Acceleration;
+	// 基础最大横向加速度限制（cm/s²）
 	float MaxLateralAccel = 300.0f;
 
+	// 近障碍时放宽横向限制（400），允许更积极的侧向避障
 	if (CachedNearestObsDist < NMPCComponent->Config.Obstacle.ObstacleSafeDistance * 2.0f)
 	{
 		MaxLateralAccel = 400.0f;
 	}
 
+	// 限制 Y（侧向）和 Z（高度）方向的加速度幅度，保持前进方向不受限
 	float LateralMag = FMath::Sqrt(Result.Y * Result.Y + Result.Z * Result.Z);
 	if (LateralMag > MaxLateralAccel)
 	{
@@ -709,16 +729,19 @@ FVector AUAVPawn::LimitLateralAcceleration(const FVector& Acceleration)
 	return Result;
 }
 
+// PD 横向修正：当轨迹跟踪有横向偏差时，叠加 P+D 校正
 FVector AUAVPawn::ApplyPDCorrection(const FVector& Acceleration)
 {
 	FVector Result = Acceleration;
 	FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
 
+	// 计算横向位置误差（Y: 左右，Z: 高度）
 	float YError = DesiredPos.Y - CurrentState.Position.Y;
 	float ZError = DesiredPos.Z - CurrentState.Position.Z;
 
 	constexpr float Kp = 1.2f;
 	constexpr float Kd = 1.5f;
+	// 速度反馈：抑制横向振荡
 	float YVelError = -CurrentState.Velocity.Y;
 	float ZVelError = -CurrentState.Velocity.Z;
 
@@ -728,6 +751,7 @@ FVector AUAVPawn::ApplyPDCorrection(const FVector& Acceleration)
 	return Result;
 }
 
+// 硬限制修正：偏差超过阈值时，用固定强度加速度强制拉回
 FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float CrossTrackDev)
 {
 	FVector Result = Acceleration;
@@ -736,6 +760,7 @@ FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float Cr
 	float YError = DesiredPos.Y - CurrentState.Position.Y;
 	float ZError = DesiredPos.Z - CurrentState.Position.Z;
 
+	// 基础偏差硬限制 120cm (1.2m)，近障碍时适度放宽到 130cm
 	float HardLimit = 120.0f;
 	if (CachedNearestObsDist < NMPCComponent->Config.Obstacle.ObstacleSafeDistance * 3.0f)
 	{
@@ -744,6 +769,7 @@ FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float Cr
 		HardLimit = FMath::Lerp(120.0f, 130.0f, ProximityRatio);
 	}
 
+	// 偏差超过硬限制时，用固定强度（600 cm/s²）+ 速度阻尼强制拉回
 	if (CrossTrackDev > HardLimit)
 	{
 		FVector CorrDir(0.0f, YError, ZError);
@@ -867,6 +893,9 @@ FVector AUAVPawn::ApplyDeviationProtection(const FVector& NMPCAcceleration)
 	float YError = DesiredPos.Y - CurrentState.Position.Y;
 	float ZError = DesiredPos.Z - CurrentState.Position.Z;
 	float CrossTrackDev = FMath::Sqrt(YError * YError + ZError * ZError);
+
+	// 持久化横向偏差用于指标统计
+	MetricsMaxCrossTrackDev = FMath::Max(MetricsMaxCrossTrackDev, CrossTrackDev);
 
 	// 仅在极端偏差时记录警告（阈值提高到 5m）
 	if (CrossTrackDev > 500.0f)
@@ -1029,6 +1058,9 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			EffectiveAccel = ApplyVelocityClamp(EffectiveAccel);
 
 			// ---- CBF-QP 统一安全滤波 ----
+			bMetricsCBFActiveThisFrame = false;
+			bool bMetricsCBFDegraded = false;
+			FVector CBFAccelSnapshot = FVector::ZeroVector;
 				// 支持 ShadowLog (只记录)/Active (修改控制)/Disabled 模式
 				if (CBFQPFilter && CBFQPConfig.Mode != ECBFMode::Disabled)
 				{
@@ -1060,26 +1092,30 @@ void AUAVPawn::UpdateController(float DeltaTime)
 					if (CBFResult.bWasFiltered || CBFResult.StaticConstraintCount > 0 || CBFResult.AgentConstraintCount > 0)
 					{
 						UE_LOG(LogUAVMetrics, Log,
-							TEXT("[CBF_SOLVE] Agent=%d MinH=%.0f Residual=%.4f StaticSlack=%.4f AgentSlack=%.4f Active=%d Status=%d Ms=%.2f"),
+							TEXT("[CBF_SOLVE] Agent=%d MinH=%.0f Residual=%.4f Violation=%.4f StaticSlack=%.4f AgentSlack=%.4f Active=%d Status=%d Ms=%.2f"),
 							AgentID, CBFResult.MinHValue, CBFResult.KKTResidual,
-							CBFResult.StaticSlack, CBFResult.AgentSlack,
+							CBFResult.MaxConstraintViolation, CBFResult.StaticSlack, CBFResult.AgentSlack,
 							CBFResult.ActiveConstraintCount, (int32)CBFResult.SolveStatus,
 							CBFResult.SolveTimeMs);
+						bMetricsCBFActiveThisFrame = true;
 					}
 
 					if (CBFQPConfig.Mode == ECBFMode::Active)
 					{
 						// Active 模式: 使用 QP 求解的安全加速度
 						EffectiveAccel = CBFResult.SafeAcceleration;
+						CBFAccelSnapshot = EffectiveAccel;
 
+						bMetricsCBFDegraded = true;
 						// QP 求解失败时进入降级模式
 						if (CBFResult.SolveStatus == ECBFQPStatus::NumericalFailure ||
 							CBFResult.SolveStatus == ECBFQPStatus::MaxIterations)
 						{
 							UE_LOG_THROTTLE(1.0, LogUAVActor, Warning,
-								TEXT("[CBF-QP] Agent %d: QP degraded mode, status=%d, Residual=%.2f, StaticSlack=%.2f, StaticConstraints=%d, AgentConstraints=%d"),
+								TEXT("[CBF-QP] Agent %d: QP degraded mode, status=%d, Residual=%.2f, Violation=%.2f, StaticSlack=%.2f, StaticConstraints=%d, AgentConstraints=%d"),
 								AgentID, (int32)CBFResult.SolveStatus, CBFResult.KKTResidual,
-								CBFResult.StaticSlack, CBFResult.StaticConstraintCount, CBFResult.AgentConstraintCount);
+								CBFResult.MaxConstraintViolation, CBFResult.StaticSlack,
+								CBFResult.StaticConstraintCount, CBFResult.AgentConstraintCount);
 
 							// 降级: 保守制动
 							FVector VelDir = CurrentState.Velocity.GetSafeNormal();
@@ -1135,6 +1171,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 								if (LegacyResult.bWasFiltered)
 								{
 									EffectiveAccel = LegacyResult.SafeAcceleration;
+									bMetricsCBFActiveThisFrame = true;
 								}
 							}
 						}
@@ -1236,6 +1273,18 @@ void AUAVPawn::UpdateController(float DeltaTime)
 				// 计算期望角加速度（用于前馈控制）
 			FRotator DesiredAngularAccel = ComputeAngularAccelerationFromLinearAccel(
 				EffectiveAccel, CurrentState.Rotation.Yaw);
+
+			// CBF 完整性检查：Active 模式下，确保 CBF 输出未被意外修改
+			if (CBFQPConfig.Mode == ECBFMode::Active && bMetricsCBFActiveThisFrame)
+			{
+				float IntegrityDelta = (EffectiveAccel - CBFAccelSnapshot).Size();
+				if (IntegrityDelta > 1.0f)
+				{
+					UE_LOG_THROTTLE(5.0, LogUAVMetrics, Warning,
+						TEXT("[CBF_INTEGRITY] Agent=%d Delta=%.1f AfterCBF"),
+						AgentID, IntegrityDelta);
+				}
+			}
 
 			// 加速度 → 姿态+推力 → 电机
 			FRotator DesiredAttitude;
@@ -1622,4 +1671,146 @@ FRotator AUAVPawn::ComputeAngularAccelerationFromLinearAccel(
 	);
 }
 
+void AUAVPawn::UpdateMetricsLog(float DeltaTime)
+{
+	// ---- 速度指标 ----
+	float Speed = CurrentState.Velocity.Size();
+	float SpeedRatio = MetricsMaxVelocity > 0.0f ? Speed / MetricsMaxVelocity : 0.0f;
 
+	// 低速检测（< 30% MaxVelocity）
+	if (SpeedRatio < 0.3f)
+	{
+		if (!bMetricsInLowSpeed)
+		{
+			bMetricsInLowSpeed = true;
+			MetricsLowSpeedTimer = 0.0f;
+		}
+		MetricsLowSpeedTimer += DeltaTime;
+		MetricsMaxLowSpeedDuration = FMath::Max(MetricsMaxLowSpeedDuration, MetricsLowSpeedTimer);
+	}
+	else if (bMetricsInLowSpeed)
+	{
+		UE_LOG(LogUAVMetrics, Log, TEXT("[LOW_SPEED_END] Agent=%d Duration=%.1f"),
+			AgentID, MetricsLowSpeedTimer);
+		bMetricsInLowSpeed = false;
+		MetricsLowSpeedTimer = 0.0f;
+	}
+
+	UE_LOG_THROTTLE(2.0, LogUAVMetrics, Log,
+		TEXT("[SPEED_METRICS] Agent=%d Speed=%.0f MaxVel=%.0f Ratio=%.2f LowSpeedDur=%.1f"),
+		AgentID, Speed, MetricsMaxVelocity, SpeedRatio, MetricsLowSpeedTimer);
+
+	// ---- 姿态指标 ----
+	float AbsRoll = FMath::Abs(CurrentState.Rotation.Roll);
+	float AbsPitch = FMath::Abs(CurrentState.Rotation.Pitch);
+	MetricsMaxRoll = FMath::Max(MetricsMaxRoll, AbsRoll);
+	MetricsMaxPitch = FMath::Max(MetricsMaxPitch, AbsPitch);
+
+	if (AbsRoll > 60.0f || AbsPitch > 60.0f)
+	{
+		MetricsAttitudeInstabilityTime += DeltaTime;
+		UE_LOG_THROTTLE(0.5, LogUAVMetrics, Warning,
+			TEXT("[ATTITUDE] Agent=%d Roll=%.1f Pitch=%.1f"),
+			AgentID, CurrentState.Rotation.Roll, CurrentState.Rotation.Pitch);
+	}
+
+	// ---- 横向偏差严重度 ----
+	if (MetricsMaxCrossTrackDev > 1000.0f) // > 10m
+	{
+		MetricsHighDeviationTimer += DeltaTime;
+		bMetricsInSevereDeviation = true;
+		if (MetricsHighDeviationTimer > 20.0f && !bMetricsTriggeredSevere)
+		{
+			bMetricsTriggeredSevere = true;
+			UE_LOG(LogUAVMetrics, Warning,
+				TEXT("[DEVIATION_SEVERE] Agent=%d Dev=%.1f Duration=%.1f Reason=Over10m20s"),
+				AgentID, MetricsMaxCrossTrackDev, MetricsHighDeviationTimer);
+		}
+	}
+	else
+	{
+		if (bMetricsInSevereDeviation)
+		{
+			bMetricsInSevereDeviation = false;
+			MetricsHighDeviationTimer = 0.0f;
+		}
+	}
+
+	if (MetricsMaxCrossTrackDev > 1500.0f && !bMetricsTriggeredSevere)
+	{
+		bMetricsTriggeredSevere = true;
+		UE_LOG(LogUAVMetrics, Warning,
+			TEXT("[DEVIATION_SEVERE] Agent=%d Dev=%.1f Reason=Over15m"),
+			AgentID, MetricsMaxCrossTrackDev);
+	}
+
+	// ---- 避障恢复追踪 ----
+	if (!bMetricsCBFActiveThisFrame && bMetricsWasAvoiding)
+	{
+		MetricsLastAvoidanceEnd = GetWorld()->GetTimeSeconds();
+		UE_LOG(LogUAVMetrics, Log, TEXT("[AVOIDANCE_END] Agent=%d Time=%.1f"),
+			AgentID, MetricsLastAvoidanceEnd);
+	}
+	if (bMetricsCBFActiveThisFrame)
+	{
+		bMetricsWasAvoiding = true;
+	}
+	else if (bMetricsWasAvoiding && MetricsLastAvoidanceEnd > 0.0f)
+	{
+		float TimeSinceEnd = GetWorld()->GetTimeSeconds() - MetricsLastAvoidanceEnd;
+		if (SpeedRatio >= 0.4f)
+		{
+			UE_LOG(LogUAVMetrics, Log,
+				TEXT("[AVOIDANCE_RECOVERY] Agent=%d Recovered=true RecoveryTime=%.1f"),
+				AgentID, TimeSinceEnd);
+			bMetricsWasAvoiding = false;
+		}
+		else if (TimeSinceEnd > 8.0f)
+		{
+			UE_LOG(LogUAVMetrics, Warning,
+				TEXT("[AVOIDANCE_RECOVERY] Agent=%d Recovered=false RecoveryTime=%.1f"),
+				AgentID, TimeSinceEnd);
+			bMetricsWasAvoiding = false;
+		}
+	}
+
+	// ---- 强制完成检测 ----
+	if (TrajectoryTrackerComponent && TrajectoryTrackerComponent->IsTimedOut())
+	{
+		if (MetricsForceCompleteCount == 0)
+		{
+			MetricsForceCompleteCount = 1;
+			UE_LOG(LogUAVMetrics, Warning,
+				TEXT("[SIM_RESULT] Agent=%d Event=ForceComplete Reason=OvertimeTimeout"),
+				AgentID);
+		}
+	}
+
+	// ---- 汇总日志（每 5s） ----
+	MetricsSummaryTimer += DeltaTime;
+	if (MetricsSummaryTimer >= 5.0f)
+	{
+		MetricsSummaryTimer = 0.0f;
+
+		// NMPC 求解时间分位数
+		if (MetricsSolveTimes.Num() > 0)
+		{
+			TArray<float> Sorted = MetricsSolveTimes;
+			Sorted.Sort();
+			int32 Count = Sorted.Num();
+			float P50 = Sorted[FMath::Min(FMath::FloorToInt(Count * 0.50f), Count - 1)];
+			float P95 = Sorted[FMath::Min(FMath::FloorToInt(Count * 0.95f), Count - 1)];
+			float P99 = Sorted[FMath::Min(FMath::FloorToInt(Count * 0.99f), Count - 1)];
+			UE_LOG(LogUAVMetrics, Log,
+				TEXT("[NMPC_PERCENTILE] Agent=%d P50=%.2f P95=%.2f P99=%.2f Count=%d"),
+				AgentID, P50, P95, P99, Count);
+		}
+
+		UE_LOG(LogUAVMetrics, Log,
+			TEXT("[SIM_SUMMARY] Agent=%d SpeedRatio=%.2f LowSpeedDur=%.1f MaxDev=%.0f "
+				 "MaxRoll=%.1f MaxPitch=%.1f InstabTime=%.1f Stuck=%d ForceComplete=%d"),
+			AgentID, SpeedRatio, MetricsMaxLowSpeedDuration, MetricsMaxCrossTrackDev,
+			MetricsMaxRoll, MetricsMaxPitch, MetricsAttitudeInstabilityTime,
+			MetricsNMPCStuckCount, MetricsForceCompleteCount);
+	}
+}

@@ -413,4 +413,40 @@ private:
 	FVector PrevDesiredAngularVel = FVector::ZeroVector;    // 上一帧期望角速度 (rad/s)
 	FVector PrevFilteredAngularAccel = FVector::ZeroVector; // 上一帧滤波后角加速度 (rad/s²)
 	int32 FeedforwardWarmupCount = 0;                       // 预热计数器（需2帧积累历史）
+
+		// ---- 仿真指标累计器 ----
+		void UpdateMetricsLog(float DeltaTime);
+
+		// 速度指标
+		float MetricsMaxVelocity = 0.0f;
+		float MetricsLowSpeedTimer = 0.0f;
+		float MetricsMaxLowSpeedDuration = 0.0f;
+		bool  bMetricsInLowSpeed = false;
+
+		// 避障恢复指标
+		float MetricsLastAvoidanceEnd = -100.0f;
+		bool  bMetricsWasAvoiding = false;
+		bool  bMetricsCBFActiveThisFrame = false;
+
+		// 横向偏差指标
+		float MetricsMaxCrossTrackDev = 0.0f;
+		float MetricsHighDeviationTimer = 0.0f;
+		bool  bMetricsInSevereDeviation = false;
+		bool  bMetricsTriggeredSevere = false;
+
+		// 姿态指标
+		float MetricsMaxRoll = 0.0f;
+		float MetricsMaxPitch = 0.0f;
+		float MetricsAttitudeInstabilityTime = 0.0f;
+
+		// NMPC 求解时间历史（滑动窗口，最近 1000 条）
+		TArray<float> MetricsSolveTimes;
+
+		// 事件计数
+		int32 MetricsNMPCStuckCount = 0;
+		bool  bMetricsPrevStuck = false;
+		int32 MetricsForceCompleteCount = 0;
+
+		// 汇总节流计时
+		float MetricsSummaryTimer = 0.0f;
 };

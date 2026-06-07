@@ -74,15 +74,16 @@ struct FCBFQPResult
 /**
  * CBF-QP 安全滤波器
  *
- * 在 NMPC 输出上叠加安全约束，保证机间安全距离。
+ * 在 NMPC 输出上叠加安全约束，保证静态障碍和机间安全距离。
  *
  * 原理:
  * - CBF 函数: h(x) = ||pi - pj||² - DSafe²
  * - 相对阶数 2（双积分模型 x' = v, v' = u）
  * - 约束: h_ddot + α₁·h_dot + α₀·h ≥ 0
- * - QP: min ||u - u_nmpc||² s.t. A_k·u ≤ b_k
+ * - QP: min ||u - u_nmpc||² + ρ·ξ² s.t. A_k·z ≤ b_k, z = [u, ξ_s, ξ_a]
  *
- * 求解器使用投影梯度法，对 ≤3 个约束 2-5 次迭代即可收敛。
+ * FilterV2: 统一处理静态障碍 HOCBF + 机间 CBF，使用可行初值 Active-Set QP
+ * Filter:   旧接口，仅处理机间约束，使用投影梯度法
  */
 UCLASS(BlueprintType)
 class UAV_SIMULATOR_API UCBFQPFilter : public UObject

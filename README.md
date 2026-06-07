@@ -154,7 +154,7 @@
 - Agent 通信：通过 AgentManager 的理想零延迟/零丢包模型（架构预留延迟/丢包模拟）
 - CBF-QP 安全滤波：
   - 统一 HOCBF 安全层（静态障碍 + 机间）
-  - Active-Set QP 求解器 + Warm Start
+  - 可行初值 Primal Active-Set QP 求解器 + Warm Start
   - Slack 变量保证可行性
   - Shadow mode 迁移
   - 投影梯度 QP 求解器

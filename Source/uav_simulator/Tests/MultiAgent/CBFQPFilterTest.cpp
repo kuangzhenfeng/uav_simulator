@@ -517,6 +517,7 @@ bool FCBFQPASQP_SingleConstraint::RunTest(const FString& Parameters)
 	FCBFQPConfig Config;
 	Config.QPMaxIterations = 50;
 	Config.QPKKTTolerance = 1e-4f;
+	Config.MaxAccelerationQP = 50.0f;
 
 	const int32 N = 5;
 	TArray<float> H, G;
@@ -542,6 +543,86 @@ bool FCBFQPASQP_SingleConstraint::RunTest(const FString& Parameters)
 	// 无约束最优 z0=[100,50,0,0,0]，约束 ux ≤ 50 → 投影后 ux ≈ 50
 	UAV_TEST_FLOAT_EQUAL(Z[0], 50.0f, 2.0f);
 	UAV_TEST_FLOAT_EQUAL(Z[1], 50.0f, 2.0f);
+
+	return true;
+}
+
+// ==================== Active-Set QP: 高密度混合尺度约束 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPASQP_DenseMixedScale,
+	"UAVSimulator.MultiAgent.CBFQPFilter.ASQP_DenseMixedScale",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPASQP_DenseMixedScale::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.QPMaxIterations = 50;
+	Config.QPKKTTolerance = 1e-3f;
+	Config.MaxAccelerationQP = 800.0f;
+
+	const int32 N = 5;
+	TArray<float> H, G;
+	H.SetNumZeroed(N * N);
+	G.SetNumZeroed(N);
+	H[0] = 1.0f; H[6] = 1.0f; H[12] = 1.0f;
+	H[18] = 200.0f; H[24] = 200.0f;
+	G[0] = -600.0f;
+	G[1] = -450.0f;
+
+	TArray<float> A, B;
+	constexpr int32 DirectionCount = 48;
+	for (int32 Index = 0; Index < DirectionCount; ++Index)
+	{
+		const float Angle = 2.0f * PI * static_cast<float>(Index) / DirectionCount;
+		const float X = FMath::Cos(Angle);
+		const float Y = FMath::Sin(Angle);
+
+		// 静态约束: n·u - xi_static <= 100
+		A.Append({X, Y, 0.0f, -1.0f, 0.0f});
+		B.Add(100.0f);
+
+		// 机间约束使用厘米尺度法线，验证混合量纲下的数值稳定性。
+		A.Append({1000.0f * X, 1000.0f * Y, 0.0f, 0.0f, -1.0f});
+		B.Add(100000.0f);
+	}
+
+	A.Append({0.0f, 0.0f, 0.0f, -1.0f, 0.0f});
+	B.Add(0.0f);
+	A.Append({0.0f, 0.0f, 0.0f, 0.0f, -1.0f});
+	B.Add(0.0f);
+
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+	{
+		TArray<float> Positive;
+		Positive.SetNumZeroed(N);
+		Positive[Axis] = 1.0f;
+		A.Append(Positive);
+		B.Add(Config.MaxAccelerationQP);
+
+		TArray<float> Negative;
+		Negative.SetNumZeroed(N);
+		Negative[Axis] = -1.0f;
+		A.Append(Negative);
+		B.Add(Config.MaxAccelerationQP);
+	}
+
+	TArray<float> Z;
+	ECBFQPStatus Status;
+	float KKT, MaxViol;
+	int32 Iters;
+	Filter->SolveActiveSetQP(
+		N, B.Num(), H, G, A, B, Config, Z, Status, KKT, MaxViol, Iters);
+
+	TestTrue(TEXT("Dense mixed-scale QP should converge"),
+		Status == ECBFQPStatus::Solved ||
+		Status == ECBFQPStatus::SolvedWithSlack);
+	TestTrue(TEXT("Dense mixed-scale QP should remain feasible"), MaxViol <= 2.0f);
+	TestTrue(TEXT("Dense mixed-scale QP should respect acceleration bounds"),
+		FMath::Abs(Z[0]) <= Config.MaxAccelerationQP + 1.0f &&
+		FMath::Abs(Z[1]) <= Config.MaxAccelerationQP + 1.0f &&
+		FMath::Abs(Z[2]) <= Config.MaxAccelerationQP + 1.0f);
 
 	return true;
 }

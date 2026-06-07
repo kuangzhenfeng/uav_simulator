@@ -460,6 +460,7 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 	return RegisterPerceivedObstacle(Obstacle);
 }
 
+// 刷新已感知障碍物的最后感知时间，防止被误判为过期
 void UObstacleManager::RefreshPerceivedObstacle(int32 ObstacleID)
 {
 	for (FObstacleInfo& Obstacle : Obstacles)
@@ -472,6 +473,7 @@ void UObstacleManager::RefreshPerceivedObstacle(int32 ObstacleID)
 	}
 }
 
+// 移除超过 MaxAge 秒未被刷新的感知障碍物
 int32 UObstacleManager::RemoveStalePerceivedObstacles(float MaxAge)
 {
 	float CurrentTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
@@ -497,6 +499,7 @@ int32 UObstacleManager::RemoveStalePerceivedObstacles(float MaxAge)
 	return RemovedCount;
 }
 
+// 返回所有通过感知器动态检测到的障碍物
 TArray<FObstacleInfo> UObstacleManager::GetPerceivedObstacles() const
 {
 	TArray<FObstacleInfo> Result;
@@ -510,6 +513,7 @@ TArray<FObstacleInfo> UObstacleManager::GetPerceivedObstacles() const
 	return Result;
 }
 
+// 返回所有预注册的静态障碍物（非感知器检测）
 TArray<FObstacleInfo> UObstacleManager::GetPreregisteredObstacles() const
 {
 	TArray<FObstacleInfo> Result;
@@ -523,15 +527,18 @@ TArray<FObstacleInfo> UObstacleManager::GetPreregisteredObstacles() const
 	return Result;
 }
 
+// 计算点到障碍物表面的有符号距离（负值 = 穿透），已减去 SafetyMargin
 float UObstacleManager::CalculateDistanceToObstacle(const FVector& Point, const FObstacleInfo& Obstacle) const
 {
 	switch (Obstacle.Type)
 	{
 	case EObstacleType::Sphere:
+		// 球体：中心距离 - 半径 - 安全裕度
 		return FVector::Dist(Point, Obstacle.Center) - Obstacle.Extents.X - Obstacle.SafetyMargin;
 
 	case EObstacleType::Box:
 		{
+			// 盒体：转到局部坐标系，找最近点，计算距离
 			FVector LocalPoint = Obstacle.Rotation.UnrotateVector(Point - Obstacle.Center);
 			FVector ClosestPoint;
 			ClosestPoint.X = FMath::Clamp(LocalPoint.X, -Obstacle.Extents.X, Obstacle.Extents.X);
@@ -544,6 +551,7 @@ float UObstacleManager::CalculateDistanceToObstacle(const FVector& Point, const 
 
 	case EObstacleType::Cylinder:
 		{
+			// 圆柱体：分别计算水平径向和垂向距离
 			FVector LocalPoint = Point - Obstacle.Center;
 			float HorizontalDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
 			float VerticalDist = FMath::Abs(LocalPoint.Z);
@@ -551,6 +559,7 @@ float UObstacleManager::CalculateDistanceToObstacle(const FVector& Point, const 
 			float HorizontalPenetration = HorizontalDist - Obstacle.Extents.X;
 			float VerticalPenetration = VerticalDist - Obstacle.Extents.Z;
 
+			// 四种情况：内部(双负)、纯水平外、纯垂直外、角点外
 			if (HorizontalPenetration < 0 && VerticalPenetration < 0)
 			{
 				return FMath::Max(HorizontalPenetration, VerticalPenetration) - Obstacle.SafetyMargin;
@@ -565,18 +574,22 @@ float UObstacleManager::CalculateDistanceToObstacle(const FVector& Point, const 
 			}
 			else
 			{
+				// 角点：到圆柱表面最近点的欧氏距离
 				return FMath::Sqrt(HorizontalPenetration * HorizontalPenetration +
 								   VerticalPenetration * VerticalPenetration) - Obstacle.SafetyMargin;
 			}
 		}
 
 	default:
+		// 未知类型：保守估计为球体
 		return FVector::Dist(Point, Obstacle.Center) - Obstacle.Extents.GetMax() - Obstacle.SafetyMargin;
 	}
 }
 
+// 检查指定点（含附加半径）是否在障碍物内部
 bool UObstacleManager::IsPointInObstacle(const FVector& Point, const FObstacleInfo& Obstacle, float Radius) const
 {
+	// 总判定半径 = 查询半径 + 安全裕度
 	float TotalRadius = Radius + Obstacle.SafetyMargin;
 
 	switch (Obstacle.Type)

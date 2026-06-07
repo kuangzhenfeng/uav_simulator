@@ -246,6 +246,7 @@ void UTrajectoryTracker::SetTrajectory(const FTrajectory& InTrajectory)
 	Reset();
 }
 
+// 开始轨迹跟踪，要求轨迹有效且至少有 2 个采样点
 void UTrajectoryTracker::StartTracking()
 {
 	if (!CurrentTrajectory.bIsValid || CurrentTrajectory.Points.Num() < 2)
@@ -304,6 +305,8 @@ FTrajectoryPoint UTrajectoryTracker::GetDesiredState(float CurrentTime) const
 	return InterpolateTrajectory(CurrentTime);
 }
 
+// 计算跟踪进度 [0, 1]
+// 计算跟踪进度 [0, 1]
 float UTrajectoryTracker::GetProgress() const
 {
 	if (!CurrentTrajectory.bIsValid || CurrentTrajectory.TotalDuration <= 0.0f)
@@ -319,12 +322,15 @@ bool UTrajectoryTracker::IsComplete() const
 	return bIsComplete;
 }
 
+// 计算当前位置与期望轨迹点的位置误差
+// 计算当前位置与期望轨迹点的位置误差
 FVector UTrajectoryTracker::GetTrackingError(const FVector& CurrentPosition) const
 {
 	FTrajectoryPoint DesiredState = GetDesiredState();
 	return DesiredState.Position - CurrentPosition;
 }
 
+// 在轨迹采样点之间线性插值，获取任意时间点的期望状态
 FTrajectoryPoint UTrajectoryTracker::InterpolateTrajectory(float Time) const
 {
 	FTrajectoryPoint Result;
