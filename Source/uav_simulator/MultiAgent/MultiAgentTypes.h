@@ -172,6 +172,10 @@ struct FCBFQPConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|QP")
 	float MaxAccelerationQP = 800.0f;
 
+	// 速度包络上界 (cm/s)，用于 QP 内沿速度方向主动制动
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|QP")
+	float MaxVelocity = 2000.0f;
+
 	// QP 内可执行倾角上界 (deg)，需与位置控制器倾角限制保持一致
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CBFQP|QP")
 	float MaxTiltAngleDeg = 30.0f;

@@ -359,6 +359,44 @@ bool FCBFQPFilter_RespectsTiltAccelerationCone::RunTest(const FString& Parameter
 	return true;
 }
 
+// ==================== Filter: 速度包络主动制动 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_BrakesAboveSpeedEnvelope,
+	"UAVSimulator.MultiAgent.CBFQPFilter.Filter_BrakesAboveSpeedEnvelope",
+	UAV_TEST_FLAGS)
+
+bool FCBFQPFilter_BrakesAboveSpeedEnvelope::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+
+	FCBFQPConfig Config;
+	Config.MaxVelocity = 800.0f;
+	Config.MaxAccelerationQP = 800.0f;
+	Config.QPMaxIterations = 100;
+	Config.QPKKTTolerance = 1e-3f;
+
+	FUAVState MyState = UAVTestHelpers::CreateUAVState(
+		FVector(0, 0, 1000), FVector(1200, 0, 0));
+
+	FVector NominalAccel(500, 0, 0);
+	FCBFQPResult Result = Filter->Filter(
+		NominalAccel, MyState,
+		TArray<FAgentStateSnapshot>(), TArray<FObstacleInfo>(), Config);
+
+	const FVector VelDir = MyState.Velocity.GetSafeNormal();
+	const float AlongVelocityAccel = FVector::DotProduct(Result.SafeAcceleration, VelDir);
+
+	TestTrue(TEXT("Above speed envelope should command braking along velocity"),
+		AlongVelocityAccel < 0.0f);
+	TestTrue(TEXT("Speed envelope should still respect acceleration bounds"),
+		Result.SafeAcceleration.Size() <= Config.MaxAccelerationQP + 5.0f);
+	TestTrue(TEXT("Solve status should remain valid"),
+		Result.SolveStatus == ECBFQPStatus::Solved ||
+		Result.SolveStatus == ECBFQPStatus::SolvedWithSlack);
+
+	return true;
+}
+
 // ==================== Active-Set QP: 无约束直接求解 ====================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPASQP_NoConstraints,

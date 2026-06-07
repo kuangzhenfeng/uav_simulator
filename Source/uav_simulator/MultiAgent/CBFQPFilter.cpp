@@ -230,6 +230,61 @@ void UCBFQPFilter::SolveActiveSetQP(
         ExpandSlackForFeasibility(4);
     }
 
+    auto ProjectControlHalfspacesForFeasibility = [&]()
+    {
+        constexpr int32 ProjectionPasses = 16;
+        for (int32 Pass = 0; Pass < ProjectionPasses; ++Pass)
+        {
+            bool bProjectedAny = false;
+            for (int32 k = 0; k < M; ++k)
+            {
+                // CBF 约束由 slack 保证可行；这里只投影速度、加速度和倾角等硬执行域约束。
+                const bool bUsesSlack = N >= 5 &&
+                    (A[k * N + 3] < -KINDA_SMALL_NUMBER || A[k * N + 4] < -KINDA_SMALL_NUMBER);
+                if (bUsesSlack)
+                {
+                    continue;
+                }
+
+                const double Violation = ConstraintValue(k, Z);
+                if (Violation <= FeasibilityTolerance * RowScale(k))
+                {
+                    continue;
+                }
+
+                double ControlNormSq = 0.0;
+                for (int32 j = 0; j < FMath::Min(N, 3); ++j)
+                {
+                    const double Coeff = static_cast<double>(A[k * N + j]);
+                    ControlNormSq += Coeff * Coeff;
+                }
+                if (ControlNormSq <= KINDA_SMALL_NUMBER)
+                {
+                    continue;
+                }
+
+                const double Step = Violation / ControlNormSq;
+                for (int32 j = 0; j < FMath::Min(N, 3); ++j)
+                {
+                    Z[j] -= Step * static_cast<double>(A[k * N + j]);
+                }
+                bProjectedAny = true;
+            }
+
+            if (!bProjectedAny)
+            {
+                break;
+            }
+        }
+    };
+
+    ProjectControlHalfspacesForFeasibility();
+    if (N >= 5)
+    {
+        ExpandSlackForFeasibility(3);
+        ExpandSlackForFeasibility(4);
+    }
+
     // 初始可行性检查：归一化残差超过容限时直接返回失败
     // （正常调用路径下，slack 扩展应保证通过此检查）
     double InitialMaxNormalizedViolation = 0.0;
@@ -850,7 +905,35 @@ FCBFQPResult UCBFQPFilter::Filter(
         AllBounds.Add(0.0f);
     }
 
-    // 4. 加速度界限: |u_i| ≤ a_max → u_i ≤ a_max 和 -u_i ≤ a_max
+    bool bVelocityConstraintActive = false;
+    FVector EffectiveNominalAcceleration = NominalAcceleration;
+
+    // 4. 速度包络制动意图：超过 MaxVelocity 时，在 CBF-QP 目标内沿速度方向主动制动。
+    // 制动作为安全层内部的标称目标，避免硬速度约束和倾角锥组合导致 QP 初值不可行。
+    {
+        const float MaxVel = Config.MaxVelocity;
+        const float CurSpeed = MyState.Velocity.Size();
+        if (MaxVel > KINDA_SMALL_NUMBER && CurSpeed > MaxVel * 0.9f)
+        {
+            const FVector VelDir = MyState.Velocity / CurSpeed;
+            const float Ratio = FMath::Clamp(
+                (CurSpeed - MaxVel * 0.9f) / (MaxVel * 0.1f), 0.0f, 1.0f);
+            constexpr float GravityAcceleration = 980.0f; // cm/s²
+            constexpr int32 TiltFacetCount = 16;
+            const float FacetScale = FMath::Cos(PI / static_cast<float>(TiltFacetCount));
+            const float MaxTiltRad = FMath::DegreesToRadians(Config.MaxTiltAngleDeg);
+            const float ExecutableHorizontalAccel = FMath::Tan(MaxTiltRad) * GravityAcceleration * FacetScale;
+            const float MaxBrakeAccel = FMath::Min(Config.MaxAccelerationQP, ExecutableHorizontalAccel) * Ratio;
+            const float AlongVelocityAccel = FVector::DotProduct(EffectiveNominalAcceleration, VelDir);
+            if (AlongVelocityAccel > -MaxBrakeAccel)
+            {
+                EffectiveNominalAcceleration -= VelDir * (AlongVelocityAccel + MaxBrakeAccel);
+                bVelocityConstraintActive = true;
+            }
+        }
+    }
+
+    // 5. 加速度界限: |u_i| ≤ a_max → u_i ≤ a_max 和 -u_i ≤ a_max
     {
         float AMax = Config.MaxAccelerationQP;
         // +X: u_x ≤ a_max
@@ -870,7 +953,7 @@ FCBFQPResult UCBFQPFilter::Filter(
         AllAFlat.Append(RowNegZ, 5); AllBounds.Add(AMax);
     }
 
-    // 5. 执行器倾角锥约束：d·u_xy ≤ tan(θ)·(g + u_z)
+    // 6. 执行器倾角锥约束：d·u_xy ≤ tan(θ)·(g + u_z)
     // 使用 16 边形线性近似，保证 QP 输出可由位置控制器的倾角限制执行。
     {
         constexpr float GravityAcceleration = 980.0f; // cm/s²
@@ -915,9 +998,9 @@ FCBFQPResult UCBFQPFilter::Filter(
     HMat[3 * N + 3] = 2.0f * Config.RhoStatic;
     HMat[4 * N + 4] = 2.0f * Config.RhoAgent;
 
-    GVec[0] = -Wx * NominalAcceleration.X;
-    GVec[1] = -Wy * NominalAcceleration.Y;
-    GVec[2] = -Wz * NominalAcceleration.Z;
+    GVec[0] = -Wx * EffectiveNominalAcceleration.X;
+    GVec[1] = -Wy * EffectiveNominalAcceleration.Y;
+    GVec[2] = -Wz * EffectiveNominalAcceleration.Z;
     // GVec[3] = 0 (no linear cost on ξ_static)
     // GVec[4] = 0 (no linear cost on ξ_agent)
 
@@ -939,8 +1022,9 @@ FCBFQPResult UCBFQPFilter::Filter(
     Result.AgentSlack = Z.Num() >= 5 ? FMath::Max(0.0f, Z[4]) : 0.0f;
 
     // 是否触发滤波
-    Result.bWasFiltered = (StaticCount > 0 || AgentCount > 0) &&
-        !Result.SafeAcceleration.Equals(NominalAcceleration, 1.0f);
+    Result.bWasFiltered = (StaticCount > 0 || AgentCount > 0 || bVelocityConstraintActive) &&
+        (!Result.SafeAcceleration.Equals(NominalAcceleration, 1.0f) ||
+            !EffectiveNominalAcceleration.Equals(NominalAcceleration, 1.0f));
 
     // 计算真实最小 h 值（机间）
     Result.MinHValue = MAX_FLT;

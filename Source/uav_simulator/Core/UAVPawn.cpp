@@ -3,6 +3,7 @@
 #include "UAVPawn.h"
 #include "../uav_simulator.h"
 #include "UAVProductManager.h"
+#include "UAVWreckActor.h"
 #include "../Physics/UAVDynamics.h"
 #include "../Sensors/SensorBase.h"
 #include "../Control/AttitudeController.h"
@@ -35,8 +36,9 @@
 AUAVPawn::AUAVPawn()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.TickGroup = TG_PostPhysics;
 
-	// 创建根组件
+	// 创建根组件；正常飞行由自定义动力学写入 Actor 位姿
 	RootSceneComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootSceneComponent"));
 	RootComponent = RootSceneComponent;
 
@@ -162,6 +164,7 @@ void AUAVPawn::BeginPlay()
 		MetricsMaxVelocity = Spec.MaxVelocity;
 	}
 
+
 	// 接线PID调参组件
 	if (ParameterTunerComponent)
 	{
@@ -202,6 +205,7 @@ void AUAVPawn::BeginPlay()
 		bIsMultiAgentMode = true;
 		CBFQPFilter = NewObject<UCBFQPFilter>(this);
 		CBFQPConfig = MultiAgentGM->DefaultCBFQPConfig;
+		CBFQPConfig.MaxVelocity = PositionControllerComponent ? PositionControllerComponent->MaxVelocity : CBFQPConfig.MaxVelocity;
 		if (CommunicationComponent)
 		{
 			CommunicationComponent->SetOwnerAgentID(AgentID);
@@ -253,6 +257,14 @@ void AUAVPawn::SetPayloadMass(float NewPayloadMass)
 	AttitudeControllerComponent->HoverThrust = Spec.HoverThrust * TotalMass / Spec.Mass;
 }
 
+#if WITH_DEV_AUTOMATION_TESTS
+void AUAVPawn::SetUAVStateForTest(const FUAVState& InState)
+{
+	CurrentState = InState;
+	SetActorLocationAndRotation(CurrentState.Position, CurrentState.Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+}
+#endif
+
 void AUAVPawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
@@ -266,15 +278,10 @@ void AUAVPawn::Tick(float DeltaTime)
 	{
 		const float Step = FMath::Min(Remaining, FixedStep);
 
-		// 炸机状态：仅更新物理（自由落体），跳过控制
+		// 炸机状态：由 UE 刚体物理接管坠落，只同步状态，不再手动覆盖位置
 		if (FlightState == EFlightState::Crashed)
 		{
-			{
-				SCOPE_CYCLE_COUNTER(STAT_PawnPhysicsUpdate);
-				UpdatePhysics(Step);
-			}
-			SetActorLocation(CurrentState.Position);
-			SetActorRotation(CurrentState.Rotation);
+			SyncStateFromWreck();
 			Remaining -= Step;
 			continue;
 		}
@@ -298,6 +305,7 @@ void AUAVPawn::Tick(float DeltaTime)
 				SCOPE_CYCLE_COUNTER(STAT_PawnControllerUpdate);
 				UpdateController(Step);
 			}
+			RecordSafeFlightState();
 			{
 				SCOPE_CYCLE_COUNTER(STAT_PawnPhysicsUpdate);
 				UpdatePhysics(Step);
@@ -306,8 +314,15 @@ void AUAVPawn::Tick(float DeltaTime)
 			// 碰撞检测
 			CheckCollision();
 
-			SetActorLocation(CurrentState.Position);
-			SetActorRotation(CurrentState.Rotation);
+			if (FlightState == EFlightState::Crashed)
+			{
+				SyncStateFromWreck();
+			}
+			else
+			{
+				SetActorLocation(CurrentState.Position);
+				SetActorRotation(CurrentState.Rotation);
+			}
 		}
 		Remaining -= Step;
 	}
@@ -316,6 +331,12 @@ void AUAVPawn::Tick(float DeltaTime)
 	if (FlightState != EFlightState::Crashed)
 	{
 		UpdateMetricsLog(DeltaTime);
+	}
+
+	// 炸机后由残骸物理接管；不再更新飞行评分和规划可视化，避免用坠毁残骸状态触发飞行期告警
+	if (FlightState == EFlightState::Crashed)
+	{
+		return;
 	}
 
 	// 更新稳定性评分
@@ -609,6 +630,35 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 	// 收集 NMPC 求解时间用于分位数统计
 	MetricsSolveTimes.Add(Result.Diagnostics.SolveTimeMs);
 	if (MetricsSolveTimes.Num() > 1000) { MetricsSolveTimes.RemoveAt(0); }
+
+	UE_LOG_THROTTLE(1.0, LogUAVMetrics, Log,
+		TEXT("[NMPC_RESULT] Agent=%d Type=%s Init=%s J0=%.1f J=%.1f Decrease=%.4f Clearance=%.0f Progress=%.0f Grad=%.3f Iter=%d LSFail=%d Stuck=%d NeedsCorr=%d MaxIter=%d LineSearch=%d LowClearance=%d LowProgress=%d NaNOrInf=%d Ms=%.2f"),
+		AgentID,
+		NMPCComponent->Config.MPCType == EMPCType::Linear ? TEXT("Linear") : TEXT("Nonlinear"),
+		*Result.Diagnostics.InitType,
+		Result.Diagnostics.InitialCost,
+		Result.Diagnostics.FinalCost,
+		Result.Diagnostics.RelativeCostDecrease,
+		Result.Diagnostics.MinPredictedClearance,
+		Result.Diagnostics.PredictedPathProgress,
+		Result.Diagnostics.GradientNorm,
+		Result.Diagnostics.Iterations,
+		Result.Diagnostics.BacktrackFailCount,
+		Result.bStuck ? 1 : 0,
+		Result.bNeedsCorrection ? 1 : 0,
+		Result.Diagnostics.bMaxIterReached ? 1 : 0,
+		Result.Diagnostics.bLineSearchFailed ? 1 : 0,
+		Result.Diagnostics.bClearanceInsufficient ? 1 : 0,
+		Result.Diagnostics.bProgressInsufficient ? 1 : 0,
+		Result.Diagnostics.bNaNOrInf ? 1 : 0,
+		Result.Diagnostics.SolveTimeMs);
+
+	if (Result.Diagnostics.bNaNOrInf)
+	{
+		UE_LOG(LogUAVMetrics, Error,
+			TEXT("[SIM_RESULT] Agent=%d Event=NumericalFailure Source=NMPC"),
+			AgentID);
+	}
 
 	// Stuck 事件计数
 	if (bNMPCStuck && !bMetricsPrevStuck) { MetricsNMPCStuckCount++; }
@@ -1248,6 +1298,97 @@ void AUAVPawn::UpdatePhysics(float DeltaTime)
 	}
 }
 
+void AUAVPawn::RecordSafeFlightState()
+{
+	if (IsStatePenetratingObstacle(CurrentState))
+	{
+		return;
+	}
+
+	LastSafeFlightState = CurrentState;
+	bHasLastSafeFlightState = true;
+}
+
+bool AUAVPawn::IsStatePenetratingObstacle(const FUAVState& State) const
+{
+	if (!ObstacleManagerComponent)
+	{
+		return false;
+	}
+
+	const TArray<FObstacleInfo>& Obstacles = ObstacleManagerComponent->GetAllObstacles();
+	for (const FObstacleInfo& Obs : Obstacles)
+	{
+		const float D = NMPCComponent
+			? NMPCComponent->CalculateDistanceToObstacle(State.Position, Obs)
+			: FVector::Dist(State.Position, Obs.Center) - Obs.Extents.X - Obs.SafetyMargin;
+		if (D < 0.0f)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+FUAVState AUAVPawn::BuildCrashHandoffState() const
+{
+	if (!bHasLastSafeFlightState)
+	{
+		return CurrentState;
+	}
+
+	FUAVState HandoffState = LastSafeFlightState;
+	HandoffState.Velocity = CurrentState.Velocity;
+	HandoffState.AngularVelocity = CurrentState.AngularVelocity;
+	return HandoffState;
+}
+
+bool AUAVPawn::SpawnWreckActor(const FUAVState& HandoffState)
+{
+	if (!GetWorld())
+	{
+		return false;
+	}
+	if (ActiveWreckActor)
+	{
+		return true;
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	ActiveWreckActor = GetWorld()->SpawnActor<AUAVWreckActor>(
+		AUAVWreckActor::StaticClass(), HandoffState.Position, HandoffState.Rotation, SpawnParams);
+	if (!ActiveWreckActor)
+	{
+		UE_LOG(LogUAVActor, Error, TEXT("[Crash] Failed to spawn UAV wreck actor"));
+		return false;
+	}
+
+	const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
+	FUAVWreckInitParams Params;
+	Params.InitialState = HandoffState;
+	Params.ModelSpec = Spec;
+	Params.PayloadMassKg = CurrentPayloadMass;
+	Params.CollisionRadiusCm = GetCollisionRadius();
+	ActiveWreckActor->InitializeWreck(Params);
+	AddTickPrerequisiteActor(ActiveWreckActor);
+	return true;
+}
+
+void AUAVPawn::SyncStateFromWreck()
+{
+	if (!ActiveWreckActor)
+	{
+		return;
+	}
+
+	CurrentState = ActiveWreckActor->GetWreckState();
+	SetActorLocationAndRotation(CurrentState.Position, CurrentState.Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+}
+
 void AUAVPawn::CheckCollision()
 {
 	// 已炸机状态不再检测
@@ -1279,6 +1420,10 @@ void AUAVPawn::CheckCollision()
 
 		if (D < 0.0f)
 		{
+			UE_LOG(LogUAVMetrics, Warning,
+				TEXT("[SIM_RESULT] Agent=%d Event=ObstaclePenetration ObstacleID=%d Type=%d Dist=%.1f Pos=(%.0f,%.0f,%.0f)"),
+				AgentID, Obs.ObstacleID, (int32)Obs.Type, D,
+				CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z);
 			UE_LOG(LogUAVActor, Warning,
 				TEXT("[Crash] UAV collided with obstacle ID=%d, Type=%d, Center=%s, Extents=%s, "
 					 "SafetyMargin=%.0f, Dist=%.1fcm, UAVPos=%s, LinkedActor=%s"),
@@ -1295,6 +1440,18 @@ void AUAVPawn::CheckCollision()
 
 void AUAVPawn::TriggerCrash()
 {
+	if (FlightState == EFlightState::Crashed)
+	{
+		return;
+	}
+
+	const FUAVState HandoffState = BuildCrashHandoffState();
+	if (!SpawnWreckActor(HandoffState))
+	{
+		UE_LOG(LogUAVActor, Error, TEXT("[Crash] UAV crash aborted because wreck actor could not be created"));
+		return;
+	}
+
 	FlightState = EFlightState::Crashed;
 
 	// 停桨
@@ -1315,8 +1472,15 @@ void AUAVPawn::TriggerCrash()
 		MissionComponent->StopMission();
 	}
 
+	SyncStateFromWreck();
+
+	UE_LOG(LogUAVMetrics, Warning,
+		TEXT("[SIM_RESULT] Agent=%d Event=Crash Pos=(%.0f,%.0f,%.0f) WreckActive=%d"),
+		AgentID, CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
+		ActiveWreckActor ? 1 : 0);
+
 	UE_LOG(LogUAVActor, Warning,
-		TEXT("[Crash] UAV crashed at Pos=(%d,%d,%d), motors stopped, falling under gravity"),
+		TEXT("[Crash] UAV crashed at Pos=(%d,%d,%d), motors stopped, wreck physics active"),
 		(int)CurrentState.Position.X, (int)CurrentState.Position.Y, (int)CurrentState.Position.Z);
 }
 

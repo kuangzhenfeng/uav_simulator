@@ -1124,6 +1124,8 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	int32 FinalIter = 0;
 	bool bConverged = false;
 	float CostAtIterStart = MAX_FLT; // 本轮迭代开始时的代价
+	float FinalGradientNorm = 0.0f;
+	int32 BacktrackFailCount = 0;
 	for (int32 Iter = 0; Iter < Config.Solver.MaxIterations; ++Iter)
 	{
 		FinalIter = Iter + 1;
@@ -1156,6 +1158,11 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 
 			// 计算梯度
 			ComputeGradient(CurrentPosition, CurrentVelocity, Controls, RefPoints, Obstacles, Gradient);
+			FinalGradientNorm = 0.0f;
+			for (const FVector& G : Gradient)
+			{
+				FinalGradientNorm = FMath::Max(FinalGradientNorm, G.Size());
+			}
 		}
 
 		// 回溯线搜索
@@ -1185,6 +1192,10 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 			}
 
 			StepSize *= Config.Solver.BacktrackFactor;
+		}
+		if (!bImproved)
+		{
+			++BacktrackFailCount;
 		}
 
 		// 线搜索连续未改进：已处于局部最优，提前退出
@@ -1489,6 +1500,8 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		Result.Diagnostics.RelativeCostDecrease = (InitialCost - CurrentCost) / InitialCost;
 	}
 	Result.Diagnostics.Iterations = FinalIter;
+	Result.Diagnostics.GradientNorm = FinalGradientNorm;
+	Result.Diagnostics.BacktrackFailCount = BacktrackFailCount;
 	Result.Diagnostics.InitType = SelectedInitType;
 	Result.Diagnostics.MinPredictedClearance = PredictedMinClearance;
 	Result.Diagnostics.PredictedPathProgress = CorrectionDistance;
@@ -1499,10 +1512,10 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	Result.Diagnostics.SolveTimeMs = static_cast<float>((FPlatformTime::Seconds() - SolveStartTime) * 1000.0);
 
 	// 结构化求解日志
-	UE_LOG(LogUAVMetrics, Log, TEXT("[NMPC_SOLVE] Init=%s J0=%.1f J=%.1f Decrease=%.4f Clearance=%.0f Progress=%.0f Iter=%d LSFail=%d Ms=%.2f"),
+	UE_LOG(LogUAVMetrics, Log, TEXT("[NMPC_SOLVE] Init=%s J0=%.1f J=%.1f Decrease=%.4f Clearance=%.0f Progress=%.0f Grad=%.3f Iter=%d LSFail=%d Ms=%.2f"),
 		*Result.Diagnostics.InitType,
 		InitialCost, CurrentCost, Result.Diagnostics.RelativeCostDecrease,
-		PredictedMinClearance, CorrectionDistance, FinalIter,
+		PredictedMinClearance, CorrectionDistance, Result.Diagnostics.GradientNorm, FinalIter,
 		Result.Diagnostics.BacktrackFailCount,
 		Result.Diagnostics.SolveTimeMs);
 

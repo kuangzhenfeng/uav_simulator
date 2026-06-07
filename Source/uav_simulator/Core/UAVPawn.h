@@ -36,6 +36,7 @@ class UWindField;
 class UBarometerSensor;
 class UMagnetometerSensor;
 class UAnemometerSensor;
+class AUAVWreckActor;
 
 /**
  * 无人机Pawn类
@@ -131,6 +132,14 @@ public:
 	// 是否已炸机
 	UFUNCTION(BlueprintCallable, Category = "UAV|State")
 	bool IsCrashed() const { return FlightState == EFlightState::Crashed; }
+
+#if WITH_DEV_AUTOMATION_TESTS
+	// 测试专用：允许自动化测试触发炸机并检查残骸状态
+	void TestTriggerCrash() { TriggerCrash(); }
+	void SetUAVStateForTest(const FUAVState& InState);
+	void RecordSafeCrashPoseForTest() { RecordSafeFlightState(); }
+	AUAVWreckActor* GetActiveWreckActorForTest() const { return ActiveWreckActor; }
+#endif
 
 	// 获取轨迹跟踪组件
 	UFUNCTION(BlueprintCallable, Category = "UAV|Components")
@@ -301,6 +310,10 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "UAV State")
 	EFlightState FlightState = EFlightState::Flying;
 
+	// 炸机后生成的物理残骸 Actor，负责 Chaos 刚体坠落和碰撞
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "UAV|Crash")
+	TObjectPtr<AUAVWreckActor> ActiveWreckActor;
+
 	// 预定义航点数组（已废弃，请使用 MissionComponent）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV|Waypoints", meta = (DeprecatedProperty, DeprecationMessage = "Use MissionComponent instead"))
 	TArray<FVector> Waypoints;
@@ -328,6 +341,10 @@ private:
 
 	// stuck 逃逸冷却：stuck 时延长不求解时间，让逃逸加速度持续生效
 	float StuckEscapeCooldown = 0.0f;
+
+	// 最近一次正常飞行的安全状态，避免从穿透位姿生成物理残骸
+	FUAVState LastSafeFlightState;
+	bool bHasLastSafeFlightState = false;
 
 
 	// 缓存最近障碍物距离（cm），用于偏差保护和减速决策
@@ -368,6 +385,21 @@ private:
 
 	// 触发炸机逻辑
 	void TriggerCrash();
+
+	// 记录最近一次未穿透的安全飞行状态，用于炸机瞬间非穿透交接
+	void RecordSafeFlightState();
+
+	// 判断指定状态是否已经穿透障碍物
+	bool IsStatePenetratingObstacle(const FUAVState& State) const;
+
+	// 构建炸机交接状态：位置使用安全状态，速度和角速度使用当前状态
+	FUAVState BuildCrashHandoffState() const;
+
+	// 炸机瞬间生成独立物理残骸 Actor
+	bool SpawnWreckActor(const FUAVState& HandoffState);
+
+	// 炸机后从残骸 Actor 同步位置、姿态和速度
+	void SyncStateFromWreck();
 
 	// NMPC 求解相关
 	bool ShouldSolveNMPC(float DeltaTime);
