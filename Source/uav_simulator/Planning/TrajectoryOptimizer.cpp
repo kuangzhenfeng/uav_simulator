@@ -384,9 +384,9 @@ TArray<float> UTrajectoryOptimizer::SolveSingleAxis(const TArray<float>& Positio
 
 		// 使用闭式解（通过符号计算预先求解）
 		// 这是一个Vandermonde型矩阵的逆
-		float c4 = (35.0f * b0 - 20.0f * b1 * T + 5.0f * b2 * T2 - 0.5f * b3 * T3) / T4;
-		float c5 = (-84.0f * b0 + 45.0f * b1 * T - 10.0f * b2 * T2 + b3 * T3) / T5;
-		float c6 = (70.0f * b0 - 36.0f * b1 * T + 7.5f * b2 * T2 - 0.5f * b3 * T3) / T6;
+		float c4 = (35.0f * b0 - 15.0f * b1 * T + 2.5f * b2 * T2 - (1.0f / 6.0f) * b3 * T3) / T4;
+		float c5 = (-84.0f * b0 + 39.0f * b1 * T - 7.0f * b2 * T2 + 0.5f * b3 * T3) / T5;
+		float c6 = (70.0f * b0 - 34.0f * b1 * T + 6.5f * b2 * T2 - 0.5f * b3 * T3) / T6;
 		float c7 = (-20.0f * b0 + 10.0f * b1 * T - 2.0f * b2 * T2 + (1.0f / 6.0f) * b3 * T3) / T7;
 
 		// 添加系数（8个系数）

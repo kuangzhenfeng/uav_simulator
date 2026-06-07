@@ -110,14 +110,19 @@ AUAVPawn::AUAVPawn()
 	CameraBoom->SetupAttachment(RootComponent);
 	CameraBoom->TargetArmLength = 900.0f;
 	CameraBoom->bUsePawnControlRotation = false;
+	// 位置延迟：低速跟随减少位移抖动
 	CameraBoom->bEnableCameraLag = true;
-	CameraBoom->CameraLagSpeed = 10.0f;
+	CameraBoom->CameraLagSpeed = 4.0f;
+	// 相机方向固定在世界空间，不随无人机旋转
+	CameraBoom->bInheritPitch = false;
+	CameraBoom->bInheritYaw = false;
+	CameraBoom->bInheritRoll = false;
 	CameraBoom->SetRelativeRotation(FRotator(-30.0f, 0.0f, 0.0f));
 
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
-	FollowCamera->FieldOfView = 120.0f;
+	FollowCamera->FieldOfView = 90.0f;
 
 	// 初始化状态
 	CurrentState = FUAVState();
@@ -557,6 +562,14 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 	TArray<FObstacleInfo> NearbyObstacles;
 	FilterNearbyObstacles(NearbyObstacles);
 
+	// 诊断：障碍物数量统计
+	{
+		int32 TotalObs = ObstacleManagerComponent ? ObstacleManagerComponent->GetAllObstacles().Num() : 0;
+		UE_LOG_THROTTLE(2.0, LogUAVActor, Log,
+			TEXT("[ObstacleDiag] Agent %d: Total=%d, Nearby=%d"),
+			AgentID, TotalObs, NearbyObstacles.Num());
+	}
+
 	FixReferencePointsPenetratingObstacles(ReferencePoints, NearbyObstacles);
 
 	// 动态切换MPC类型
@@ -611,18 +624,16 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 		HandleStuckEscape(Result, NearbyObstacles);
 	}
 
-	// NMPC 净空不足制动：收敛但轨迹距障碍过近时，施加保守制动
+	// NMPC 净空不足制动：轨迹距障碍过近时无条件施加保守制动
+	// 不限制最低速度：低速时也需要覆盖原有危险加速度
 	if (Result.Diagnostics.bClearanceInsufficient && !Result.bStuck)
 	{
 		float Speed = CurrentState.Velocity.Size();
-		if (Speed > 50.0f)
-		{
-			FVector VelDir = CurrentState.Velocity.GetSafeNormal();
-			CachedNMPCAcceleration = -VelDir * 400.0f;
-			UE_LOG_THROTTLE(0.5, LogUAVActor, Warning,
-				TEXT("[NMPC] Clearance insufficient (%.0fcm), applying brake"),
-				Result.Diagnostics.MinPredictedClearance);
-		}
+		FVector VelDir = Speed > 10.0f ? CurrentState.Velocity.GetSafeNormal() : FVector::ForwardVector;
+		CachedNMPCAcceleration = -VelDir * 400.0f;
+		UE_LOG_THROTTLE(0.5, LogUAVActor, Warning,
+			TEXT("[NMPC] Clearance insufficient (%.0fcm), applying brake"),
+			Result.Diagnostics.MinPredictedClearance);
 	}
 }
 
@@ -1066,13 +1077,46 @@ void AUAVPawn::UpdateController(float DeltaTime)
 							CBFResult.SolveStatus == ECBFQPStatus::MaxIterations)
 						{
 							UE_LOG_THROTTLE(1.0, LogUAVActor, Warning,
-								TEXT("[CBF-QP] Agent %d: QP degraded mode, status=%d"),
-								AgentID, (int32)CBFResult.SolveStatus);
+								TEXT("[CBF-QP] Agent %d: QP degraded mode, status=%d, Residual=%.2f, StaticSlack=%.2f, StaticConstraints=%d, AgentConstraints=%d"),
+								AgentID, (int32)CBFResult.SolveStatus, CBFResult.KKTResidual,
+								CBFResult.StaticSlack, CBFResult.StaticConstraintCount, CBFResult.AgentConstraintCount);
+
 							// 降级: 保守制动
 							FVector VelDir = CurrentState.Velocity.GetSafeNormal();
 							float Speed = CurrentState.Velocity.Size();
 							if (Speed > 100.0f)
-								EffectiveAccel = -VelDir * 400.0f;
+							{
+								// 制动幅度不超过模型真实最大加速度能力
+								constexpr float DegradedBrakeAccel = 400.0f;
+								FVector BrakeAccel = -VelDir * DegradedBrakeAccel;
+
+								// 验证制动方向不会朝向最近障碍物
+								// 若制动方向指向障碍物，改为垂直于速度的逃逸方向
+								FVector WorstObsDir = FVector::ZeroVector;
+								float MinDist = MAX_FLT;
+								for (const FObstacleInfo& Obs : ObsForCBF)
+								{
+									// ä½¿ç¨ç»ä¸æç¬¦å·è·ç¦»å½æ°ï¼æ¯æçãæè½¬çååæ±
+								float D = NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs);
+									if (D < MinDist)
+									{
+										MinDist = D;
+										WorstObsDir = (CurrentState.Position - Obs.Center).GetSafeNormal();
+									}
+								}
+								if (WorstObsDir.IsNormalized() && FVector::DotProduct(BrakeAccel, -WorstObsDir) > 0.0f)
+								{
+									// 制动会朝向障碍物：改为垂直逃逸
+									FVector EscapeDir = WorstObsDir - VelDir * FVector::DotProduct(WorstObsDir, VelDir);
+									if (EscapeDir.SizeSquared() < 1.0f)
+									{
+										EscapeDir = FVector::CrossProduct(VelDir, FVector::UpVector);
+									}
+									EscapeDir.Normalize();
+									BrakeAccel = EscapeDir * DegradedBrakeAccel;
+								}
+								EffectiveAccel = BrakeAccel;
+							}
 						}
 
 						// 注意：不再对 QP 输出做幅值限幅

@@ -341,6 +341,20 @@ void UMissionComponent::ResetMission()
 	UE_LOG(LogUAVMission, Log, TEXT("ResetMission: Mission reset"));
 }
 
+void UMissionComponent::FailMission(const FString& Reason)
+{
+	// 已经是终态时不再重复转换
+	if (MissionState == EMissionState::Failed || MissionState == EMissionState::Completed)
+	{
+		return;
+	}
+
+	SetMissionState(EMissionState::Failed);
+	OnMissionFailed.Broadcast(Reason);
+
+	UE_LOG(LogUAVMission, Warning, TEXT("FailMission: %s"), *Reason);
+}
+
 // ==================== 状态查询 ====================
 
 float UMissionComponent::GetMissionProgress() const

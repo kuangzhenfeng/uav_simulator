@@ -51,6 +51,13 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 		return EBTNodeResult::Failed;
 	}
 
+	// 失败终态优先：超时后不得被重新解释为成功
+	if (Tracker->IsTimedOut())
+	{
+		UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: Trajectory timed out, task failed"));
+		return EBTNodeResult::Failed;
+	}
+
 	// 若轨迹已完成，不重复执行（防止BT循环导致无限重启）
 	if (Tracker->IsComplete())
 	{
@@ -229,6 +236,12 @@ void UBTTask_UAVFollowTrajectory::TickTask(UBehaviorTreeComponent& OwnerComp, ui
 	// 检查轨迹跟踪是否因超时完成
 	if (UAVPawn->IsTrajectoryTimedOut())
 	{
+		// å° MissionComponent è½¬ä¸ºå¤±è´¥ç»æ
+		UMissionComponent* MissionComp = UAVPawn->GetMissionComponent();
+		if (MissionComp)
+		{
+			MissionComp->FailMission(TEXT("Trajectory timed out"));
+		}
 		UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: Trajectory timed out"));
 		FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
 		return;
@@ -269,7 +282,11 @@ void UBTTask_UAVFollowTrajectory::OnTaskFinished(UBehaviorTreeComponent& OwnerCo
 		if (UAVPawn && TaskResult != EBTNodeResult::Succeeded)
 		{
 			// 任务失败时停止轨迹跟踪
-			UAVPawn->StopTrajectoryTracking();
+			UTrajectoryTracker* Tracker = UAVPawn->GetTrajectoryTracker();
+			if (Tracker)
+			{
+				Tracker->Reset();
+			}
 		}
 	}
 

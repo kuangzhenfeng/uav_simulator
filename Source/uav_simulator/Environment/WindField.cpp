@@ -53,6 +53,20 @@ void UWindField::SetWindConfig(const FWindConfig& InConfig)
 	DrydenTauY = LengthScaleM / FMath::Max(RefSpeedM, 0.5f) * 2.0f;
 	DrydenTauZ = LengthScaleM / FMath::Max(RefSpeedM, 0.5f) * 2.0f;
 
+	// 立即更新稳态风速，不依赖 TickComponent
+	if (Config.bEnabled)
+	{
+		CurrentState.SteadyComponent = Config.SteadyWindVelocity;
+		CurrentState.WindVelocity = CurrentState.SteadyComponent
+			+ CurrentState.GustComponent + CurrentState.TurbulenceComponent;
+		CurrentState.WindSpeed = CurrentState.WindVelocity.Size();
+	}
+	else
+	{
+		CurrentState.WindVelocity = FVector::ZeroVector;
+		CurrentState.WindSpeed = 0.0f;
+	}
+
 	UE_LOG(LogUAVWind, Log, TEXT("[WindField] Config updated: type=%d"), static_cast<int32>(Config.WindType));
 }
 

@@ -52,11 +52,13 @@ int32 UObstacleManager::RegisterObstacle(const FObstacleInfo& Obstacle)
 	Obstacles.Add(NewObstacle);
 	OnObstacleDetected.Broadcast(NewObstacle);
 
-	UE_LOG(LogUAVPlanning, Log, TEXT("Obstacle registered: ID=%d, Type=%d, Center=%s, Extents=%s"),
+	UE_LOG(LogUAVPlanning, Log, TEXT("Obstacle registered: ID=%d, Type=%d, Center=%s, Extents=%s, Actor=%s, Total=%d"),
 		NewObstacle.ObstacleID,
 		(int32)NewObstacle.Type,
 		*NewObstacle.Center.ToString(),
-		*NewObstacle.Extents.ToString());
+		*NewObstacle.Extents.ToString(),
+		NewObstacle.LinkedActor.IsValid() ? *NewObstacle.LinkedActor->GetName() : TEXT("none"),
+		Obstacles.Num());
 
 	return NewObstacle.ObstacleID;
 }
@@ -85,7 +87,9 @@ int32 UObstacleManager::RegisterObstacleFromActor(AActor* Actor, EObstacleType T
 	}
 	else
 	{
-		Actor->GetActorBounds(false, Origin, BoxExtent);
+		FVector UnusedOrigin;
+		Actor->GetActorBounds(false, UnusedOrigin, BoxExtent);
+		Origin = Actor->GetActorLocation();
 	}
 
 	FObstacleInfo Obstacle;
@@ -120,6 +124,7 @@ bool UObstacleManager::RemoveObstacle(int32 ObstacleID)
 	{
 		if (Obstacles[i].ObstacleID == ObstacleID)
 		{
+			UE_LOG(LogUAVPlanning, Log, TEXT("Obstacle removed: ID=%d, Total=%d"), ObstacleID, Obstacles.Num() - 1);
 			Obstacles.RemoveAt(i);
 			return true;
 		}
@@ -284,7 +289,9 @@ void UObstacleManager::UpdateDynamicObstacles(float DeltaTime)
 			}
 			else
 			{
-				Actor->GetActorBounds(false, Origin, BoxExtent);
+				FVector UnusedOrigin;
+				Actor->GetActorBounds(false, UnusedOrigin, BoxExtent);
+				Origin = Actor->GetActorLocation();
 			}
 
 			const FVector PreviousCenter = Obstacle.Center;
@@ -387,7 +394,11 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 	}
 	else
 	{
-		Actor->GetActorBounds(false, Origin, BoxExtent);
+		// 使用 GetActorBounds 获取包围盒尺寸，但中心位置用 GetActorLocation
+		// GetActorBounds 的 Origin 是包围盒几何中心，可能因子组件偏移而与 Actor 位置不同
+		FVector UnusedOrigin;
+		Actor->GetActorBounds(false, UnusedOrigin, BoxExtent);
+		Origin = Actor->GetActorLocation();
 	}
 	const float CurrentTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 
@@ -475,6 +486,12 @@ int32 UObstacleManager::RemoveStalePerceivedObstacles(float MaxAge)
 			Obstacles.RemoveAt(i);
 			RemovedCount++;
 		}
+	}
+
+	if (RemovedCount > 0)
+	{
+		UE_LOG(LogUAVPlanning, Log, TEXT("[ObstacleManager] Removed %d stale obstacles, remaining=%d"),
+			RemovedCount, Obstacles.Num());
 	}
 
 	return RemovedCount;

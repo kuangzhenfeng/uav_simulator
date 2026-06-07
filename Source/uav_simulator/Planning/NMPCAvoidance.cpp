@@ -910,7 +910,8 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	float InitialCost = MAX_FLT;
 	const int32 N = Config.Solver.PredictionSteps;
 	const float dt = Config.GetDt();
-	const float SafeClearanceThreshold = Config.Obstacle.ObstacleSafeDistance * 0.5f;
+	// 净空阈值使用完整安全距离，候选必须保持安全距离以上
+	const float SafeClearanceThreshold = Config.Obstacle.ObstacleSafeDistance;
 	// 确保参考点数量足够
 	TArray<FVector> RefPoints = ReferencePoints;
 	while (RefPoints.Num() < N + 1)
@@ -1056,21 +1057,55 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	FString SelectedInitType = TEXT("Legacy");
 	if (StuckEscapeCount <= 0 && Candidates.Num() > 0)
 	{
-				// 最优候选净空低于安全阈值时输出警告
-				if (Candidates[0].MinClearance <= SafeClearanceThreshold)
+		// 检查最优候选净空
+		if (Candidates[0].MinClearance <= SafeClearanceThreshold)
+		{
+			UE_LOG(LogUAVPlanning, Warning, TEXT("[NMPC] Best candidate clearance=%.0f below threshold=%.0f"),
+				Candidates[0].MinClearance, SafeClearanceThreshold);
+
+			// 所有候选都不安全时：优先选择最大净空的制动候选
+			const FInitCandidate* BestBrake = nullptr;
+			for (const FInitCandidate& Cand : Candidates)
+			{
+				if (Cand.Type == EInitCandidateType::Brake)
 				{
-					UE_LOG(LogUAVPlanning, Warning, TEXT("[NMPC] Best candidate clearance=%.0f below threshold=%.0f"),
-						Candidates[0].MinClearance, SafeClearanceThreshold);
+					if (!BestBrake || Cand.MinClearance > BestBrake->MinClearance)
+						BestBrake = &Cand;
 				}
-		Controls = Candidates[0].Controls;
-		SelectedInitType = FString::Printf(TEXT("MultiInit_%s"),
-			Candidates[0].Type == EInitCandidateType::Warm ? TEXT("Warm") :
-			Candidates[0].Type == EInitCandidateType::Nominal ? TEXT("Nom") :
-			Candidates[0].Type == EInitCandidateType::Left ? TEXT("Left") :
-			Candidates[0].Type == EInitCandidateType::Right ? TEXT("Right") :
-			Candidates[0].Type == EInitCandidateType::Up ? TEXT("Up") :
-			Candidates[0].Type == EInitCandidateType::Down ? TEXT("Down") :
-			Candidates[0].Type == EInitCandidateType::Brake ? TEXT("Brake") : TEXT("?"));
+			}
+			if (BestBrake && BestBrake->MinClearance >= Candidates[0].MinClearance)
+			{
+				Controls = BestBrake->Controls;
+				SelectedInitType = TEXT("BrakeFallback");
+				UE_LOG(LogUAVPlanning, Warning, TEXT("[NMPC] No safe candidate, using brake fallback, clearance=%.0f"),
+					BestBrake->MinClearance);
+			}
+			else
+			{
+				// 没有更好的制动候选，使用排序最优的
+				Controls = Candidates[0].Controls;
+				SelectedInitType = FString::Printf(TEXT("MultiInit_%s"),
+					Candidates[0].Type == EInitCandidateType::Warm ? TEXT("Warm") :
+					Candidates[0].Type == EInitCandidateType::Nominal ? TEXT("Nom") :
+					Candidates[0].Type == EInitCandidateType::Left ? TEXT("Left") :
+					Candidates[0].Type == EInitCandidateType::Right ? TEXT("Right") :
+					Candidates[0].Type == EInitCandidateType::Up ? TEXT("Up") :
+					Candidates[0].Type == EInitCandidateType::Down ? TEXT("Down") :
+					Candidates[0].Type == EInitCandidateType::Brake ? TEXT("Brake") : TEXT("?"));
+			}
+		}
+		else
+		{
+			Controls = Candidates[0].Controls;
+			SelectedInitType = FString::Printf(TEXT("MultiInit_%s"),
+				Candidates[0].Type == EInitCandidateType::Warm ? TEXT("Warm") :
+				Candidates[0].Type == EInitCandidateType::Nominal ? TEXT("Nom") :
+				Candidates[0].Type == EInitCandidateType::Left ? TEXT("Left") :
+				Candidates[0].Type == EInitCandidateType::Right ? TEXT("Right") :
+				Candidates[0].Type == EInitCandidateType::Up ? TEXT("Up") :
+				Candidates[0].Type == EInitCandidateType::Down ? TEXT("Down") :
+				Candidates[0].Type == EInitCandidateType::Brake ? TEXT("Brake") : TEXT("?"));
+		}
 	}
 	else
 	{
@@ -1296,7 +1331,8 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	}
 
 	// 基于预测净空的失败检测
-	if (bConverged && PredictedMinClearance < Config.Obstacle.ObstacleSafeDistance * 0.5f)
+	// 不依赖 bConverged：未收敛时净空也可能不足
+	if (PredictedMinClearance < Config.Obstacle.ObstacleSafeDistance * 0.5f)
 	{
 		Result.Diagnostics.bClearanceInsufficient = true;
 	}

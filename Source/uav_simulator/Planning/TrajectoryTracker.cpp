@@ -38,7 +38,8 @@ void UTrajectoryTracker::BeginPlay()
 
 bool UTrajectoryTracker::ShouldCheckOvertimeCompletion() const
 {
-	return !bIsTracking && !bIsComplete && CurrentTrajectory.bIsValid
+	// 超时后不再重入：防止 HandleOvertimeCompletion 被高频调用
+	return !bIsTracking && !bIsComplete && !bIsTimedOut && CurrentTrajectory.bIsValid
 		&& TrackingTime >= CurrentTrajectory.TotalDuration
 		&& CurrentTrajectory.Points.Num() > 0 && GetOwner();
 }
@@ -82,10 +83,10 @@ void UTrajectoryTracker::HandleOvertimeCompletion(float DeltaTime)
 		UE_LOG(LogUAVPlanning, Warning, TEXT("[Tracker] Overtime timeout (%.1fs): Dist=%.0f Speed=%.0f, marking as timed out"),
 			OvertimeElapsed, Dist, Speed);
 		bIsTimedOut = true;
-		bIsComplete = true;
-		OvertimeElapsed = 0.0f;
-		OnTrajectoryCompleted.Broadcast();
-		OnTrajectoryTimedOut.Broadcast();
+			// 超时是失败终态，不设 bIsComplete，不广播 OnTrajectoryCompleted
+			// 行为树通过 IsTimedOut() 识别失败并返回 Failed
+			OvertimeElapsed = 0.0f;
+			OnTrajectoryTimedOut.Broadcast();
 	}
 	else
 	{

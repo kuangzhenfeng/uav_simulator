@@ -39,8 +39,11 @@ void UMagnetometerSensor::UpdateSensor(const FUAVState& TrueState, float DeltaTi
 	// 从磁场测量值计算航向角
 	// 使用水平分量（X, Y）计算磁航向
 	// 注意：UE5 使用 FRD 机体坐标系，X=前，Y=右
+	// UE5 Yaw 正方向为绕 Z 轴左手法则（从上往下看顺时针）
+	// 当朝东时（Yaw=90），机体系磁场 North 分量沿 -Y 方向
+	// 因此航向 = atan2(-BodyY, BodyX)
 	float HeadingRad = FMath::Atan2(
-		CurrentData.MagneticField.Y,
+		-CurrentData.MagneticField.Y,
 		CurrentData.MagneticField.X
 	);
 

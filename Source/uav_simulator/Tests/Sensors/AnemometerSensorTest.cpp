@@ -28,7 +28,8 @@ bool FAnemometerWithWindFieldTest::RunTest(const FString& Parameters)
 	Anemo->SetWindField(WindField);
 
 	FUAVState State = UAVTestHelpers::CreateUAVState(FVector(0, 0, 0));
-	Anemo->UpdateSensor(State, 0.01f);
+	// DeltaTime 必须大于更新间隔 (1/20Hz = 0.05s) 才能触发传感器更新
+	Anemo->UpdateSensor(State, 0.06f);
 
 	FAnemometerData Data = Anemo->GetAnemometerData();
 
@@ -93,7 +94,8 @@ bool FAnemometerConvergenceTest::RunTest(const FString& Parameters)
 
 	for (int32 i = 0; i < N; ++i)
 	{
-		Anemo->UpdateSensor(State, 0.01f);
+		// DeltaTime 必须大于更新间隔 (1/20Hz = 0.05s) 才能触发传感器更新
+		Anemo->UpdateSensor(State, 0.06f);
 		FAnemometerData Data = Anemo->GetAnemometerData();
 		SpeedSum += Data.WindSpeed;
 	}

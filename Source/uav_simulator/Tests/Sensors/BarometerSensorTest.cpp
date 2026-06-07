@@ -45,7 +45,8 @@ bool FBarometerAltitudeTest::RunTest(const FString& Parameters)
 
 	// Z = 100000cm = 1000m
 	FUAVState State = UAVTestHelpers::CreateUAVState(FVector(0, 0, 100000.0f));
-	Baro->UpdateSensor(State, 0.01f);
+	// DeltaTime 必须大于更新间隔 (1/50Hz = 0.02s) 才能触发传感器更新
+	Baro->UpdateSensor(State, 0.03f);
 
 	FBarometerData Data = Baro->GetBarometerData();
 

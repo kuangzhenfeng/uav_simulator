@@ -121,6 +121,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Mission|Control")
 	void ResetMission();
 
+	/** 将任务标记为失败 */
+	UFUNCTION(BlueprintCallable, Category = "Mission|Control")
+	void FailMission(const FString& Reason);
+
 	// ==================== 状态查询 ====================
 
 	/** 获取任务状态 */

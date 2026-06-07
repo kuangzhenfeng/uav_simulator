@@ -71,7 +71,8 @@ bool FWindFieldDragNoRelativeTest::RunTest(const FString& Parameters)
 
 	FWindConfig Config;
 	Config.bEnabled = true;
-	// 不设置风速 → CurrentState.WindVelocity 保持为 0
+	// 显式清零风速，FWindConfig 默认 SteadyWindVelocity = (0, 100, 0)
+	Config.SteadyWindVelocity = FVector::ZeroVector;
 	// UAV 速度也为 0 → 无相对风速 → 零阻力
 	WindField->SetWindConfig(Config);
 
