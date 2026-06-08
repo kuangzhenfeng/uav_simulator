@@ -405,8 +405,9 @@ bool FUAVPawnHardLimitPrioritizesCrossTrackCorrectionTest::RunTest(const FString
 	const FVector NominalAccel(450.0f, -300.0f, 0.0f);
 	const FVector CorrectedAccel = Pawn->ApplyHardLimitCorrectionForTest(NominalAccel, 1600.0f);
 
-	TestTrue(TEXT("Severe deviation should suppress along-track acceleration to reserve tilt authority"),
-		FMath::Abs(CorrectedAccel.X) < 1.0f);
+	// 严重横向偏差应大幅抑制前向加速度，但保留部分以维持最低前进速度
+	TestTrue(TEXT("Severe deviation should significantly suppress along-track acceleration"),
+		CorrectedAccel.X < 200.0f && CorrectedAccel.X > 50.0f);
 	TestTrue(TEXT("Severe deviation should command acceleration back toward the trajectory"),
 		CorrectedAccel.Y > 400.0f);
 

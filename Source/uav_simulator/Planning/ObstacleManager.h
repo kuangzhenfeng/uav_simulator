@@ -23,6 +23,7 @@ public:
 	UObstacleManager();
 
 protected:
+	virtual void OnRegister() override;
 	virtual void BeginPlay() override;
 
 public:
@@ -183,6 +184,14 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Obstacle Settings")
 	float DefaultSafetyMargin = 50.0f;
 
+	// 是否在启动时自动注册场景中命名明确的静态障碍物
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Obstacle Settings")
+	bool bAutoDiscoverNamedStaticObstacles = true;
+
+	// 启动时自动注册的静态障碍物 Actor 名称前缀
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Obstacle Settings", meta = (EditCondition = "bAutoDiscoverNamedStaticObstacles"))
+	FString StaticObstacleNamePrefix = TEXT("BP_Obstacle_");
+
 	// 是否自动更新动态障碍物
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Obstacle Settings")
 	bool bAutoUpdateDynamicObstacles = true;
@@ -206,6 +215,12 @@ protected:
 private:
 	// 下一个障碍物ID
 	int32 NextObstacleID;
+
+	// 启动时注册场景中已命名的静态障碍物
+	void DiscoverNamedStaticObstacles();
+
+	// 判断 Actor 是否为场景静态障碍物
+	bool IsNamedStaticObstacleActor(const AActor* Actor) const;
 
 	// 更新动态障碍物位置
 	void UpdateDynamicObstacles(float DeltaTime);

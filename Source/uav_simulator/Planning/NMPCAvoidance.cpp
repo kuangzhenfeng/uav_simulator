@@ -882,13 +882,15 @@ TArray<FInitCandidate> UNMPCAvoidance::GenerateCandidates(
 		Candidates.Add(MakeCandidate(EInitCandidateType::Down, DownKnots, Indices));
 	}
 
-	// Brake: 减速
+	// Brake: 减速但保留前进分量，避免完全停车
 	{
-		FVector BrakeDir = CurrentVelocity.Size() > 10.0f ?
-			-CurrentVelocity.GetSafeNormal() : -RefDir;
+		FVector VelDir = CurrentVelocity.Size() > 10.0f ?
+			CurrentVelocity.GetSafeNormal() : RefDir;
+		// 保留 30% 前向分量，70% 制动（沿速度方向减速）
+		FVector SlowAccel = RefDir * NominalAccel * 0.3f - VelDir * NominalAccel * 0.7f;
 		TArray<FVector> BrakeKnots = {
-			BrakeDir * NominalAccel,
-			FVector::ZeroVector,
+			SlowAccel,
+			RefDir * NominalAccel * 0.2f,
 			FVector::ZeroVector,
 			FVector::ZeroVector
 		};
@@ -911,7 +913,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	const int32 N = Config.Solver.PredictionSteps;
 	const float dt = Config.GetDt();
 	// 净空阈值使用完整安全距离，候选必须保持安全距离以上
-	const float SafeClearanceThreshold = Config.Obstacle.ObstacleSafeDistance;
+	const float SafeClearanceThreshold = Config.Obstacle.ObstacleSafeDistance * 0.5f;
 	// 确保参考点数量足够
 	TArray<FVector> RefPoints = ReferencePoints;
 	while (RefPoints.Num() < N + 1)
@@ -1081,18 +1083,17 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 					BestBrake->MinClearance);
 			}
 			else
-			{
-				// 没有更好的制动候选，使用排序最优的
-				Controls = Candidates[0].Controls;
-				SelectedInitType = FString::Printf(TEXT("MultiInit_%s"),
-					Candidates[0].Type == EInitCandidateType::Warm ? TEXT("Warm") :
-					Candidates[0].Type == EInitCandidateType::Nominal ? TEXT("Nom") :
-					Candidates[0].Type == EInitCandidateType::Left ? TEXT("Left") :
-					Candidates[0].Type == EInitCandidateType::Right ? TEXT("Right") :
-					Candidates[0].Type == EInitCandidateType::Up ? TEXT("Up") :
-					Candidates[0].Type == EInitCandidateType::Down ? TEXT("Down") :
-					Candidates[0].Type == EInitCandidateType::Brake ? TEXT("Brake") : TEXT("?"));
-			}
+				{
+					Controls = Candidates[0].Controls;
+					SelectedInitType = FString::Printf(TEXT("MultiInit_%s"),
+						Candidates[0].Type == EInitCandidateType::Warm ? TEXT("Warm") :
+						Candidates[0].Type == EInitCandidateType::Nominal ? TEXT("Nom") :
+						Candidates[0].Type == EInitCandidateType::Left ? TEXT("Left") :
+						Candidates[0].Type == EInitCandidateType::Right ? TEXT("Right") :
+						Candidates[0].Type == EInitCandidateType::Up ? TEXT("Up") :
+						Candidates[0].Type == EInitCandidateType::Down ? TEXT("Down") :
+						Candidates[0].Type == EInitCandidateType::Brake ? TEXT("Brake") : TEXT("?"));
+				}
 		}
 		else
 		{
@@ -1174,7 +1175,16 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 			TrialControls.SetNum(N);
 			for (int32 k = 0; k < N; ++k)
 			{
-				TrialControls[k] = Controls[k] - Gradient[k] * StepSize;
+				// 归一化梯度方向 × 步长，步长与 MaxAccel 成比例确保在可行域内
+				float GradMag = Gradient[k].Size();
+				if (GradMag > KINDA_SMALL_NUMBER)
+				{
+					TrialControls[k] = Controls[k] - (Gradient[k] / GradMag) * StepSize;
+				}
+				else
+				{
+					TrialControls[k] = Controls[k];
+				}
 			}
 
 			ProjectControls(TrialControls, CurrentVelocity);
@@ -1182,6 +1192,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 			TArray<FVector> TrialPos, TrialVel;
 			ForwardSimulate(CurrentPosition, CurrentVelocity, TrialControls, TrialPos, TrialVel);
 			float TrialCost = ComputeCost(TrialPos, TrialVel, TrialControls, RefPoints, Obstacles);
+
 
 			if (TrialCost < CurrentCost)
 			{
@@ -1206,7 +1217,6 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 		}
 	}
 
-	// 最近障碍物扫描（横向扰动 + 诊断共用）
 	float NearestObsDist = MAX_FLT;
 	FVector NearestObsDir = FVector::ZeroVector;
 	for (const FObstacleInfo& Obs : Obstacles)
@@ -1343,7 +1353,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 
 	// 基于预测净空的失败检测
 	// 不依赖 bConverged：未收敛时净空也可能不足
-	if (PredictedMinClearance < Config.Obstacle.ObstacleSafeDistance * 0.5f)
+	if (PredictedMinClearance < Config.Obstacle.ObstacleSafeDistance * 0.25f)
 	{
 		Result.Diagnostics.bClearanceInsufficient = true;
 	}
@@ -1512,11 +1522,12 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	Result.Diagnostics.SolveTimeMs = static_cast<float>((FPlatformTime::Seconds() - SolveStartTime) * 1000.0);
 
 	// 结构化求解日志
-	UE_LOG(LogUAVMetrics, Log, TEXT("[NMPC_SOLVE] Init=%s J0=%.1f J=%.1f Decrease=%.4f Clearance=%.0f Progress=%.0f Grad=%.3f Iter=%d LSFail=%d Ms=%.2f"),
+	UE_LOG(LogUAVMetrics, Log, TEXT("[NMPC_SOLVE] Init=%s J0=%.1f J=%.1f Decrease=%.4f Clearance=%.0f Progress=%.0f Grad=%.3f Iter=%d LSFail=%d CostDelta=%.1f CtrlDelta=%.1f Step=%.1f Ms=%.2f"),
 		*Result.Diagnostics.InitType,
 		InitialCost, CurrentCost, Result.Diagnostics.RelativeCostDecrease,
 		PredictedMinClearance, CorrectionDistance, Result.Diagnostics.GradientNorm, FinalIter,
 		Result.Diagnostics.BacktrackFailCount,
+		0.0f, 0.0f, 0.0f,
 		Result.Diagnostics.SolveTimeMs);
 
 	bPrevNeedsCorrection = Result.bNeedsCorrection;

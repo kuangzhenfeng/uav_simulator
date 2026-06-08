@@ -183,7 +183,7 @@ void AUAVPawn::BeginPlay()
 		Cfg.Solver.PredictionHorizon = 4.0f;         // 预测时域 4s
 		Cfg.Solver.PredictionSteps = 8;               // 8 步
 		Cfg.Cost.WeightReference = 0.01f;             // 参考跟踪权重
-		Cfg.Cost.WeightVelocity = 0.005f;             // 速度跟踪权重
+		Cfg.Cost.WeightVelocity = 0.05f;             // 速度跟踪权重
 		Cfg.Cost.WeightTerminal = 0.01f;              // 终端代价
 		Cfg.Cost.WeightObstacle = 5.0f;               // 障碍物权重
 		Cfg.Obstacle.ObstacleSafeDistance = 200.0f;   // 安全距离 2m
@@ -192,9 +192,12 @@ void AUAVPawn::BeginPlay()
 		Cfg.Obstacle.MaxObstacleCostPerStep = 600.0f;
 		Cfg.Actuator.MaxAcceleration = 500.0f;        // 最大加速度
 		Cfg.Solver.MaxIterations = 40;                // 迭代次数
-		Cfg.Solver.InitialStepSize = 500.0f;          // 初始步长
+		Cfg.Solver.InitialStepSize = 100.0f;           // 梯度步长 (cm/s²)
 		Cfg.Cost.WeightControl = 0.0001f;             // 控制代价
 		Cfg.Cost.WeightTemporalConsistency = 0.001f;  // 时序一致性
+		Cfg.Cost.WeightProgress = 0.4f;               // 路径进度权重（提高 4x，驱动前进）
+		Cfg.Cost.WeightLateral = 0.4f;                // 横向跟踪权重（保持较强纠偏，防止偏离）
+		Cfg.Cost.WeightLag = 0.2f;                    // 纵向滞后权重（降低，允许更积极的加速）
 	}
 
 	// 多机协同注册
@@ -696,13 +699,15 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 		HandleStuckEscape(Result, NearbyObstacles);
 	}
 
-	// NMPC 净空不足制动：轨迹距障碍过近时无条件施加保守制动
-	// 不限制最低速度：低速时也需要覆盖原有危险加速度
+	// NMPC 净空不足制动：减速但保留 NMPC 的避障方向分量
+	// 仅抑制向障碍物方向的速度，不丢弃 NMPC 计算的避障加速度
 	if (Result.Diagnostics.bClearanceInsufficient && !Result.bStuck)
 	{
 		float Speed = CurrentState.Velocity.Size();
 		FVector VelDir = Speed > 10.0f ? CurrentState.Velocity.GetSafeNormal() : FVector::ForwardVector;
-		CachedNMPCAcceleration = -VelDir * 400.0f;
+		// 沿速度方向施加制动，但保留 50% 的 NMPC 横向/垂直避障分量
+		FVector NMPCHoriz = CachedNMPCAcceleration - VelDir * FVector::DotProduct(CachedNMPCAcceleration, VelDir);
+		CachedNMPCAcceleration = NMPCHoriz * 0.5f - VelDir * 200.0f;
 		UE_LOG_THROTTLE(0.5, LogUAVActor, Warning,
 			TEXT("[NMPC] Clearance insufficient (%.0fcm), applying brake"),
 			Result.Diagnostics.MinPredictedClearance);
@@ -815,17 +820,17 @@ FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float Cr
 	float YError = DesiredPos.Y - CurrentState.Position.Y;
 	float ZError = DesiredPos.Z - CurrentState.Position.Z;
 
-	// 基础偏差硬限制 120cm (1.2m)，近障碍时适度放宽到 130cm
-	float HardLimit = 120.0f;
+	// 基础偏差硬限制 80cm (0.8m)，近障碍时适度放宽到 100cm
+	float HardLimit = 80.0f;
 	if (CachedNearestObsDist < NMPCComponent->Config.Obstacle.ObstacleSafeDistance * 3.0f)
 	{
 		float ProximityRatio = FMath::Clamp(
 			1.0f - CachedNearestObsDist / (NMPCComponent->Config.Obstacle.ObstacleSafeDistance * 3.0f), 0.0f, 1.0f);
-		HardLimit = FMath::Lerp(120.0f, 130.0f, ProximityRatio);
+		HardLimit = FMath::Lerp(80.0f, 100.0f, ProximityRatio);
 	}
 
-	// 偏差超过硬限制时，用固定强度（600 cm/s²）+ 速度阻尼强制拉回。
-	// 严重横向偏差阶段优先保留倾角预算给回轨方向，避免前向加速度挤占可执行横向加速度。
+	// 偏差超过硬限制时，用固定强度（800 cm/s²）+ 速度阻尼强制拉回。
+	// 严重横向偏差阶段大幅抑制前向加速度，优先回轨迹。
 	if (CrossTrackDev > HardLimit)
 	{
 		FVector CorrDir(0.0f, YError, ZError);
@@ -833,9 +838,9 @@ FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float Cr
 		constexpr float Kd = 1.5f;
 		float YVelError = -CurrentState.Velocity.Y;
 		float ZVelError = -CurrentState.Velocity.Z;
-		Result.X = 0.0f;
-		Result.Y = CorrDir.Y * 600.0f + Kd * YVelError;
-		Result.Z = CorrDir.Z * 600.0f + Kd * ZVelError;
+		Result.X *= 0.15f;  // 严重偏差时保留少量前向加速度
+		Result.Y = CorrDir.Y * 800.0f + Kd * YVelError;
+		Result.Z = CorrDir.Z * 800.0f + Kd * ZVelError;
 	}
 
 	return Result;
@@ -1061,8 +1066,8 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			{
 				const float CurSpeed = CurrentState.Velocity.Size();
 				const float NMPCMag = SmoothedNMPCAcceleration.Size();
-				const float MinSpeed = 400.0f;      // 4 m/s
-				const float MinControlMag = 50.0f;  // NMPC 控制量低于此值视为过小
+				const float MinSpeed = 600.0f;      // 6 m/s（MaxVel 的 50%）
+				const float MinControlMag = 250.0f;  // NMPC 控制量低于此值视为过小（SatRatio < 0.5）
 
 				if (CurSpeed < MinSpeed && NMPCMag < MinControlMag)
 				{

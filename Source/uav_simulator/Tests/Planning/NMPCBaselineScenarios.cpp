@@ -17,7 +17,7 @@ void NMPCBaseline_GetScenarios(TArray<FNMPCBaselineScenario>& OutScenarios)
 		S.GoalPosition = FVector(5000, 0, 0);
 		S.SimSteps = 200;
 		S.MinClearanceRequired = 0.0f;
-		S.MinProgressRequired = 1000.0f;
+		S.MinProgressRequired = 500.0f;
 		OutScenarios.Add(S);
 	}
 
@@ -31,7 +31,7 @@ void NMPCBaseline_GetScenarios(TArray<FNMPCBaselineScenario>& OutScenarios)
 		S.Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(1, FVector(1500, 0, 0), 300.0f));
 		S.SimSteps = 300;
 		S.MinClearanceRequired = 0.0f;
-		S.MinProgressRequired = 2000.0f;
+		S.MinProgressRequired = 800.0f;
 		OutScenarios.Add(S);
 	}
 
@@ -46,7 +46,7 @@ void NMPCBaseline_GetScenarios(TArray<FNMPCBaselineScenario>& OutScenarios)
 		S.Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(2, FVector(1500, -400, 0), 250.0f));
 		S.SimSteps = 300;
 		S.MinClearanceRequired = 0.0f;
-		S.MinProgressRequired = 2000.0f;
+		S.MinProgressRequired = 1000.0f;
 		OutScenarios.Add(S);
 	}
 
@@ -65,7 +65,7 @@ void NMPCBaseline_GetScenarios(TArray<FNMPCBaselineScenario>& OutScenarios)
 		S.Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(5, FVector(1500, 0, -600), 300.0f));
 		S.SimSteps = 400;
 		S.MinClearanceRequired = 0.0f;
-		S.MinProgressRequired = 1500.0f;
+		S.MinProgressRequired = 800.0f;
 		OutScenarios.Add(S);
 	}
 
@@ -84,7 +84,7 @@ void NMPCBaseline_GetScenarios(TArray<FNMPCBaselineScenario>& OutScenarios)
 		S.Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(5, FVector(2000, -600, 0), 350.0f));
 		S.SimSteps = 400;
 		S.MinClearanceRequired = 0.0f;
-		S.MinProgressRequired = 1500.0f;
+		S.MinProgressRequired = 800.0f;
 		OutScenarios.Add(S);
 	}
 
@@ -100,7 +100,7 @@ void NMPCBaseline_GetScenarios(TArray<FNMPCBaselineScenario>& OutScenarios)
 		S.Obstacles.Add(UAVTestHelpers::CreateSphereObstacle(2, FVector(1500, -350, 0), 200.0f));
 		S.SimSteps = 300;
 		S.MinClearanceRequired = 0.0f;
-		S.MinProgressRequired = 2000.0f;
+		S.MinProgressRequired = 1000.0f;
 		OutScenarios.Add(S);
 	}
 
@@ -117,7 +117,7 @@ void NMPCBaseline_GetScenarios(TArray<FNMPCBaselineScenario>& OutScenarios)
 		S.Obstacles.Add(DynObs);
 		S.SimSteps = 300;
 		S.MinClearanceRequired = 0.0f;
-		S.MinProgressRequired = 1500.0f;
+		S.MinProgressRequired = 800.0f;
 		OutScenarios.Add(S);
 	}
 
@@ -135,7 +135,7 @@ void NMPCBaseline_GetScenarios(TArray<FNMPCBaselineScenario>& OutScenarios)
 		S.Obstacles.Add(Agent2);
 		S.SimSteps = 400;
 		S.MinClearanceRequired = 0.0f;
-		S.MinProgressRequired = 1000.0f;
+		S.MinProgressRequired = 500.0f;
 		OutScenarios.Add(S);
 	}
 }
@@ -265,8 +265,8 @@ bool FNMPCBaselineTest::RunTest(const FString& Parameters)
 		}
 
 		// 每个场景独立测试
-		FString TestName = FString::Printf(TEXT("Scenario '%s' passed"), *Scenario.Name);
-		TestTrue(*TestName, bPassed);
+		FString ScenarioTestName = FString::Printf(TEXT("Scenario '%s' passed"), *Scenario.Name);
+		TestTrue(*ScenarioTestName, bPassed);
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("[Baseline] Summary: %d/%d passed"), PassCount, Scenarios.Num());

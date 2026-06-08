@@ -139,7 +139,7 @@
   - 振荡/位置卡死检测与逃逸逻辑
   - 嵌套参数结构（Solver/Cost/Obstacle/Actuator/Init 分组）
   - 支持 Sphere/Box/Cylinder 障碍物及动态障碍物预测
-- 基于射线检测的障碍物感知（ObstacleDetector）
+- 基于射线检测的障碍物感知（ObstacleDetector）与命名静态障碍物启动注册
 
 ### AI 行为树
 - 任务节点：飞往位置、轨迹跟踪、悬停、巡逻

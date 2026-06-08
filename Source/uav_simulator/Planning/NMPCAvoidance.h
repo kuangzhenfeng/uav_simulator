@@ -48,9 +48,9 @@ struct FNMPCSolverConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
 	float FiniteDiffEpsilon = 20.0f;
 
-	// 初始学习率
+	// 梯度下降步长 (cm/s²)：归一化梯度方向上的步进量
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	float InitialStepSize = 150.0f;
+	float InitialStepSize = 100.0f;
 
 	// 回溯线搜索缩减因子
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")

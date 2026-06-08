@@ -78,6 +78,61 @@ namespace
 	}
 }
 
+// ==================== 启动时自动发现命名静态障碍物测试 ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FObstacleManagerAutoDiscoversNamedStaticObstaclesTest,
+	"UAVSimulator.Planning.ObstacleManager.AutoDiscoversNamedStaticObstacles",
+	UAV_TEST_FLAGS)
+
+bool FObstacleManagerAutoDiscoversNamedStaticObstaclesTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CreateObstacleManagerTestWorld(TEXT("ObstacleManager_AutoDiscoverNamedStatic"));
+	TestNotNull(TEXT("Test world should be created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AActor* OwnerActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+	TestNotNull(TEXT("Owner actor should be created"), OwnerActor);
+	if (!OwnerActor)
+	{
+		DestroyObstacleManagerTestWorld(World);
+		return false;
+	}
+
+	AActor* NamedObstacle = SpawnBoxActor(
+		World,
+		FVector(1200.0f, 100.0f, 600.0f),
+		FRotator::ZeroRotator,
+		FVector(50.0f, 50.0f, 50.0f));
+	TestNotNull(TEXT("Named obstacle actor should be created"), NamedObstacle);
+	if (!NamedObstacle)
+	{
+		DestroyObstacleManagerTestWorld(World);
+		return false;
+	}
+	NamedObstacle->Rename(TEXT("BP_Obstacle_Default_C_Test"));
+
+	UObstacleManager* Manager = NewObject<UObstacleManager>(OwnerActor);
+	Manager->RegisterComponent();
+
+	const TArray<FObstacleInfo>& Obstacles = Manager->GetAllObstacles();
+	TestEqual(TEXT("One named static obstacle should be auto-discovered"), Obstacles.Num(), 1);
+	if (Obstacles.Num() == 1)
+	{
+		TestFalse(TEXT("Auto-discovered named obstacle should not be perceived"), Obstacles[0].bIsPerceived);
+		TestFalse(TEXT("Auto-discovered named obstacle should not be dynamic"), Obstacles[0].bIsDynamic);
+		TestTrue(TEXT("Auto-discovered named obstacle should keep actor link"), Obstacles[0].LinkedActor.Get() == NamedObstacle);
+	}
+
+	Manager->UnregisterComponent();
+	DestroyObstacleManagerTestWorld(World);
+	return true;
+}
+
 // ==================== 球体碰撞检测测试 ====================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FObstacleManagerSphereCollisionTest,

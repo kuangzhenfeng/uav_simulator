@@ -18,9 +18,24 @@ UObstacleManager::UObstacleManager()
 	CollisionWarningDistance = 200.0f;
 	bShowDebug = false;
 }
+void UObstacleManager::OnRegister()
+{
+	Super::OnRegister();
+
+	if (bAutoDiscoverNamedStaticObstacles)
+	{
+		DiscoverNamedStaticObstacles();
+	}
+}
+
 void UObstacleManager::BeginPlay()
 {
 	Super::BeginPlay();
+
+	if (bAutoDiscoverNamedStaticObstacles)
+	{
+		DiscoverNamedStaticObstacles();
+	}
 }
 
 void UObstacleManager::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -116,6 +131,49 @@ FVector UObstacleManager::ComputeObstacleExtentsFromBounds(EObstacleType Type, c
 	default:
 		return BoxExtent;
 	}
+}
+
+void UObstacleManager::DiscoverNamedStaticObstacles()
+{
+	UWorld* World = GetWorld();
+	if (!World || StaticObstacleNamePrefix.IsEmpty())
+	{
+		return;
+	}
+
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		AActor* Actor = *It;
+		if (!IsNamedStaticObstacleActor(Actor))
+		{
+			continue;
+		}
+
+		bool bAlreadyRegistered = false;
+		for (const FObstacleInfo& Obstacle : Obstacles)
+		{
+			if (Obstacle.LinkedActor.Get() == Actor)
+			{
+				bAlreadyRegistered = true;
+				break;
+			}
+		}
+
+		if (!bAlreadyRegistered)
+		{
+			RegisterObstacleFromActor(Actor, EObstacleType::Box, DefaultSafetyMargin);
+		}
+	}
+}
+
+bool UObstacleManager::IsNamedStaticObstacleActor(const AActor* Actor) const
+{
+	if (!Actor || Actor == GetOwner())
+	{
+		return false;
+	}
+
+	return Actor->GetName().StartsWith(StaticObstacleNamePrefix);
 }
 
 bool UObstacleManager::RemoveObstacle(int32 ObstacleID)
