@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AgentManager.h"
+#include "../uav_simulator.h"
 #include "uav_simulator/Core/UAVPawn.h"
 #include "uav_simulator/Core/UAVPlayerController.h"
 #include "uav_simulator/Mission/MissionComponent.h"
@@ -44,6 +45,8 @@ void AMultiAgentGameMode::BeginPlay()
 void AMultiAgentGameMode::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	SCOPE_CYCLE_COUNTER(STAT_AgentManagerTick);
 
 	UE_LOG_THROTTLE(5.0, LogUAVMultiAgent, Log, TEXT("[AgentManager] Tick, dt=%.4f, agents=%d"), DeltaTime, AgentRegistry.Num());
 

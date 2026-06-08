@@ -88,7 +88,7 @@ void UPositionController::ComputeControl(const FUAVState& CurrentState, const FV
 		DesiredRoll = FMath::Clamp(DesiredRoll, -MaxTiltAngle, MaxTiltAngle);
 	}
 
-	// Yaw保持当前值（或可以设置为目标Yaw）
+	// Yaw 保持当前值（由姿态控制器 YawPID 锁定航向）
 	float DesiredYaw = CurrentState.Rotation.Yaw;
 
 	OutDesiredAttitude = FRotator(DesiredPitch, DesiredYaw, DesiredRoll);
@@ -176,13 +176,15 @@ void UPositionController::AccelerationToControl(const FVector& DesiredAccelerati
 
 	OutAttitude.Roll = LastDesiredAttitude.Roll + RollDelta;
 	OutAttitude.Pitch = LastDesiredAttitude.Pitch + PitchDelta;
-	OutAttitude.Yaw = CurrentYaw;
 
-	// 更新上一次姿态
-	const_cast<UPositionController*>(this)->LastDesiredAttitude = OutAttitude;
-}
+		// Yaw 保持当前值（由姿态控制器 YawPID 锁定航向）
+		OutAttitude.Yaw = CurrentYaw;
 
-void UPositionController::ComputeControlWithAcceleration(const FUAVState& CurrentState, const FVector& InTargetPosition,
+		// 更新上一次姿态
+		const_cast<UPositionController*>(this)->LastDesiredAttitude = OutAttitude;
+	}
+
+	void UPositionController::ComputeControlWithAcceleration(const FUAVState& CurrentState, const FVector& InTargetPosition,
 	const FVector& InTargetVelocity, const FVector& InTargetAcceleration,
 	FRotator& OutDesiredAttitude, float& OutThrust, float DeltaTime)
 {
@@ -245,9 +247,10 @@ void UPositionController::ComputeControlWithAcceleration(const FUAVState& Curren
 		DesiredRoll = FMath::Clamp(DesiredRoll, -MaxTiltAngle, MaxTiltAngle);
 	}
 
-	float DesiredYaw = CurrentState.Rotation.Yaw;
+		// Yaw 保持当前值（由姿态控制器 YawPID 锁定航向）
+		float DesiredYaw = CurrentState.Rotation.Yaw;
 
-	OutDesiredAttitude = FRotator(DesiredPitch, DesiredYaw, DesiredRoll);
+		OutDesiredAttitude = FRotator(DesiredPitch, DesiredYaw, DesiredRoll);
 
 	// 更新积分项
 	const float IntegralLimit = 1000.0f;

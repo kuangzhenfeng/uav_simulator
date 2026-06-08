@@ -52,7 +52,7 @@ protected:
 
 	// 是否显示UAV信息
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUD Settings")
-	bool bShowUAVInfo = true;
+	bool bShowUAVInfo = false;
 
 	// 阶跃测试结果
 	bool bHasStepResult = false;

@@ -181,6 +181,7 @@ void UUAVDynamics::EmergencyStopMotors()
 
 void UUAVDynamics::ComputeForcesAndTorques(FVector& OutForce, FVector& OutTorque) const
 {
+	SCOPE_CYCLE_COUNTER(STAT_ComputeForces);
 	// 四旋翼配置 (X型):
 	//     0(CW)
 	//       |

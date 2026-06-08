@@ -61,3 +61,6 @@ DECLARE_LOG_CATEGORY_EXTERN(LogUAVCamera, Log, All);
 
 // 结构化仿真指标日志
 DECLARE_LOG_CATEGORY_EXTERN(LogUAVMetrics, Log, All);
+
+// 性能分析日志
+DECLARE_LOG_CATEGORY_EXTERN(LogUAVProfiling, Log, All);

@@ -320,7 +320,10 @@ void AUAVPawn::Tick(float DeltaTime)
 			}
 
 			// 碰撞检测
-			CheckCollision();
+			{
+				SCOPE_CYCLE_COUNTER(STAT_CollisionCheck);
+				CheckCollision();
+			}
 
 			if (FlightState == EFlightState::Crashed)
 			{
@@ -339,6 +342,16 @@ void AUAVPawn::Tick(float DeltaTime)
 	if (FlightState != EFlightState::Crashed)
 	{
 		UpdateMetricsLog(DeltaTime);
+	}
+
+	// 性能分析日志：每 2 秒输出一次各模块耗时
+	{
+		ProfilingLogTimer += DeltaTime;
+		if (ProfilingLogTimer >= 2.0f)
+		{
+			ProfilingLogTimer = 0.0f;
+			OutputProfilingSummary();
+		}
 	}
 
 	// 炸机后由残骸物理接管；不再更新飞行评分和规划可视化，避免用坠毁残骸状态触发飞行期告警
@@ -964,14 +977,43 @@ FVector AUAVPawn::ApplyVelocityClamp(const FVector& Acceleration)
 	float MaxVel = PositionControllerComponent->MaxVelocity;
 	float CurSpeed = CurrentState.Velocity.Size();
 
-	if (CurSpeed > MaxVel * 0.9f && CurSpeed > KINDA_SMALL_NUMBER)
+	// 偏差感知速度限制：偏差大时降低速度上限，防止飞过纠偏范围
+	// 基于当前横向偏差计算允许的最大速度比例
+	float DevSpeedLimit = 1.0f;
+	if (TrajectoryTrackerComponent)
 	{
-		FVector VelDir = CurrentState.Velocity / CurSpeed;
-		float AlongVel = FVector::DotProduct(Result, VelDir);
-		if (AlongVel > 0.0f)
+		FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
+		float YErr = DesiredPos.Y - CurrentState.Position.Y;
+		float ZErr = DesiredPos.Z - CurrentState.Position.Z;
+		float Dev = FMath::Sqrt(YErr * YErr + ZErr * ZErr);
+		if (Dev > 800.0f)
 		{
-			float Ratio = FMath::Clamp((CurSpeed - MaxVel * 0.9f) / (MaxVel * 0.1f), 0.0f, 1.0f);
-			Result -= VelDir * AlongVel * Ratio;
+			// 偏差 > 8m：速度限制 30%
+			DevSpeedLimit = 0.3f;
+		}
+		else if (Dev > 500.0f)
+		{
+			// 偏差 > 5m：速度限制 50%
+			DevSpeedLimit = FMath::Lerp(0.5f, 0.3f, (Dev - 500.0f) / 300.0f);
+		}
+		else if (Dev > 250.0f)
+		{
+			// 偏差 > 2.5m：速度限制 70%
+			DevSpeedLimit = FMath::Lerp(1.0f, 0.5f, (Dev - 250.0f) / 250.0f);
+		}
+	}
+
+	float EffectiveMaxSpeed = MaxVel * DevSpeedLimit;
+
+	// 仅限制前向（X轴）速度分量，不影响横向/纵向纠偏速度
+	float ForwardSpeed = FMath::Abs(CurrentState.Velocity.X);
+	if (ForwardSpeed > EffectiveMaxSpeed && DevSpeedLimit < 1.0f)
+	{
+		float ForwardAccel = Result.X;
+		if ((ForwardSpeed > 0 && ForwardAccel > 0) || (ForwardSpeed < 0 && ForwardAccel < 0))
+		{
+			float Ratio = FMath::Clamp((ForwardSpeed - EffectiveMaxSpeed) / FMath::Max(EffectiveMaxSpeed * 0.1f, 10.0f), 0.0f, 1.0f);
+			Result.X -= ForwardAccel * Ratio;
 		}
 	}
 
@@ -1844,4 +1886,17 @@ void AUAVPawn::UpdateMetricsLog(float DeltaTime)
 			MetricsMaxRoll, MetricsMaxPitch, MetricsAttitudeInstabilityTime,
 			MetricsNMPCStuckCount, MetricsForceCompleteCount);
 	}
+}
+
+void AUAVPawn::OutputProfilingSummary()
+{
+	// 输出帧级性能指标到日志
+	float FrameTime = GetWorld()->GetDeltaSeconds();
+	float Speed = CurrentState.Velocity.Size();
+
+	UE_LOG(LogUAVProfiling, Log,
+		TEXT("[PERF_SUMMARY] Agent=%d FrameTime=%.2fms Speed=%.0f Pos=(%.0f,%.0f,%.0f) ControlMode=%d"),
+		AgentID, FrameTime * 1000.0f, Speed,
+		CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
+		(int32)ControlMode);
 }

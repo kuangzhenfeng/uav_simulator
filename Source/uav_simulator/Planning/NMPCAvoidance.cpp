@@ -3,6 +3,7 @@
 #include "NMPCAvoidance.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Utility/Filter.h"
+#include "../uav_simulator.h"
 
 UNMPCAvoidance::UNMPCAvoidance()
 {
@@ -908,6 +909,7 @@ FNMPCAvoidanceResult UNMPCAvoidance::ComputeAvoidance(
 	const TArray<FObstacleInfo>& Obstacles)
 {
 	const double SolveStartTime = FPlatformTime::Seconds();
+	SCOPE_CYCLE_COUNTER(STAT_NMPCSolver);
 	FNMPCAvoidanceResult Result;
 	float InitialCost = MAX_FLT;
 	const int32 N = Config.Solver.PredictionSteps;

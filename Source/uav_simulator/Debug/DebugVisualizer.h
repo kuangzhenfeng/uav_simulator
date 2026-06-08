@@ -74,19 +74,19 @@ public:
 protected:
 	// 是否显示调试信息
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Settings")
-	bool bShowDebugInfo = true;
+	bool bShowDebugInfo = false;
 
 	// 是否显示轨迹历史
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Settings")
-	bool bShowTrajectory = true;
+	bool bShowTrajectory = false;
 
 	// 是否显示规划路径
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Settings")
-	bool bShowPlannedPath = true;
+	bool bShowPlannedPath = false;
 
 	// 是否显示跟踪状态
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Settings")
-	bool bShowTrackingState = true;
+	bool bShowTrackingState = false;
 
 	// 轨迹历史最大长度
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Settings")

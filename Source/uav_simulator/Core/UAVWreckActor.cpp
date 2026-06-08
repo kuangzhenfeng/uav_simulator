@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UAVWreckActor.h"
+#include "../uav_simulator.h"
 
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
@@ -40,6 +41,7 @@ AUAVWreckActor::AUAVWreckActor()
 void AUAVWreckActor::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+	SCOPE_CYCLE_COUNTER(STAT_WreckActorTick);
 	SyncStateFromPhysics();
 }
 

@@ -70,9 +70,9 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │              后处理管道                                          │
 │  • EMA 平滑（新旧解 0.4/0.6 混合）                             │
-│  • 低速补偿（v < 4 m/s 且控制量不足时注入最小加速度）           │
-│  • 偏差保护（横向偏差 > 2m 时 PD 修正）                         │
-│  • 速度预钳位（接近 MaxVelocity 时削减同向加速度）              │
+│  • 低速补偿（v < 6 m/s 且控制量不足时注入最小加速度）           │
+│  • 偏差保护（横向偏差 > 2m 时 PD 修正，> 0.8m 硬限制强制纠偏）  │
+│  • 偏差感知速度钳位（偏差大时限制前向速度，防止飞过纠偏范围）    │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -114,7 +114,7 @@
 **关键特性**：
 - **分层控制**：轨迹跟踪 → MPC 规划 → 后处理 → CBF-QP 安全滤波 → 位置控制 → 姿态控制 → 动力学
 - **灵活配置**：NMPC/LinearMPC 运行时切换，CBF-QP 三级模式（Active/ShadowLog/Disabled），前馈/自适应独立开关
-- **鲁棒性保障**：EMA 平滑 + 偏差保护 + 安全层内速度包络主动制动 + CBF-QP 安全滤波 + 卡死逃逸
+- **鲁棒性保障**：EMA 平滑 + 偏差保护 + 硬限制纠偏 + 偏差感知速度钳位 + CBF-QP 安全滤波 + 卡死逃逸
 
 
 ### 产品型号支持
@@ -132,9 +132,11 @@
   - 6-状态点质量模型，投影梯度下降求解器
   - Frenet 坐标分解代价函数（横向/纵向误差 + L2 平方距离）
   - Smooth hinge 障碍代价（A/B 对比开关）
-  - 确定性多初值 PGD（Warm/Nominal/Left/Right/Up/Down/Brake 7 候选 + 短 PGD 精炼）
+  - 确定性多初值 PGD（Warm/Nominal/Left/Right/Up/Down/SlowForward 7 候选 + 短 PGD 精炼）
   - Homotopy 绕行侧记忆（跨帧持久化，迟滞切换）
   - Dykstra 投影（同时满足加速度 + 速度约束）
+  - 自适应安全阈值（基于实际净空分布动态调整 BrakeFallback 触发条件）
+  - 净空不足制动保留横向避障分量（避免完全丢弃 NMPC 避障输出）
   - 同次优化内失败检测（线搜索失败 / 梯度收敛但净空不足）
   - 振荡/位置卡死检测与逃逸逻辑
   - 嵌套参数结构（Solver/Cost/Obstacle/Actuator/Init 分组）
@@ -265,6 +267,11 @@ Script\sim.bat 30       # 指定运行 30 秒
 - `PlanningVisualizer`: 规划可视化组件
 - `MissionComponent`: 任务管理组件
 - `NMPCAvoidance`: NMPC 局部避障组件
+
+### 性能分析
+内置 `SCOPE_CYCLE_COUNTER` 性能埋点，支持 UE5 `stat UAVSim` 实时查看各模块耗时。日志中每 2 秒输出 `[PERF_SUMMARY]` 帧时间指标。
+
+已覆盖模块：UAVPawn::Tick、物理子步进、RK4积分、推力/力矩计算、NMPC求解、CBF-QP滤波、碰撞检测、传感器更新、控制器更新、轨迹跟踪、Debug绘制等。
 - `LinearMPCAvoidance`: 线性 MPC 避障组件（可切换）
 - `CBFQPFilter`: CBF-QP 安全滤波组件
 - `WindField`: 风场组件
@@ -399,7 +406,7 @@ Script\test.bat
 
 ```
 TrajectoryTracker → NMPC/LinearMPC (20Hz)
-    → EMA 平滑 + 偏差保护 + 速度钳位
+    → EMA 平滑 + 低速补偿 + 偏差保护 + 硬限制纠偏 + 偏差感知速度钳位
     → CBF-QP 安全滤波
     → AccelerationToControl (姿态+推力)
     → 前馈角加速度 (Mellinger-Kumar)

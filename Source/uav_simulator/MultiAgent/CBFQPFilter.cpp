@@ -2,6 +2,7 @@
 
 #include "CBFQPFilter.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
+#include "../uav_simulator.h"
 
 namespace
 {
@@ -901,6 +902,7 @@ FCBFQPResult UCBFQPFilter::Filter(
     const FCBFQPConfig& Config)
 {
     const double StartTime = FPlatformTime::Seconds();
+    SCOPE_CYCLE_COUNTER(STAT_CBFQPFilter);
     FCBFQPResult Result;
     Result.SafeAcceleration = NominalAcceleration;
 

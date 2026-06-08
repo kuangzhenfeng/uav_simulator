@@ -130,9 +130,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID Parameters")
 	FPIDParams PitchPID = FPIDParams(0.03f, 0.0f, 0.01f);
 
-	// Yaw PID参数 (增大Kp以主导控制方向)
+	// Yaw PID参数（PD控制：Kp锁定航向 + Kd阻尼衰减角速度）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PID Parameters")
-	FPIDParams YawPID = FPIDParams(0.005f, 0.0f, 0.0f);
+	FPIDParams YawPID = FPIDParams(0.03f, 0.0f, 0.02f);
 
 	// 悬停推力 (归一化值 0-1)
 	// 调整后的悬停推力值，通过实际测试微调

@@ -448,6 +448,9 @@ private:
 		// ---- 仿真指标累计器 ----
 		void UpdateMetricsLog(float DeltaTime);
 
+			// 性能分析：输出各模块耗时到日志
+			void OutputProfilingSummary();
+
 		// 速度指标
 		float MetricsMaxVelocity = 0.0f;
 		float MetricsLowSpeedTimer = 0.0f;
@@ -481,4 +484,7 @@ private:
 
 		// 汇总节流计时
 		float MetricsSummaryTimer = 0.0f;
+
+		// 性能分析日志
+		float ProfilingLogTimer = 0.0f;
 };
