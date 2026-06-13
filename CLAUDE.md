@@ -36,6 +36,15 @@
 5. **发现问题** → 找出根本问题，修复代码，必要时可以添加重要日志 → 回到步骤 1
 6. **行为正常** → 完成
 
+## Agent规范
+
+- 若WebSearch返回结果为空，尝试换用Fetch进行网络搜索
+- 当调用grill-with-docs skill进行拷问时，请使用AskUserQuestion工具并给出推荐选项
+- 当调用improve-codebase-architecture skill生成可视化网页时用中文，并且调用使用python启动一个本地服务器，返回访问地址
+- 不要在代码中添加临时的、仅针对本次变更的说明性注释，但必要注释仍需要添加
+- 不要做超过20000字节的大编辑。如果编辑失败了，把一个编辑拆分成多个较小的编辑
+- 当给你代码review的诊断报告时，你需要基于代码实事进行分析，直到你有十足把握为止，对于不确定的地方禁止进行任何代码修改
+
 ## Unreal Engine control
 
 `soft-ue-cli` controls this UE project via the SoftUEBridge plugin (installed via pipx).
