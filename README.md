@@ -183,6 +183,14 @@
 - 分模块日志等级控制
 - 结构化仿真指标日志（速度、姿态、偏差、NMPC/CBF 求解、安全失败汇总）
 
+### 场景资产化系统
+- 声明式仿真场景（`UScenario` DataAsset）：障碍布局、风场、机队、任务航点、验收标准、随机种子
+- 组合引用式资产：`UScenario` 外壳引用 5 个可复用子资产（`UObstacleLayout`/`UWindProfile`/`UFleetSetup`/`UMissionProfile`/`UAcceptanceCriteria`）
+- 场景装配器（`UScenarioLoader`）：运行时按声明内容 Spawn 机队、注册障碍、配置风场、下发任务
+- 场景验收器（`UScenarioEvaluator`）：周期快照指标，对照验收标准判定 PASS/FAIL，输出 `scenario_result.json`（不依赖进程正常退出，pkill 强杀时留最近一次快照）
+- 命令行驱动：`-Scenario=<资产路径>` 指定运行场景，`sim.sh` 据退出码（PASS=0/FAIL=1/缺失=2）供 CI 判定
+- 风场为场景级单例（挂在 `AMultiAgentGameMode`，全关卡共享）
+
 ### 视角切换
 - UMG 按钮面板：屏幕左下角显示视角切换按钮
 - 全局视角：自由观察模式（默认）
@@ -239,10 +247,11 @@ Script\build.bat
 
 ### 运行仿真
 ```bash
-Script\sim.bat          # 默认运行 60 秒
-Script\sim.bat 30       # 指定运行 30 秒
+Script\sim.bat                          # 默认运行 60 秒
+Script\sim.bat 30                       # 指定运行 30 秒
+Script\sim.bat 30 8 "/Game/Scenarios/S" # 指定场景资产（可选第 3 参数）
 ```
-仿真日志保存至 `Logs/uav.log`。
+仿真日志保存至 `Logs/uav.log`。传入场景资产时，进程退出码反映判决：`0`=PASS、`1`=FAIL、`2`=结果缺失。
 
 也可在编辑器中打开关卡 `Content/Environment/Levels/UavSimulatorMap`，放置 `BP_UAVPawn_Default` 后点击 Play。
 

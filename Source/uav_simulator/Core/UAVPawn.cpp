@@ -81,19 +81,8 @@ AUAVPawn::AUAVPawn()
 	// 创建编队控制组件
 	FormationComponent = CreateDefaultSubobject<UFormationComponent>(TEXT("FormationComponent"));
 
-	// 创建风场组件（Phase 14: 环境模拟）
-	WindFieldComponent = CreateDefaultSubobject<UWindField>(TEXT("WindField"));
-	// 默认风场配置：恒定微风 + 标准大气阻力参数
-	{
-		FWindConfig DefaultWindConfig;
-		DefaultWindConfig.bEnabled = true;
-		DefaultWindConfig.WindType = EWindFieldType::Constant;
-		DefaultWindConfig.SteadyWindVelocity = FVector(300.0f, 0.0f, 0.0f); // X 方向 300 cm/s
-		DefaultWindConfig.AirDensity = 1.225f;
-		DefaultWindConfig.DragArea = 0.04f;
-		DefaultWindConfig.DragCoefficient = 1.0f;
-		WindFieldComponent->SetWindConfig(DefaultWindConfig);
-	}
+	// 风场不再由 UAVPawn 自建（ADR-0002）：提升为 GameMode 场景级单例。
+	// BeginPlay 时从 AMultiAgentGameMode 获取引用，转发给 AnemometerSensor 与物理积分。
 
 	// 创建气压计传感器
 	BarometerSensor = CreateDefaultSubobject<UBarometerSensor>(TEXT("BarometerSensor"));
@@ -213,17 +202,21 @@ void AUAVPawn::BeginPlay()
 		{
 			CommunicationComponent->SetOwnerAgentID(AgentID);
 		}
+
+		// ADR-0002：从 GameMode 取场景级 WindField 单例，转发给风速计与物理积分。
+		SceneWindField = MultiAgentGM->GetWindField();
+
 		UE_LOG(LogUAVActor, Log, TEXT("[MultiAgent] Registered as Agent %d"), AgentID);
 	}
 
 	// Phase 14: 环境组件接线
-	// 风速计引用风场组件获取真实风速
-	if (AnemometerSensor && WindFieldComponent)
+	// 风速计引用场景级风场获取真实风速（ADR-0002）
+	if (AnemometerSensor && SceneWindField)
 	{
-		AnemometerSensor->SetWindField(WindFieldComponent);
+		AnemometerSensor->SetWindField(SceneWindField);
 	}
 
-	UE_LOG(LogUAVActor, Log, TEXT("[Environment] WindField + sensors initialized"));
+	UE_LOG(LogUAVActor, Log, TEXT("[Environment] Scene WindField + sensors initialized"));
 
 		// 出生点安全诊断：检测出生位置附近的所有障碍物
 		if (ObstacleManagerComponent)
@@ -297,10 +290,10 @@ void AUAVPawn::Tick(float DeltaTime)
 		{
 			SCOPE_CYCLE_COUNTER(STAT_PhysicsSubStep);
 
-			// Phase 14: 计算风阻力加速度并传递给动力学组件
-			if (WindFieldComponent && DynamicsComponent)
+			// Phase 14: 计算风阻力加速度并传递给动力学组件（ADR-0002：使用场景级风场）
+			if (SceneWindField && DynamicsComponent)
 			{
-				FVector WindAccel = WindFieldComponent->ComputeWindDragAcceleration(
+				FVector WindAccel = SceneWindField->ComputeWindDragAcceleration(
 					CurrentState.Velocity, CurrentState.Position, DynamicsComponent->GetMass());
 				DynamicsComponent->SetExternalWindAcceleration(WindAccel);
 			}

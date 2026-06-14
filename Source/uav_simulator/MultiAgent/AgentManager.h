@@ -12,6 +12,10 @@ class AUAVPawn;
 class UJointNMPCSolver;
 class UTaskAllocator;
 class UTaskMonitor;
+class UWindField;
+class UScenario;
+class UScenarioLoader;
+class UScenarioEvaluatorComponent;
 
 /**
  * 多机协同 GameMode
@@ -19,6 +23,9 @@ class UTaskMonitor;
  * 关卡级单例，管理所有 Agent 的注册、状态查询、编队配置和联合规划。
  * 在关卡中设置此 GameMode 即可启用多机协同功能。
  * 未使用此 GameMode 的关卡保持单机模式，零开销。
+ *
+ * 持有场景级 WindField 单例（ADR-0002）：风场是环境而非机载设备，
+ * 全关卡共享一个实例，所有 UAV 经历同一片风。
  */
 UCLASS(ClassGroup = (Custom), meta = (BlueprintType))
 class UAV_SIMULATOR_API AMultiAgentGameMode : public AGameModeBase
@@ -30,6 +37,14 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaTime) override;
+
+	/** 获取场景级 WindField 单例（ADR-0002） */
+	UFUNCTION(BlueprintCallable, Category = "Environment")
+	UWindField* GetWindField() const { return WindField; }
+
+	/** 默认场景资产引用（命令行未指定 -Scenario= 时使用） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario")
+	TSoftObjectPtr<UScenario> DefaultScenario;
 
 	// ---- Agent 注册与管理 ----
 
@@ -177,6 +192,30 @@ public:
 	// Agent 状态缓存刷新间隔 (秒)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MultiAgent")
 	float StateCacheUpdateInterval = 0.05f;
+
+protected:
+	// 场景级 WindField 单例（ADR-0002）。风场属环境，全关卡共享。
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Environment")
+	TObjectPtr<UWindField> WindField;
+
+	/** 装配场景：解析 -Scenario= 命令行或回退 DefaultScenario，按子流程装配世界 */
+	void LoadAndAssembleScenario();
+
+	// 当前生效的场景资产
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Scenario")
+	TObjectPtr<UScenario> ActiveScenario;
+
+	// 场景装配器实例
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Scenario")
+	TObjectPtr<UScenarioLoader> ScenarioLoaderInstance;
+
+	// 场景验收器组件（周期快照 + 最终判决）
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Scenario")
+	TObjectPtr<UScenarioEvaluatorComponent> ScenarioEvaluatorComponent;
+
+	// 场景装配出的机队（供 Evaluator / 外部查询）
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Scenario")
+	TArray<TObjectPtr<AUAVPawn>> ScenarioFleet;
 
 private:
 	// Agent 注册表

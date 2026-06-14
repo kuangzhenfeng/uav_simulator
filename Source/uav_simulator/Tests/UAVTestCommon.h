@@ -64,6 +64,9 @@ namespace UAVTestCategories
 	static const TCHAR* Barometer = TEXT("UAVSimulator.Sensors.Barometer");
 	static const TCHAR* Magnetometer = TEXT("UAVSimulator.Sensors.Magnetometer");
 	static const TCHAR* Anemometer = TEXT("UAVSimulator.Sensors.Anemometer");
+
+	// Scenario 子分类（场景资产化系统）
+	static const TCHAR* Scenario = TEXT("UAVSimulator.Scenario");
 }
 
 // ==================== 测试标志组合 ====================

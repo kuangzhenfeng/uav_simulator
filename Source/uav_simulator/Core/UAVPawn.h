@@ -261,9 +261,10 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MultiAgent Components")
 	TObjectPtr<UFormationComponent> FormationComponent;
 
-	// 风场组件（Phase 14: 环境模拟）
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Environment Components")
-	TObjectPtr<UWindField> WindFieldComponent;
+	// 风场组件已提升为 GameMode 场景级单例（ADR-0002）。
+	// UAVPawn 运行时从 AMultiAgentGameMode::GetWindField() 取引用并缓存于此。
+	UPROPERTY(BlueprintReadOnly, Category = "Environment Components")
+	TObjectPtr<UWindField> SceneWindField;
 
 	// 气压计传感器
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensor Components")
@@ -323,6 +324,15 @@ protected:
 	// 设置载荷质量（运行时可变，如喷洒消耗药液）
 	UFUNCTION(BlueprintCallable, Category = "UAV Model")
 	void SetPayloadMass(float NewPayloadMass);
+
+public:
+	/** 设置无人机型号（场景装配时由 ScenarioLoader 调用） */
+	UFUNCTION(BlueprintCallable, Category = "UAV Model")
+	void SetModelID(EUAVModelID InModelID) { ModelID = InModelID; }
+
+	/** 获取无人机型号 */
+	UFUNCTION(BlueprintCallable, Category = "UAV Model")
+	EUAVModelID GetModelID() const { return ModelID; }
 
 protected:
 	// 型号选择

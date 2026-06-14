@@ -14,6 +14,7 @@
 - 分析日志时需要注意：部分日志被降频了，所以可能不是每个时间点都有输出的。
 - 分析时可以适当添加必要日志，知道你有足够把握定位到根因。
 - 不要考虑兼容问题，不要考虑复杂度，不要为了处理资产迁移风险而妥协，一切以最主流的工业级做法来实现。
+- *.sh脚本和*.bat脚本的功能应该完全一样，保持一致性。
 
 ## 日志规范
 
@@ -38,6 +39,7 @@
 
 ## Agent规范
 
+- 如有需要，自行启动UE编辑器，使用soft-ue-cli进行控制，并在完成后关闭UE编辑器。
 - 若WebSearch返回结果为空，尝试换用Fetch进行网络搜索
 - 当调用grill-with-docs skill进行拷问时，请使用AskUserQuestion工具并给出推荐选项
 - 当调用improve-codebase-architecture skill生成可视化网页时用中文，并且调用使用python启动一个本地服务器，返回访问地址
@@ -45,11 +47,23 @@
 - 不要做超过20000字节的大编辑。如果编辑失败了，把一个编辑拆分成多个较小的编辑
 - 当给你代码review的诊断报告时，你需要基于代码实事进行分析，直到你有十足把握为止，对于不确定的地方禁止进行任何代码修改
 
-## Unreal Engine control
+## Unreal Engine 控制
 
-`soft-ue-cli` controls this UE project via the SoftUEBridge plugin (installed via pipx).
-Run `soft-ue-cli --help` to see all available commands.
-The game or editor must be running with SoftUEBridge enabled before using UE commands.
+`soft-ue-cli` 通过 SoftUEBridge 插件(经 pipx 安装)控制本项目。运行 `soft-ue-cli --help` 查看所有可用命令。使用 UE 相关命令前,游戏或编辑器必须已启用 SoftUEBridge 运行。
 
-After the user rebuilds and launches UE, verify with:
+用户重新编译并启动 UE 后,用以下命令验证:
   `soft-ue-cli check-setup`
+
+## Agent 技能
+
+### Issue 跟踪
+
+Issues 跟踪在本仓库的 GitHub Issues 中,使用 `gh` CLI。详见 `docs/agents/issue-tracker.md`。
+
+### Triage 标签
+
+沿用 5 个默认角色字符串作为标签:needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix。详见 `docs/agents/triage-labels.md`。
+
+### 领域文档
+
+Single-context 布局:根目录 `CONTEXT.md` + `docs/adr/`(尚不存在,由 `/grill-with-docs` 懒创建)。详见 `docs/agents/domain.md`。

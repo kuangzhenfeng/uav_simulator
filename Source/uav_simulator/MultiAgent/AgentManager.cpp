@@ -13,7 +13,15 @@
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Planning/ObstacleManager.h"
 #include "uav_simulator/Planning/TrajectoryTracker.h"
+#include "uav_simulator/Environment/WindField.h"
+#include "uav_simulator/Environment/EnvironmentTypes.h"
+#include "../Scenario/ScenarioLoader.h"
+#include "../Scenario/ScenarioTypes.h"
+#include "../Scenario/ScenarioEvaluator.h"
 #include "uav_simulator/Utility/Filter.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "UObject/SavePackage.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAgentManager, Log, All);
 
@@ -26,6 +34,20 @@ AMultiAgentGameMode::AMultiAgentGameMode(const FObjectInitializer& ObjectInitial
 	// 设置 HUD 和 PlayerController
 	HUDClass = AUAVHUD::StaticClass();
 	PlayerControllerClass = AUAVPlayerController::StaticClass();
+
+	// 创建场景级 WindField 单例（ADR-0002）：风场属环境，全关卡共享。
+	// 默认配置保持与原 UAVPawn 自建 WindField 一致，保证行为不退化。
+	WindField = CreateDefaultSubobject<UWindField>(TEXT("SceneWindField"));
+	{
+		FWindConfig DefaultWindConfig;
+		DefaultWindConfig.bEnabled = true;
+		DefaultWindConfig.WindType = EWindFieldType::Constant;
+		DefaultWindConfig.SteadyWindVelocity = FVector(300.0f, 0.0f, 0.0f); // X 方向 300 cm/s
+		DefaultWindConfig.AirDensity = 1.225f;
+		DefaultWindConfig.DragArea = 0.04f;
+		DefaultWindConfig.DragCoefficient = 1.0f;
+		WindField->SetWindConfig(DefaultWindConfig);
+	}
 }
 
 void AMultiAgentGameMode::BeginPlay()
@@ -39,7 +61,72 @@ void AMultiAgentGameMode::BeginPlay()
 	TaskAllocatorInstance = NewObject<UTaskAllocator>(this);
 	TaskMonitorInstance = NewObject<UTaskMonitor>(this);
 
+	// 场景系统装配（ADR-0001）：解析 -Scenario= 命令行（优先），否则用 DefaultScenario。
+	LoadAndAssembleScenario();
+
 	UE_LOG(LogUAVMultiAgent, Log, TEXT("[AgentManager] Initialized, all subsystems created"));
+}
+
+void AMultiAgentGameMode::LoadAndAssembleScenario()
+{
+	// 命令行 -Scenario=<资产路径> 优先
+	FString ScenarioAssetPath;
+	const bool bFromCmdLine = FParse::Value(FCommandLine::Get(), TEXT("-Scenario="), ScenarioAssetPath);
+
+	UScenario* ScenarioToLoad = nullptr;
+	if (bFromCmdLine && !ScenarioAssetPath.IsEmpty())
+	{
+		const FString PackagePath = ScenarioAssetPath;
+		ScenarioToLoad = LoadObject<UScenario>(nullptr, *PackagePath);
+		UE_LOG(LogUAVMultiAgent, Log, TEXT("[Scenario] Loaded from command line: %s (%s)"),
+			ScenarioToLoad ? *ScenarioToLoad->Name : TEXT("FAILED"), *PackagePath);
+	}
+	else
+	{
+		ScenarioToLoad = DefaultScenario.LoadSynchronous();
+		UE_LOG(LogUAVMultiAgent, Log, TEXT("[Scenario] Loaded from DefaultScenario: %s"),
+			ScenarioToLoad ? *ScenarioToLoad->Name : TEXT("none"));
+	}
+
+	if (!ScenarioToLoad)
+	{
+		return; // 无场景，保持原行为（非场景化关卡零影响）
+	}
+
+	ActiveScenario = ScenarioToLoad;
+	UScenarioLoader* Loader = NewObject<UScenarioLoader>(this);
+	ScenarioLoaderInstance = Loader;
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// 装配顺序：风场 → 障碍 → 机队/任务（机队物理积分前风场已就绪）
+	Loader->AssembleWind(ScenarioToLoad, WindField);
+
+	// 障碍装配到首个 UAV 的 ObstacleManager（机队 Spawn 后才有）。
+	// 这里先记录待装配，机队 Spawn 完成后立即装配。
+	TArray<AUAVPawn*> Fleet;
+	// 默认 UAV 类：优先用关卡里预放的 UAVPawn 蓝图，回退 C++ AUAVPawn。
+	Loader->AssembleFleetAndMission(ScenarioToLoad, World, Fleet, AUAVPawn::StaticClass());
+	ScenarioFleet = Fleet;
+
+	if (Fleet.Num() > 0 && Fleet[0])
+	{
+		if (UObstacleManager* ObstacleManager = Fleet[0]->FindComponentByClass<UObstacleManager>())
+		{
+			Loader->AssembleObstacles(ScenarioToLoad, ObstacleManager, World);
+		}
+
+		// 挂载验收器组件：周期快照 + 最终判决
+		ScenarioEvaluatorComponent = NewObject<UScenarioEvaluatorComponent>(this);
+		ScenarioEvaluatorComponent->RegisterComponent();
+		ScenarioEvaluatorComponent->Initialize(ScenarioToLoad, Fleet[0]);
+	}
+
+	UE_LOG(LogUAVMultiAgent, Log, TEXT("[Scenario] Assembly complete: %d UAV(s)"), Fleet.Num());
 }
 
 void AMultiAgentGameMode::Tick(float DeltaTime)
