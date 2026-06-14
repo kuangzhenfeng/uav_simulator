@@ -48,6 +48,15 @@ void UMissionComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 
 void UMissionComponent::SetWaypoints(const TArray<FVector>& InWaypoints)
 {
+	// 场景已接管航点所有权（单一数据源契约）：拒绝蓝图/旧接口的覆盖写入。
+	// 详见 Config.bLockedByScenario（ADR-0001 场景资产化）。
+	if (Config.bLockedByScenario)
+	{
+		UE_LOG(LogUAVMission, Warning,
+			TEXT("SetWaypoints rejected: waypoints locked by scenario (use SetMissionWaypoints)"));
+		return;
+	}
+
 	Waypoints.Empty();
 	Waypoints.Reserve(InWaypoints.Num());
 
@@ -71,6 +80,9 @@ void UMissionComponent::SetWaypoints(const TArray<FVector>& InWaypoints)
 
 void UMissionComponent::SetMissionWaypoints(const TArray<FMissionWaypoint>& InWaypoints)
 {
+	// 场景权威入口：下发即声明航点所有权归场景，上锁防止后续被覆盖。
+	Config.bLockedByScenario = true;
+
 	Waypoints = InWaypoints;
 
 	// 更新状态
@@ -83,7 +95,7 @@ void UMissionComponent::SetMissionWaypoints(const TArray<FMissionWaypoint>& InWa
 		SetMissionState(EMissionState::Idle);
 	}
 
-	UE_LOG(LogUAVMission, Log, TEXT("SetMissionWaypoints: %d waypoints set"), Waypoints.Num());
+	UE_LOG(LogUAVMission, Log, TEXT("SetMissionWaypoints: %d waypoints set (locked by scenario)"), Waypoints.Num());
 }
 
 void UMissionComponent::AddWaypoint(const FVector& Position, float HoverDuration, float DesiredSpeed)

@@ -37,7 +37,7 @@ if [[ -n "$SCENARIO_ASSET" ]]; then
 fi
 
 echo "Starting UE5 (will be stopped after ${SIM_DURATION}s real time)..."
-"$UE_EDITOR" "$PROJECT_PATH" -game -NullRHI -NoSound -NoSplash -unattended -nopause -NOSAVECONFIG $EXTRA_ARGS -ExecCmds="slomo $SLOMO" -silent -LogCmds="Global Warning, LogUAVActor Log, LogUAVPlanning Log, LogUAVMission Log, LogUAVAI Log, LogUAVAttitude Log, LogUAVMultiAgent Log, LogUAVSensor Log, LogUAVMetrics Log, LogUAVProfiling Log" >/dev/null 2>&1 || true
+"$UE_EDITOR" "$PROJECT_PATH" -game -NullRHI -NoSound -NoSplash -unattended -nopause -NOSAVECONFIG $EXTRA_ARGS -ExecCmds="slomo $SLOMO" -silent -LogCmds="Global Warning, LogUAVActor Log, LogUAVPlanning Log, LogUAVMission Log, LogUAVAI Log, LogUAVAttitude Log, LogUAVMultiAgent Log, LogUAVSensor Log, LogUAVMetrics Log, LogUAVProfiling Log, LogScenarioEval Log" >/dev/null 2>&1 || true
 
 # 停掉后台杀手（若仍存活）
 kill $KILLER_PID 2>/dev/null || true
@@ -48,7 +48,7 @@ if [ -f "$DEFAULT_LOG" ]; then
     cp "$DEFAULT_LOG" "$UAV_FULL_LOG"
 
     # Create filtered log: keep only UAV-related logs, exclude STARTUP logs and UE5 errors
-    grep 'LogUAV' "$DEFAULT_LOG" | grep -v '\[STARTUP\]' | grep -v 'Failed to load' > "$UAV_LOG"
+    grep -E 'LogUAV|LogScenarioEval' "$DEFAULT_LOG" | grep -v '\[STARTUP\]' | grep -v 'Failed to load' > "$UAV_LOG"
 
     echo "[SIM] $(date '+%H:%M:%S') Simulation complete. Logs saved:"
     echo "[SIM]   Filtered log: Logs/uav.log"

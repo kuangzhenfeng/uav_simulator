@@ -10,6 +10,29 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+// ==================== 评估：无验收标准 -> fail-closed FAIL ====================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FScenarioEvalNullCriteriaFailTest,
+	"UAVSimulator.Scenario.Evaluate.NullCriteriaFailClosed",
+	UAV_TEST_FLAGS)
+
+bool FScenarioEvalNullCriteriaFailTest::RunTest(const FString& Parameters)
+{
+	// 无验收标准时必须 fail-closed：否则任务失败（0 航点、原地震荡）
+	// 会被误报为 PASS。
+	FScenarioMetrics Metrics;
+	Metrics.WaypointsReached = 0;
+	Metrics.WaypointsTotal = 1;
+	Metrics.bCollided = false;
+
+	const FScenarioVerdict V = UScenarioEvaluator::Evaluate(Metrics, nullptr);
+	TestFalse(TEXT("无验收标准 -> fail-closed FAIL"), V.bPassed);
+	TestTrue(TEXT("失败项含 NoAcceptanceCriteria"),
+		V.Failures.ContainsByPredicate([](const FString& F) { return F.Contains(TEXT("NoAcceptanceCriteria")); }));
+
+	return true;
+}
+
 // ==================== AcceptanceCriteria 评估：全 PASS ====================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FScenarioEvalAllPassTest,

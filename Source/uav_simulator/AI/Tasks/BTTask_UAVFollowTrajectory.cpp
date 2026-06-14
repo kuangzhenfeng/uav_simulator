@@ -131,8 +131,19 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 
 		if (Waypoints.Num() < 2)
 		{
-			UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: Need at least 2 waypoints, got %d"), Waypoints.Num());
-			return EBTNodeResult::Failed;
+			// 单航点场景合法（场景 MissionProfile 可只声明一个终点航点）：
+			// 补当前位置作起点，构造两点直线轨迹，避免拒绝单航点场景。
+			const FVector CurrentLocation = UAVPawn->GetActorLocation();
+			if (Waypoints.Num() == 1 && !FVector::PointsAreNear(CurrentLocation, Waypoints[0], 100.0f))
+			{
+				Waypoints.Insert(CurrentLocation, 0);
+				UE_LOG(LogUAVAI, Log, TEXT("BTTask_UAVFollowTrajectory: Single waypoint, inserted current location as start"));
+			}
+			else
+			{
+				UE_LOG(LogUAVAI, Warning, TEXT("BTTask_UAVFollowTrajectory: Need at least 2 waypoints, got %d"), Waypoints.Num());
+				return EBTNodeResult::Failed;
+			}
 		}
 
 		FVector CurrentLocation = UAVPawn->GetActorLocation();
@@ -181,10 +192,19 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 		}
 
 		// 生成优化轨迹
+		// 轨迹速度上限服从 UAV 物理能力（型号 Spec.MaxVelocity），而非节点硬编码默认值。
+		// 否则按 2000cm/s 规划、1200cm/s 物理上限的 UAV 会跟不上轨迹，飞越航点后失控。
+		float TrajectoryMaxVelocity = MaxVelocity;
+		const float PhysicalMaxVelocity = UAVPawn->GetMaxVelocity();
+		if (PhysicalMaxVelocity > 0.0f && PhysicalMaxVelocity < TrajectoryMaxVelocity)
+		{
+			TrajectoryMaxVelocity = PhysicalMaxVelocity;
+		}
+
 		UTrajectoryOptimizer* Optimizer = NewObject<UTrajectoryOptimizer>(UAVPawn);
 		if (Optimizer)
 		{
-			CachedTrajectory = Optimizer->OptimizeTrajectory(Waypoints, MaxVelocity, MaxAcceleration);
+			CachedTrajectory = Optimizer->OptimizeTrajectory(Waypoints, TrajectoryMaxVelocity, MaxAcceleration);
 		}
 
 		if (!CachedTrajectory.bIsValid)
@@ -256,14 +276,17 @@ void UBTTask_UAVFollowTrajectory::TickTask(UBehaviorTreeComponent& OwnerComp, ui
 			UAVPawn->SetControlMode(EUAVControlMode::Position);
 		}
 
-		// 如果使用 MissionComponent，通知任务完成
+		// 轨迹完成 = 末段航点到达：推进 MissionComponent 航点索引。
+		// MissionComponent 默认 bAutoCheckWaypoints=false（由行为树驱动），
+		// 若此处不显式推进，CurrentWaypointIndex 永远停在 0，
+		// ScenarioEvaluator 读 GetCurrentWaypointIndex() 会得到 WaypointsReached=0，
+		// 即使 UAV 已到达航点也会误报未到达。
 		if (bUseMissionComponent && !bUseTrajectoryFromBlackboard)
 		{
 			UMissionComponent* MissionComp = UAVPawn->GetMissionComponent();
 			if (MissionComp && MissionComp->IsMissionRunning())
 			{
-				// 任务完成由 MissionComponent 内部处理
-				// 这里只是通知轨迹跟踪完成
+				MissionComp->AdvanceToNextWaypoint();
 			}
 		}
 

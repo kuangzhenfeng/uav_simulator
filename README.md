@@ -187,7 +187,7 @@
 - 声明式仿真场景（`UScenario` DataAsset）：障碍布局、风场、机队、任务航点、验收标准、随机种子
 - 组合引用式资产：`UScenario` 外壳引用 5 个可复用子资产（`UObstacleLayout`/`UWindProfile`/`UFleetSetup`/`UMissionProfile`/`UAcceptanceCriteria`）
 - 场景装配器（`UScenarioLoader`）：运行时按声明内容 Spawn 机队、注册障碍、配置风场、下发任务
-- 场景验收器（`UScenarioEvaluator`）：周期快照指标，对照验收标准判定 PASS/FAIL，输出 `scenario_result.json`（不依赖进程正常退出，pkill 强杀时留最近一次快照）
+- 场景验收器（`UScenarioEvaluator`）：周期快照指标，对照验收标准判定 PASS/FAIL，输出 `scenario_result.json`（不依赖进程正常退出，pkill 强杀时留最近一次快照）；fail-closed——场景缺失验收标准时直接判 FAIL，避免任务失败被误报为 PASS
 - 命令行驱动：`-Scenario=<资产路径>` 指定运行场景，`sim.sh` 据退出码（PASS=0/FAIL=1/缺失=2）供 CI 判定
 - 风场为场景级单例（挂在 `AMultiAgentGameMode`，全关卡共享）
 

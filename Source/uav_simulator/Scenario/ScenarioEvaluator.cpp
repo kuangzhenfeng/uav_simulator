@@ -22,12 +22,14 @@ FScenarioVerdict UScenarioEvaluator::Evaluate(const FScenarioMetrics& Metrics, c
 
 	if (!Criteria)
 	{
-		// 无验收标准：默认按"无碰撞 + 有进展"的最低标准判定。
+		// fail-closed：没有验收标准即无法证明场景成功，默认判定 FAIL。
+		// 否则任务失败（原地震荡、0 航点到达等）会被误报为 PASS。
+		Verdict.Failures.Add(TEXT("NoAcceptanceCriteria"));
 		if (Metrics.bCollided)
 		{
 			Verdict.Failures.Add(TEXT("Collision"));
 		}
-		Verdict.bPassed = !Metrics.bCollided;
+		Verdict.bPassed = false;
 		return Verdict;
 	}
 
@@ -162,6 +164,24 @@ void UScenarioEvaluatorComponent::Initialize(UScenario* InScenario, AUAVPawn* In
 	if (Scenario)
 	{
 		Criteria = Scenario->AcceptanceCriteria.LoadSynchronous();
+		if (!Criteria)
+		{
+			UE_LOG(LogScenarioEval, Warning,
+				TEXT("[Scenario] No AcceptanceCriteria on scenario '%s' — verdict will fail-closed"),
+				*Scenario->Name);
+		}
+		else
+		{
+			// 初始化时打印验收配置摘要，便于核对场景资产的实际阈值
+			UE_LOG(LogScenarioEval, Log,
+				TEXT("[Scenario] AcceptanceCriteria: RequireAllWaypoints=%d ArrivalRadius=%.0fcm MinClearance=%.0fcm MaxLateralDev=%.0fcm Timeout=%.1fs EnergyBudget=%.2f"),
+				Criteria->bRequireAllWaypoints ? 1 : 0,
+				Criteria->WaypointArrivalRadius,
+				Criteria->MinClearanceCm,
+				Criteria->MaxLateralDeviationCm,
+				Criteria->TimeoutSeconds,
+				Criteria->EnergyBudget);
+		}
 	}
 
 	// 订阅机队任务完成/失败委托
@@ -187,6 +207,12 @@ FScenarioMetrics UScenarioEvaluatorComponent::CollectMetrics() const
 
 	if (LeadUAV)
 	{
+		// 炸机检测：lead UAV 进入 Crashed 状态即视为场景级碰撞硬失败
+		if (LeadUAV->IsCrashed())
+		{
+			M.bCollided = true;
+		}
+
 		// 航点到达数：从 MissionComponent 状态读取
 		if (UMissionComponent* Mission = LeadUAV->FindComponentByClass<UMissionComponent>())
 		{

@@ -22,6 +22,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "UObject/SavePackage.h"
+#include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAgentManager, Log, All);
 
@@ -34,6 +35,17 @@ AMultiAgentGameMode::AMultiAgentGameMode(const FObjectInitializer& ObjectInitial
 	// 设置 HUD 和 PlayerController
 	HUDClass = AUAVHUD::StaticClass();
 	PlayerControllerClass = AUAVPlayerController::StaticClass();
+
+	// 默认 UAV 蓝图类：编译期用 FClassFinder 设默认值为 BP_UAVPawn_Default。
+	// 该蓝图自带 AIController + 行为树，使 ScenarioLoader 回退 Spawn 的 lead UAV
+	// 能走完整飞行驱动链（行为树读 MissionComponent 航点 → 生成轨迹 → 轨迹跟踪）。
+	// 蓝图缺失时回退到空（LoadSynchronous 时再退化到裸 AUAVPawn，保证不崩溃）。
+	static ConstructorHelpers::FClassFinder<AUAVPawn> DefaultUAVBPFinder(
+		TEXT("/Game/UAV/Blueprints/UAVs/BP_UAVPawn_Default"));
+	if (DefaultUAVBPFinder.Succeeded())
+	{
+		DefaultUAVClass = DefaultUAVBPFinder.Class;
+	}
 
 	// 创建场景级 WindField 单例（ADR-0002）：风场属环境，全关卡共享。
 	// 默认配置保持与原 UAVPawn 自建 WindField 一致，保证行为不退化。
@@ -109,8 +121,18 @@ void AMultiAgentGameMode::LoadAndAssembleScenario()
 	// 障碍装配到首个 UAV 的 ObstacleManager（机队 Spawn 后才有）。
 	// 这里先记录待装配，机队 Spawn 完成后立即装配。
 	TArray<AUAVPawn*> Fleet;
-	// 默认 UAV 类：优先用关卡里预放的 UAVPawn 蓝图，回退 C++ AUAVPawn。
-	Loader->AssembleFleetAndMission(ScenarioToLoad, World, Fleet, AUAVPawn::StaticClass());
+	// 默认 UAV 类：优先用数据驱动的 DefaultUAVClass（BP_UAVPawn_Default，带 AIController+行为树），
+	// 蓝图未配置时回退裸 AUAVPawn（最终兜底，保证不崩，但无飞行驱动）。
+	TSubclassOf<AUAVPawn> FallbackUAVClass;
+	if (!DefaultUAVClass.IsNull())
+	{
+		FallbackUAVClass = DefaultUAVClass.LoadSynchronous();
+	}
+	if (!FallbackUAVClass)
+	{
+		FallbackUAVClass = AUAVPawn::StaticClass();
+	}
+	Loader->AssembleFleetAndMission(ScenarioToLoad, World, Fleet, FallbackUAVClass);
 	ScenarioFleet = Fleet;
 
 	if (Fleet.Num() > 0 && Fleet[0])

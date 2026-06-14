@@ -125,6 +125,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Control")
 	EUAVControlMode GetControlMode() const { return ControlMode; }
 
+	// 获取型号最大速度（cm/s，来自 PositionController.MaxVelocity，由型号 Spec 决定）。
+	// 供规划层生成与物理能力匹配的轨迹时间分配。
+	UFUNCTION(BlueprintCallable, Category = "UAV|State")
+	float GetMaxVelocity() const;
+
 	// 获取飞行状态
 	UFUNCTION(BlueprintCallable, Category = "UAV|State")
 	EFlightState GetFlightState() const { return FlightState; }

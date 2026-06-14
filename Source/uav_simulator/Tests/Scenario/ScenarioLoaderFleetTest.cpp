@@ -8,73 +8,11 @@
 #include "../../Mission/MissionComponent.h"
 #include "../../Mission/MissionTypes.h"
 
-#include "Engine/Engine.h"
-#include "Engine/GameInstance.h"
-#include "Engine/World.h"
-#include "GameFramework/WorldSettings.h"
-
 #if WITH_DEV_AUTOMATION_TESTS
 
 namespace
 {
-	// 复用项目已有的合成 World 模式（参照 UAVPawnCrashPhysicsTest）。
-	UWorld* CreateScenarioTestWorld(const TCHAR* WorldName)
-	{
-		if (!GEngine)
-		{
-			return nullptr;
-		}
-
-		static int32 WorldCounter = 0;
-		const FName UniqueWorldName(*FString::Printf(TEXT("%s_%d"), WorldName, ++WorldCounter));
-		UWorld::InitializationValues InitValues;
-		InitValues.AllowAudioPlayback(false)
-			.CreatePhysicsScene(true)
-			.RequiresHitProxies(false)
-			.CreateNavigation(false)
-			.CreateAISystem(false)
-			.ShouldSimulatePhysics(false)
-			.SetTransactional(false);
-		UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, UniqueWorldName, GetTransientPackage(), false, ERHIFeatureLevel::Num, &InitValues);
-		if (!World)
-		{
-			return nullptr;
-		}
-
-		FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
-		UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
-		World->AddToRoot();
-		World->SetGameInstance(GameInstance);
-		WorldContext.OwningGameInstance = GameInstance;
-		WorldContext.SetCurrentWorld(World);
-		GameInstance->Init();
-
-		const FURL URL;
-		World->SetGameMode(URL);
-		World->InitializeActorsForPlay(URL);
-		World->BeginPlay();
-		return World;
-	}
-
-	void DestroyScenarioTestWorld(UWorld* World)
-	{
-		if (!World || !GEngine)
-		{
-			return;
-		}
-		if (World->HasBegunPlay())
-		{
-			World->BeginTearingDown();
-			World->EndPlay(EEndPlayReason::Quit);
-		}
-		GEngine->DestroyWorldContext(World);
-		if (World->GetGameInstance())
-		{
-			World->GetGameInstance()->Shutdown();
-		}
-		World->DestroyWorld(false);
-		World->RemoveFromRoot();
-	}
+	// 合成 World helper 已集中到 UAVTestCommon.h，避免跨 TU 重定义。
 
 	// 构造一个单 Agent + 单航点的场景。
 	UScenario* MakeSingleAgentScenario(UObject* Outer,

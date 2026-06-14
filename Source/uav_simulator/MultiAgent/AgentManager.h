@@ -46,6 +46,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario")
 	TSoftObjectPtr<UScenario> DefaultScenario;
 
+	/**
+	 * 默认 UAV 蓝图类。
+	 * ScenarioLoader 装配机队时，当 FleetSetup.Agents[].UAVClass 未指定时回退到此类。
+	 * 应为带 AIController + 行为树的 BP_UAVPawn_Default，使 lead UAV 能走完整飞行驱动链。
+	 * 构造期由 FClassFinder 设默认值；蓝图 CDO 可覆盖（数据驱动出口）。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario")
+	TSoftClassPtr<AUAVPawn> DefaultUAVClass;
+
 	// ---- Agent 注册与管理 ----
 
 	/**

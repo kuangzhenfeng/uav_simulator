@@ -8,6 +8,11 @@
 #include "../MultiAgent/MultiAgentTypes.h"
 #include "../MultiAgent/TaskAllocationTypes.h"
 
+#include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
+#include "GameFramework/WorldSettings.h"
+
 /**
  * UAV Simulator 测试通用工具
  * 提供测试分类常量、浮点数/向量近似相等检查宏和辅助函数
@@ -441,4 +446,67 @@ namespace UAVTestHelpers
 			Result.Makespan = 0.0f;
 			return Result;
 		}
+	}
+
+	/**
+	 * 场景测试用合成 World（参照 UAVPawnCrashPhysicsTest 模式）。
+	 * 多个场景测试 TU 被合并进同一 unity 编译单元时，原本各自 anonymous namespace
+	 * 里的同名 helper 会触发重定义；此处集中到头文件以 inline 共享单一定义。
+	 */
+	inline UWorld* CreateScenarioTestWorld(const TCHAR* WorldName)
+	{
+		if (!GEngine)
+		{
+			return nullptr;
+		}
+
+		static int32 WorldCounter = 0;
+		const FName UniqueWorldName(*FString::Printf(TEXT("%s_%d"), WorldName, ++WorldCounter));
+		UWorld::InitializationValues InitValues;
+		InitValues.AllowAudioPlayback(false)
+			.CreatePhysicsScene(true)
+			.RequiresHitProxies(false)
+			.CreateNavigation(false)
+			.CreateAISystem(false)
+			.ShouldSimulatePhysics(false)
+			.SetTransactional(false);
+		UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, UniqueWorldName, GetTransientPackage(), false, ERHIFeatureLevel::Num, &InitValues);
+		if (!World)
+		{
+			return nullptr;
+		}
+
+		FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+		UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
+		World->AddToRoot();
+		World->SetGameInstance(GameInstance);
+		WorldContext.OwningGameInstance = GameInstance;
+		WorldContext.SetCurrentWorld(World);
+		GameInstance->Init();
+
+		const FURL URL;
+		World->SetGameMode(URL);
+		World->InitializeActorsForPlay(URL);
+		World->BeginPlay();
+		return World;
+	}
+
+	inline void DestroyScenarioTestWorld(UWorld* World)
+	{
+		if (!World || !GEngine)
+		{
+			return;
+		}
+		if (World->HasBegunPlay())
+		{
+			World->BeginTearingDown();
+			World->EndPlay(EEndPlayReason::Quit);
+		}
+		GEngine->DestroyWorldContext(World);
+		if (World->GetGameInstance())
+		{
+			World->GetGameInstance()->Shutdown();
+		}
+		World->DestroyWorld(false);
+		World->RemoveFromRoot();
 	}

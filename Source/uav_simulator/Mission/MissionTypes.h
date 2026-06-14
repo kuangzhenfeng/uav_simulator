@@ -119,7 +119,7 @@ struct FMissionConfig
 	float MaxAcceleration;
 
 	/** 航点到达阈值 (cm) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mission", meta = (ClampMin = "1.0", ClampMax = "500.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mission", meta = (ClampMin = "1.0", ClampMax = "2000.0"))
 	float WaypointReachThreshold;
 
 	/** 循环次数，-1表示无限循环（仅在Loop模式下有效） */
@@ -129,6 +129,15 @@ struct FMissionConfig
 	/** 任务完成后是否返回起点 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mission")
 	bool bReturnToStart;
+
+	/**
+	 * 航点是否被场景锁定（单一数据源契约，ADR-0001）。
+	 * 场景装配器（ScenarioLoader）经 SetMissionWaypoints 下发航点后上锁，
+	 * 此后 SetWaypoints（蓝图/旧接口）写入会被拒绝，防止载具蓝图内嵌的
+	 * 演示航点覆盖场景 MissionProfile。编辑器手动 Play（无场景）保持不上锁。
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Mission")
+	bool bLockedByScenario = false;
 
 	/** 是否启用路径规划（避障） */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mission")
@@ -152,7 +161,7 @@ struct FMissionConfig
 		: Mode(EMissionMode::Once)
 		, DefaultSpeed(500.0f)
 		, MaxAcceleration(200.0f)
-		, WaypointReachThreshold(50.0f)
+		, WaypointReachThreshold(300.0f)
 		, LoopCount(1)
 		, bReturnToStart(false)
 		, bEnablePathPlanning(false)

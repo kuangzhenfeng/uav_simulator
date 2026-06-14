@@ -1559,6 +1559,13 @@ float AUAVPawn::GetTrajectoryProgress() const
 	return 0.0f;
 }
 
+float AUAVPawn::GetMaxVelocity() const
+{
+	// 来自型号 Spec（BeginPlay 时同步到 PositionController.MaxVelocity），
+	// 供规划层生成与物理能力匹配的轨迹时间分配。
+	return PositionControllerComponent ? PositionControllerComponent->MaxVelocity : 0.0f;
+}
+
 bool AUAVPawn::IsTrajectoryComplete() const
 {
 	if (TrajectoryTrackerComponent)
