@@ -669,6 +669,8 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 
 	if (Result.Diagnostics.bNaNOrInf)
 	{
+		LastSimEvent = TEXT("NumericalFailure");
+		SimEventSeq++;
 		UE_LOG(LogUAVMetrics, Error,
 			TEXT("[SIM_RESULT] Agent=%d Event=NumericalFailure Source=NMPC"),
 			AgentID);
@@ -1451,6 +1453,8 @@ void AUAVPawn::CheckCollision()
 
 		if (D < 0.0f)
 		{
+			LastSimEvent = TEXT("ObstaclePenetration");
+			SimEventSeq++;
 			UE_LOG(LogUAVMetrics, Warning,
 				TEXT("[SIM_RESULT] Agent=%d Event=ObstaclePenetration ObstacleID=%d Type=%d Dist=%.1f Pos=(%.0f,%.0f,%.0f)"),
 				AgentID, Obs.ObstacleID, (int32)Obs.Type, D,
@@ -1509,6 +1513,8 @@ void AUAVPawn::TriggerCrash()
 		TEXT("[SIM_RESULT] Agent=%d Event=Crash Pos=(%.0f,%.0f,%.0f) WreckActive=%d"),
 		AgentID, CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
 		ActiveWreckActor ? 1 : 0);
+	LastSimEvent = TEXT("Crash");
+	SimEventSeq++;
 
 	UE_LOG(LogUAVActor, Warning,
 		TEXT("[Crash] UAV crashed at Pos=(%d,%d,%d), motors stopped, wreck physics active"),
@@ -1853,6 +1859,8 @@ void AUAVPawn::UpdateMetricsLog(float DeltaTime)
 		if (MetricsForceCompleteCount == 0)
 		{
 			MetricsForceCompleteCount = 1;
+			LastSimEvent = TEXT("ForceComplete");
+			SimEventSeq++;
 			UE_LOG(LogUAVMetrics, Warning,
 				TEXT("[SIM_RESULT] Agent=%d Event=ForceComplete Reason=OvertimeTimeout"),
 				AgentID);

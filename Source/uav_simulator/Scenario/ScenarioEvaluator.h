@@ -13,6 +13,7 @@ class UMissionComponent;
 class UScenario;
 class UAcceptanceCriteria;
 class AMultiAgentGameMode;
+class UTelemetryRecorder;
 
 /**
  * 仿真指标快照（Evaluator 周期采集）。
@@ -132,6 +133,9 @@ public:
 	/** 初始化：绑定场景资产与机队，订阅任务完成委托，启动周期快照 */
 	void Initialize(UScenario* InScenario, AUAVPawn* InLeadUAV);
 
+	/** 注入遥测记录器，使周期/最终判决同步落 telemetry.ndjson */
+	void SetTelemetryRecorder(UTelemetryRecorder* InRecorder);
+
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 protected:
@@ -140,6 +144,9 @@ protected:
 
 	/** 立即评估并写 JSON（任务完成/超时硬触发时调用） */
 	void FlushFinalResult();
+
+	/** 评估并落盘：写 scenario_result.json（权威判决）+ 推 telemetry.ndjson（可选） */
+	void EvaluateAndRecord(const FScenarioVerdict& Verdict, bool bFinal);
 
 	UFUNCTION()
 	void HandleMissionCompleted(bool bSuccess);
@@ -155,6 +162,10 @@ protected:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UAcceptanceCriteria> Criteria;
+
+	// 注入的遥测记录器（可选；非空时把每次判决同步落 telemetry.ndjson）
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UTelemetryRecorder> TelemetryRecorder;
 
 	// 指标累积状态（跨周期保留极值）
 	FScenarioMetrics Accumulated;

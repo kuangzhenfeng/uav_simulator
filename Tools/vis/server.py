@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-# UAV 仿真日志可视化后端(纯标准库)
+# UAV 仿真可视化后端(纯标准库)
 # 提供静态托管 + 全量数据接口 + SSE 实时增量推流。
-# 解析 Logs/uav.log(或 UE 运行时实时日志)+ scenario_result.json。
+# 数据源: Logs/telemetry.ndjson(UAV TelemetryRecorder 追加写的专用数据流)
+#         + scenario_result.json(最终权威判决)。
+# ndjson 坐标/单位为 UE 原生(cm, 左手系), 本端做坐标系变换后输出给前端。
 
 import argparse
 import json
+import math
 import os
-import re
 import sys
 import time
 import threading
@@ -20,58 +22,11 @@ from urllib.parse import urlparse
 #   变换: x_web = x_ue/100, y_web = z_ue/100, z_web = -y_ue/100
 # ---------------------------------------------------------------------------
 
-# FLT_MAX 哨兵阈值,超过视为 "无数据"
-FLT_MAX_GUARD = 1e30
-
-# 固定 agent 配色,避免随帧抖动
+# 固定 agent 配色,按首次 spawn 顺序(== AgentID 升序)分配,避免抖动
 AGENT_COLORS = [
     "#4f8cff", "#ff6b6b", "#51cf66", "#fcc419",
     "#cc5de8", "#22b8cf", "#ff922b", "#20c997",
 ]
-
-# 视觉示意半径(m),日志未直接输出机体半径
-DEFAULT_COLLISION_RADIUS_M = 0.6
-
-# 时间戳正则: [2026.06.26-14.15.27:719][ 81]
-TS_RE = re.compile(r"\[(\d{4})\.(\d{2})\.(\d{2})-(\d{2})\.(\d{2})\.(\d{2}):(\d{3})\]\[\s*(\d+)\]")
-
-# 各 TAG 正则
-MODEL_RE = re.compile(r"\[Model\]\s+(\S+)\s+\|.*?MaxVel=([\d.]+)cm/s")
-REGISTER_AGENT_RE = re.compile(r"Registered as Agent\s+(\d+)")
-SPAWN_RE = re.compile(r"Pos=X=([-\d.]+)\s+Y=([-\d.]+)\s+Z=([-\d.]+)")
-PERF_RE = re.compile(
-    r"\[PERF_SUMMARY\]\s+Agent=(\d+)\s+FrameTime=([\d.]+)ms\s+Speed=([\d.]+)\s+"
-    r"Pos=\(([-\d.]+),([-\d.]+),([-\d.]+)\)\s+ControlMode=(\d+)"
-)
-OBSTACLE_RE = re.compile(
-    r"Obstacle registered:\s+ID=(\d+),\s+Type=(\d+),\s+"
-    r"Center=X=([-\d.]+)\s+Y=([-\d.]+)\s+Z=([-\d.]+),\s+"
-    r"Extents=X=([-\d.]+)\s+Y=([-\d.]+)\s+Z=([-\d.]+),\s+Actor=([^,]+)"
-)
-WAYPOINT_RE = re.compile(r"Waypoint\[(\d+)\]:\s*\(([-\d.]+),\s*([-\d.]+),\s*([-\d.]+)\)")
-RESULT_RE = re.compile(
-    r"\[Scenario\]\s+RESULT=(PASS|FAIL)\s+\|\s+Reached=(\d+)/(\d+)\s+\|\s+"
-    r"Clearance=([\d.]+)cm\s+\|\s+LateralDev=([\d.]+)cm\s+\|\s+Elapsed=([\d.]+)s"
-)
-ANEMO_RE = re.compile(
-    r"\[Anemometer\]\s+Speed=([\d.]+)\s+Direction=([\d.]+)\s+Wind=\(([-\d.]+),([-\d.]+),([-\d.]+)\)"
-)
-CBF_DETAIL_RE = re.compile(r"\[CBF_DETAIL\]\s+Agent=(\d+)\s+ObsCount=(\d+)\s+NearDist=([\d.]+)")
-SIM_SUMMARY_RE = re.compile(
-    r"\[SIM_SUMMARY\]\s+Agent=(\d+)\s+SpeedRatio=([\d.]+)\s+LowSpeedDur=([\d.]+)\s+"
-    r"MaxDev=([\d.]+)\s+MaxRoll=([\d.]+)\s+MaxPitch=([\d.]+)\s+"
-    r"InstabTime=([\d.]+)\s+Stuck=(\d+)\s+ForceComplete=(\d+)"
-)
-CRASH_RE = re.compile(r"\[Crash\]|Obstacle penetration|Agent-Agent collision", re.IGNORECASE)
-SIM_RESULT_RE = re.compile(r"\[SIM_RESULT\]\s*(.*)")
-SCENARIO_LOADED_RE = re.compile(r"\[Scenario\]\s+Loaded from.*?:\s*(\S+)")
-WIND_INIT_RE = re.compile(r"\[WindField\]\s+Initialized:\s+type=(\d+)\s+steady=\(([-\d,]+)\)")
-
-
-def ts_to_ms(m):
-    """时间戳匹配组 -> 当天内的绝对毫秒数(用于排序与 t0 基准)。"""
-    hh, mm, ss, ms = int(m.group(4)), int(m.group(5)), int(m.group(6)), int(m.group(7))
-    return ((hh * 60 + mm) * 60 + ss) * 1000 + ms
 
 
 def to_web(x_ue, y_ue, z_ue):
@@ -80,244 +35,208 @@ def to_web(x_ue, y_ue, z_ue):
 
 
 def size_web(x_ue, y_ue, z_ue):
-    """UE cm 半尺寸/标量分量 -> Web m。仅单位换算,不做坐标系取负(尺寸恒正)。"""
+    """UE cm 半尺寸分量 -> Web m。仅单位换算(尺寸恒正)。"""
     return [round(abs(x_ue) / 100.0, 3), round(abs(z_ue) / 100.0, 3), round(abs(y_ue) / 100.0, 3)]
 
 
-def safe_float(v, guard=FLT_MAX_GUARD):
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    return None if abs(f) > guard else f
+def _obstacle_type(t):
+    return {0: "Sphere", 1: "Box", 2: "Cylinder", 3: "Custom"}.get(t, "Box")
 
 
-class LogState:
-    """累积式日志解析状态。feed() 增量喂行,snapshot() 产出完整数据模型。"""
+class NdjsonState:
+    """累积式 ndjson 解析状态。feed() 喂一行 JSON 对象,snapshot() 产出完整数据模型。"""
 
     def __init__(self):
-        self.scenario = ""
-        self.t0_ms = None
-        self.last_ms = None
-        # agent 信息
-        self.agent_model = {}        # id -> model
-        self.agent_maxvel = {}       # id -> m/s
-        self.agent_init = {}         # id -> [x,y,z] web
-        self._pending_model = None    # 最近一次 [Model] 行,配对给下一个 Registered agent
-        self._pending_maxvel = None   # 同上,对应 MaxVel
-        self._pending_register_id = None  # 等待配对的 SpawnSafety 目标 agent
-        # 时序
-        self.traces = {}             # id -> list[{t,pos,speed,ctrl}]
-        self.speed_series = {}       # id -> list[[t,v_ms]]
-        self.alt_series = {}         # id -> list[[t,alt_m]]
-        self.clearance_series = {}   # id -> list[[t,v_m]]  (NearDist)
-        self.wind_samples = []       # [{t,speedMs,dirDeg,vecMs}]
-        self.verdict_timeline = []   # [{t,reached,total,clearanceM,...,passed}]
-        self.summary = {}            # id -> dict(取每个 agent 最后一次 SIM_SUMMARY)
-        self.events = []             # [{t,type,agent,detail}]
-        # 场景静态
-        self.obstacles = {}          # actor -> obstacle dict(静态 Actor_*)
-        self.dynamic_actors = set()  # BP_UAVPawn* 动态障碍(其他飞机)的 actor 名
-        self.waypoints = []          # [[x,y,z], ...]
-        self.wind_config = None      # {type, steadyMs}
+        self.meta = None
+        self.agent_meta = {}       # id -> {model, color, maxVelMs, collisionRadiusM, initPos}
+        self.agent_order = []      # 首次 spawn 顺序,用于稳定配色
+        self.traces = {}           # id -> [{t,pos,speed,ctrl}]
+        self.speed_series = {}     # id -> [[t,v_ms]]
+        self.alt_series = {}       # id -> [[t,alt_m]]
+        self.clearance_series = {} # id -> [[t,v_m]]  (每帧最后一个值降噪)
+        self.obstacles = {}        # id -> entry
+        self.dynamic_count = 0
+        self.waypoints = {}        # idx -> [x,y,z]
+        self.wind_config = None
+        self.wind_samples = []     # [{t,speedMs,dirDeg,vecMs}]
+        self.verdict_timeline = [] # [{t,passed,reached,total,clearanceM,lateralDevM,elapsedS,final}]
+        self.summary = {}          # id -> dict(取最后一次 metrics)
+        self.events = []           # [{t,type,agent,detail}]
+        self.first_t = None
+        self.last_t = None
+        self.has_final = False
 
-    def _t(self, ms):
-        if ms is None:
-            return None
-        if self.t0_ms is None:
-            self.t0_ms = ms
-        return round((ms - self.t0_ms) / 1000.0, 3)
+    def _touch_t(self, t):
+        if t is None:
+            return
+        if self.first_t is None:
+            self.first_t = t
+        self.last_t = t
 
-    def feed(self, line):
-        tsm = TS_RE.search(line)
-        ms = ts_to_ms(tsm) if tsm else None
-        t = self._t(ms) if ms is not None else None
-        if ms is not None:
-            self.last_ms = ms
+    def _ensure_agent(self, aid):
+        if aid not in self.agent_meta:
+            self.agent_order.append(aid)
+            color = AGENT_COLORS[(len(self.agent_order) - 1) % len(AGENT_COLORS)]
+            self.agent_meta[aid] = {
+                "model": "UAV", "color": color,
+                "maxVelMs": None, "collisionRadiusM": 0.6, "initPos": None,
+            }
 
-        # Model 行(配对给下一个注册的 agent)
-        m = MODEL_RE.search(line)
-        if m:
-            self._pending_model = m.group(1)
-            self._pending_maxvel = safe_float(m.group(2))
+    def feed(self, obj):
+        typ = obj.get("type")
+        t = obj.get("t")
+        self._touch_t(t)
+
+        if typ == "meta":
+            self.meta = obj
             return
 
-        # Registered as Agent N —— 配对最近一次 [Model];spawn 在随后 SpawnSafety 行补上
-        m = REGISTER_AGENT_RE.search(line)
-        if m:
-            aid = int(m.group(1))
-            if aid not in self.agent_model:
-                self.agent_model[aid] = self._pending_model or "UAV"
-                self.agent_maxvel[aid] = self._pending_maxvel
-                self._pending_register_id = aid  # 等待 SpawnSafety 配对
-            self._pending_model = None
-            self._pending_maxvel = None
-            return
-
-        # SpawnSafety —— 配给最近一次注册、尚未拿到 spawn 位置的 agent
-        if "SpawnSafety" in line:
-            sm = SPAWN_RE.search(line)
-            if sm and self._pending_register_id is not None:
-                aid = self._pending_register_id
-                self.agent_init[aid] = to_web(
-                    float(sm.group(1)), float(sm.group(2)), float(sm.group(3)))
-                self._pending_register_id = None
-            return
-
-        # PERF_SUMMARY —— 轨迹主源
-        m = PERF_RE.search(line)
-        if m:
-            aid = int(m.group(1))
-            speed_cm = float(m.group(3))
-            pos = to_web(float(m.group(4)), float(m.group(5)), float(m.group(6)))
-            ctrl = int(m.group(7))
-            self.traces.setdefault(aid, []).append(
-                {"t": t, "pos": pos, "speed": round(speed_cm / 100.0, 2), "ctrl": ctrl}
-            )
-            self.speed_series.setdefault(aid, []).append([t, round(speed_cm / 100.0, 2)])
-            self.alt_series.setdefault(aid, []).append([t, pos[1]])
-            return
-
-        # 障碍物注册
-        m = OBSTACLE_RE.search(line)
-        if m:
-            oid, otype = int(m.group(1)), int(m.group(2))
-            center = to_web(float(m.group(3)), float(m.group(4)), float(m.group(5)))
-            extents = size_web(float(m.group(6)), float(m.group(7)), float(m.group(8)))
-            actor = m.group(9)
-            entry = {"id": oid, "type": _obstacle_type(otype),
-                     "center": center, "extents": extents, "actor": actor}
-            if actor.startswith("BP_UAVPawn"):
-                # 动态障碍(其他飞机),单独标记不进静态场景
-                self.dynamic_actors.add(actor)
-            else:
-                # 静态场景障碍按 actor 去重(ID 会重复分配)
-                self.obstacles[actor] = entry
-            return
-
-        # 航点
-        m = WAYPOINT_RE.search(line)
-        if m:
-            idx = int(m.group(1))
-            wp = to_web(float(m.group(2)), float(m.group(3)), float(m.group(4)))
-            while len(self.waypoints) <= idx:
-                self.waypoints.append(None)
-            self.waypoints[idx] = wp
-            return
-
-        # 逐秒判决
-        m = RESULT_RE.search(line)
-        if m:
-            passed = m.group(1) == "PASS"
-            reached, total = int(m.group(2)), int(m.group(3))
-            clearance_m = safe_float(m.group(4))
-            clearance_m = round(clearance_m / 100.0, 2) if clearance_m is not None else None
-            lat_m = safe_float(m.group(5))
-            lat_m = round(lat_m / 100.0, 2) if lat_m is not None else None
-            self.verdict_timeline.append({
-                "t": t, "passed": passed, "reached": reached, "total": total,
-                "clearanceM": clearance_m, "lateralDevM": lat_m,
-                "elapsedS": round(float(m.group(6)), 2),
-            })
-            return
-
-        # 风场实时
-        m = ANEMO_RE.search(line)
-        if m:
-            speed_cm = safe_float(m.group(1))
-            vec = [safe_float(m.group(3)), safe_float(m.group(4)), safe_float(m.group(5))]
-            if speed_cm is not None and None not in vec:
-                self.wind_samples.append({
-                    "t": t,
-                    "speedMs": round(speed_cm / 100.0, 2),
-                    "dirDeg": round(float(m.group(2)), 1),
-                    "vecMs": to_web(vec[0], vec[1], vec[2]),
-                })
-            return
-
-        # 避障净空(每帧,取每秒最后一个值以降噪)
-        m = CBF_DETAIL_RE.search(line)
-        if m:
-            aid = int(m.group(1))
-            near = safe_float(m.group(3))
-            if near is not None:
-                near_m = round(near / 100.0, 2)
-                s = self.clearance_series.setdefault(aid, [])
-                # 同一秒内只保留最后一个采样
-                if s and abs(s[-1][0] - t) < 0.5:
-                    s[-1][1] = near_m
-                else:
-                    s.append([t, near_m])
-            return
-
-        # 指标汇总(每 agent 取最后一次)
-        m = SIM_SUMMARY_RE.search(line)
-        if m:
-            aid = int(m.group(1))
-            self.summary[aid] = {
-                "agent": aid,
-                "speedRatio": round(float(m.group(2)), 3),
-                "lowSpeedDur": round(float(m.group(3)), 2),
-                "maxDev": round(float(m.group(4)), 2),
-                "maxRoll": round(float(m.group(5)), 2),
-                "maxPitch": round(float(m.group(6)), 2),
-                "instabTime": round(float(m.group(7)), 2),
-                "stuck": int(m.group(8)),
-                "forceComplete": int(m.group(9)),
+        if typ == "wind_config":
+            steady = obj.get("steady") or [0, 0, 0]
+            self.wind_config = {
+                "type": obj.get("windType"),
+                "steadyMs": to_web(steady[0], steady[1], steady[2]),
             }
             return
 
-        # 硬失败事件
-        if CRASH_RE.search(line):
-            self.events.append({"t": t, "type": "Crash/Collision", "agent": None, "detail": _clean(line)})
-            return
-        m = SIM_RESULT_RE.search(line)
-        if m:
-            self.events.append({"t": t, "type": "SimResult", "agent": None, "detail": m.group(1).strip()})
+        if typ == "spawn":
+            aid = obj.get("agent")
+            pos = obj.get("pos") or [0, 0, 0]
+            self._ensure_agent(aid)
+            mv = obj.get("maxVelCm")
+            self.agent_meta[aid].update({
+                "model": obj.get("model") or "UAV",
+                "maxVelMs": round(mv / 100.0, 2) if mv is not None else None,
+                "collisionRadiusM": round(obj.get("collisionRadiusCm", 60) / 100.0, 2),
+                "initPos": to_web(pos[0], pos[1], pos[2]),
+            })
             return
 
-        # 场景名 / 风场配置
-        m = SCENARIO_LOADED_RE.search(line)
-        if m and not self.scenario:
-            self.scenario = m.group(1)
+        if typ == "obstacle":
+            oid = obj.get("id")
+            center = obj.get("center") or [0, 0, 0]
+            extents = obj.get("extents") or [0, 0, 0]
+            entry = {
+                "id": oid,
+                "type": _obstacle_type(obj.get("oType")),
+                "center": to_web(center[0], center[1], center[2]),
+                "extents": size_web(extents[0], extents[1], extents[2]),
+                "actor": obj.get("actor", ""),
+            }
+            if obj.get("dynamic"):
+                # 动态障碍(其他飞机)单独计数,不计入静态场景
+                if oid not in self.obstacles or not self.obstacles[oid].get("_dyn"):
+                    self.dynamic_count += 1
+                    entry["_dyn"] = True
+                self.obstacles[oid] = entry
+            else:
+                self.obstacles[oid] = entry
             return
-        m = WIND_INIT_RE.search(line)
-        if m and self.wind_config is None:
-            parts = m.group(2).split(",")
-            if len(parts) == 3:
-                self.wind_config = {
-                    "type": int(m.group(1)),
-                    "steadyMs": to_web(float(parts[0]), float(parts[1]), float(parts[2])),
-                }
+
+        if typ == "waypoint":
+            idx = obj.get("idx")
+            pos = obj.get("pos") or [0, 0, 0]
+            self.waypoints[idx] = to_web(pos[0], pos[1], pos[2])
             return
+
+        if typ == "frame":
+            for a in obj.get("agents", []):
+                aid = a.get("id")
+                self._ensure_agent(aid)
+                pos_ue = a.get("pos") or [0, 0, 0]
+                vel_ue = a.get("vel") or [0, 0, 0]
+                pos = to_web(pos_ue[0], pos_ue[1], pos_ue[2])
+                speed_ms = round(math.hypot(math.hypot(vel_ue[0], vel_ue[1]), vel_ue[2]) / 100.0, 2)
+                self.traces.setdefault(aid, []).append(
+                    {"t": t, "pos": pos, "speed": speed_ms, "ctrl": a.get("ctrl", 0)}
+                )
+                self.speed_series.setdefault(aid, []).append([t, speed_ms])
+                self.alt_series.setdefault(aid, []).append([t, pos[1]])
+                clr = a.get("clearance")
+                if clr is not None and clr >= 0:
+                    near_m = round(clr / 100.0, 2)
+                    s = self.clearance_series.setdefault(aid, [])
+                    if s and abs(s[-1][0] - t) < 0.5:
+                        s[-1][1] = near_m
+                    else:
+                        s.append([t, near_m])
+            w = obj.get("wind")
+            if w:
+                self._push_wind(t, w)
+            return
+
+        if typ == "metrics":
+            aid = obj.get("agent")
+            self.summary[aid] = {
+                "agent": aid,
+                "speedRatio": round(obj.get("speedRatio", 0), 3),
+                "lowSpeedDur": round(obj.get("lowSpeedDur", 0), 2),
+                "maxDev": round(obj.get("maxDev", 0), 2),
+                "maxRoll": round(obj.get("maxRoll", 0), 2),
+                "maxPitch": round(obj.get("maxPitch", 0), 2),
+                "instabTime": round(obj.get("instabTime", 0), 2),
+                "stuck": int(obj.get("stuck", 0)),
+                "forceComplete": int(obj.get("forceComplete", 0)),
+            }
+            return
+
+        if typ == "event":
+            aid = obj.get("agent")
+            pos = obj.get("pos") or [0, 0, 0]
+            wp = to_web(pos[0], pos[1], pos[2])
+            self.events.append({
+                "t": t, "type": obj.get("event", "Event"), "agent": aid,
+                "detail": f"pos=({wp[0]:.1f},{wp[1]:.1f},{wp[2]:.1f}) crashed={bool(obj.get('crashed'))}",
+            })
+            return
+
+        if typ == "verdict":
+            clr_cm = obj.get("clearanceCm")
+            lat_cm = obj.get("lateralDevCm")
+            rec = {
+                "t": t,
+                "passed": bool(obj.get("passed")),
+                "reached": obj.get("reached", 0),
+                "total": obj.get("total", 0),
+                "clearanceM": round(clr_cm / 100.0, 2) if clr_cm is not None else None,
+                "lateralDevM": round(lat_cm / 100.0, 2) if lat_cm is not None else None,
+                "elapsedS": round(obj.get("elapsedSec", 0), 2),
+                "final": bool(obj.get("final")),
+            }
+            self.verdict_timeline.append(rec)
+            if rec["final"]:
+                self.has_final = True
+            return
+
+    def _push_wind(self, t, w_ue):
+        speed_ms = round(math.hypot(math.hypot(w_ue[0], w_ue[1]), w_ue[2]) / 100.0, 2)
+        vec = to_web(w_ue[0], w_ue[1], w_ue[2])
+        # 水平方向角(deg): 以 web x/z 平面,正北=+z
+        dir_deg = (math.degrees(math.atan2(vec[0], vec[2])) + 360.0) % 360.0
+        self.wind_samples.append({"t": t, "speedMs": speed_ms, "dirDeg": round(dir_deg, 1), "vecMs": vec})
 
     def snapshot(self):
         agents = []
-        all_ids = sorted(set(list(self.traces.keys()) +
-                             list(self.agent_model.keys()) +
-                             list(self.agent_init.keys())))
-        for i, aid in enumerate(all_ids):
+        for aid in sorted(self.agent_meta.keys()):
+            m = self.agent_meta[aid]
             agents.append({
-                "id": aid,
-                "model": self.agent_model.get(aid, "UAV"),
-                "color": AGENT_COLORS[i % len(AGENT_COLORS)],
-                "maxVelMs": self.agent_maxvel.get(aid),
-                "collisionRadiusM": DEFAULT_COLLISION_RADIUS_M,
-                "initPos": self.agent_init.get(aid),
-                "trace": self.traces.get(aid, []),
+                "id": aid, "model": m["model"], "color": m["color"],
+                "maxVelMs": m["maxVelMs"], "collisionRadiusM": m["collisionRadiusM"],
+                "initPos": m["initPos"], "trace": self.traces.get(aid, []),
             })
-        verdict = _build_verdict(self.verdict_timeline)
+        verdict = self._build_verdict()
         duration_ms = 0
-        if self.t0_ms is not None and self.last_ms is not None:
-            duration_ms = self.last_ms - self.t0_ms
+        if self.first_t is not None and self.last_t is not None:
+            duration_ms = round((self.last_t - self.first_t) * 1000.0)
+        waypoints = [self.waypoints[k] for k in sorted(self.waypoints.keys())]
         return {
-            "scenario": self.scenario,
-            "t0_ms": self.t0_ms,
+            "scenario": self.meta.get("scenario", "") if self.meta else "",
+            "t0_ms": None,
             "duration_ms": max(0, duration_ms),
             "agents": agents,
-            "obstacles": list(self.obstacles.values()),
-            "dynamicActorCount": len(self.dynamic_actors),
-            "waypoints": [w for w in self.waypoints if w is not None],
+            "obstacles": [v for v in self.obstacles.values() if not v.get("_dyn")],
+            "dynamicActorCount": self.dynamic_count,
+            "waypoints": waypoints,
             "wind": {"config": self.wind_config, "samples": self.wind_samples[-300:]},
             "verdict": verdict,
             "summary": [self.summary[k] for k in sorted(self.summary)],
@@ -329,9 +248,19 @@ class LogState:
             },
         }
 
-
-def _obstacle_type(t):
-    return {0: "Box", 1: "Sphere", 2: "Cylinder", 3: "Custom"}.get(t, "Box")
+    def _build_verdict(self):
+        if not self.verdict_timeline:
+            return None
+        last = self.verdict_timeline[-1]
+        return {
+            "final": "PASS" if last["passed"] else "FAIL",
+            "reached": f"{last['reached']}/{last['total']}",
+            "clearanceM": last["clearanceM"],
+            "lateralDevM": last["lateralDevM"],
+            "elapsedS": last["elapsedS"],
+            "passed": last["passed"],
+            "timeline": self.verdict_timeline,
+        }
 
 
 def _series_pack(src, agents):
@@ -341,35 +270,6 @@ def _series_pack(src, agents):
         if pts:
             out.append({"agent": a["id"], "color": a["color"], "points": pts})
     return out
-
-
-def _build_verdict(timeline):
-    if not timeline:
-        return None
-    last = timeline[-1]
-    return {
-        "final": "PASS" if last["passed"] else "FAIL",
-        "reached": f"{last['reached']}/{last['total']}",
-        "clearanceM": last["clearanceM"],
-        "lateralDevM": last["lateralDevM"],
-        "elapsedS": last["elapsedS"],
-        "passed": last["passed"],
-        "timeline": timeline,
-    }
-
-
-def _clean(line):
-    """去掉行首时间戳/category,保留可读正文。"""
-    s = re.sub(r"^\[[^\]]*\]\[\s*\d+\]", "", line)
-    s = re.sub(r"^Log\w+:\s*", "", s)
-    return s.strip()[:200]
-
-
-def parse_text(text):
-    state = LogState()
-    for line in text.splitlines():
-        state.feed(line)
-    return state.snapshot()
 
 
 # ---------------------------------------------------------------------------
@@ -399,25 +299,18 @@ def read_scenario_result(logs_dir):
 
 
 # ---------------------------------------------------------------------------
-# 目标日志文件探测
+# 目标数据源探测
 # ---------------------------------------------------------------------------
 
-def default_ue_log_path(project_root):
-    if sys.platform == "darwin":
-        return os.path.expanduser("~/Library/Logs/uav_simulator/uav_simulator.log")
-    # Windows / Linux
-    return os.path.join(project_root, "Saved", "Logs", "uav_simulator.log")
+def default_ndjson_path(project_root):
+    return os.path.join(project_root, "Logs", "telemetry.ndjson")
 
 
 def resolve_target(args, project_root):
-    """优先级: --watch > UE 实时日志(若存在) > Logs/uav.log。"""
     logs_dir = os.path.join(project_root, "Logs")
     if args.watch:
         return args.watch, logs_dir
-    ue_log = default_ue_log_path(project_root)
-    if os.path.isfile(ue_log):
-        return ue_log, logs_dir
-    return os.path.join(logs_dir, "uav.log"), logs_dir
+    return default_ndjson_path(project_root), logs_dir
 
 
 # ---------------------------------------------------------------------------
@@ -430,12 +323,22 @@ class State:
         self.target = target
         self.logs_dir = logs_dir
         self.lock = threading.Lock()
-        self.state = LogState()
+        self.state = NdjsonState()
         self.last_size = 0
         self.last_mtime = 0
         self.finished = False
         self.last_change_time = time.monotonic()
         self._initial_load()
+
+    def _feed_text(self, text):
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                self.state.feed(json.loads(line))
+            except json.JSONDecodeError:
+                continue
 
     def _initial_load(self):
         if os.path.isfile(self.target):
@@ -444,14 +347,15 @@ class State:
                     text = f.read()
                 self.last_size = len(text.encode("utf-8", errors="replace"))
                 self.last_mtime = os.path.getmtime(self.target)
-                self.state = LogState()
-                for line in text.splitlines():
-                    self.state.feed(line)
+                self.state = NdjsonState()
+                with self.lock:
+                    self._feed_text(text)
+                if self.state.has_final:
+                    self.finished = True
             except OSError:
                 pass
 
     def poll_once(self):
-        """轮询文件增量,返回是否有更新。"""
         try:
             if not os.path.isfile(self.target):
                 return False
@@ -460,11 +364,9 @@ class State:
         except OSError:
             return False
 
-        # 文件被重写(truncate 或缩小):全量重读重建
         if size < self.last_size:
             return self._reload_all()
 
-        # 普通追加(mtime 变且文件变大):只解析新增尾部,避免全量重建开销
         if size > self.last_size and mtime != self.last_mtime:
             try:
                 with open(self.target, "r", encoding="utf-8", errors="replace") as f:
@@ -475,17 +377,12 @@ class State:
                 return False
             if tail:
                 with self.lock:
-                    # 首次加载(t0 未定)走全量,以建立基准时间戳
-                    if self.state.t0_ms is None:
-                        self.state = LogState()
-                        for line in tail.splitlines():
-                            self.state.feed(line)
-                    else:
-                        for line in tail.splitlines():
-                            self.state.feed(line)
+                    self._feed_text(tail)
                     self.last_size = size
                     self.last_mtime = mtime
                     self.last_change_time = time.monotonic()
+                if self.state.has_final:
+                    self.finished = True
                 return True
         return False
 
@@ -496,12 +393,13 @@ class State:
         except OSError:
             return False
         with self.lock:
-            self.state = LogState()
-            for line in text.splitlines():
-                self.state.feed(line)
+            self.state = NdjsonState()
+            self._feed_text(text)
             self.last_size = len(text.encode("utf-8", errors="replace"))
             self.last_mtime = os.path.getmtime(self.target)
             self.last_change_time = time.monotonic()
+        if self.state.has_final:
+            self.finished = True
         return True
 
     def mark_finished(self):
@@ -509,11 +407,9 @@ class State:
             self.finished = True
 
     def check_idle_finish(self, idle_timeout):
-        """文件 idle 超时则标记结束(启发式)。"""
         with self.lock:
             if not self.finished and (time.monotonic() - self.last_change_time) > idle_timeout:
-                # 仅在已有数据时才判定结束,避免空文件立即 done
-                if self.state.t0_ms is not None:
+                if self.state.first_t is not None:
                     self.finished = True
 
     def snapshot_with_result(self):
@@ -521,7 +417,6 @@ class State:
             data = self.state.snapshot()
         res = read_scenario_result(self.logs_dir)
         if res:
-            # JSON 判决覆盖逐秒推算的 final 字段(更权威)
             data["verdictResult"] = res
         data["finished"] = self.finished
         data["logFile"] = os.path.basename(self.target)
@@ -532,10 +427,10 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
 
 class Handler(BaseHTTPRequestHandler):
-    state_holder = None  # State 实例,由 main 注入
+    state_holder = None
 
     def log_message(self, *a):
-        pass  # 静默访问日志
+        pass
 
     def _send(self, code, ctype, body):
         self.send_response(code)
@@ -580,7 +475,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         try:
-            # 先推一帧当前快照
             self._sse_push("snapshot")
             idle_timeout = self.state_holder.args.idle_timeout
             tick = 0
@@ -590,7 +484,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.state_holder.check_idle_finish(idle_timeout)
                 tick += 1
                 if changed or self.state_holder.finished or tick % 4 == 0:
-                    # 有更新 / 已结束 / 或每 4 拍发一次心跳保活
                     self._sse_push("snapshot")
                 if self.state_holder.finished:
                     self.wfile.write(b"event: done\ndata: {}\n\n")
@@ -620,12 +513,13 @@ def _guess_mime(path):
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(here))
-    p = argparse.ArgumentParser(description="UAV 仿真日志可视化后端")
+    # __file__ = <PROJECT_ROOT>/Tools/vis/server.py → 项目根向上两级。
+    default_project_root = os.path.dirname(os.path.dirname(here))
+    p = argparse.ArgumentParser(description="UAV 仿真可视化后端")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--watch", default=None, help="实时监听的日志文件(默认探测 UE 运行时日志)")
-    p.add_argument("--project", default=project_root, help="项目根目录(定位 Logs/)")
+    p.add_argument("--watch", default=None, help="实时监听的 ndjson 文件(默认 Logs/telemetry.ndjson)")
+    p.add_argument("--project", default=default_project_root, help="项目根目录(定位 Logs/)")
     p.add_argument("--poll-interval", type=float, default=0.5, help="实时轮询间隔(秒)")
     p.add_argument("--idle-timeout", type=float, default=5.0, help="文件无增长多久后判定仿真结束(秒)")
     args = p.parse_args()
@@ -634,8 +528,6 @@ def main():
     state = State(args, target, logs_dir)
     Handler.state_holder = state
 
-    # 后台轮询线程:独立于 HTTP/SSE 连接持续跟踪日志增量,
-    # 保证 /api/data 与 /api/stream 都能拿到最新数据(刷新页面或短暂断连不丢实时性)。
     def _bg_poll():
         while True:
             time.sleep(args.poll_interval)
@@ -646,7 +538,7 @@ def main():
                 pass
     threading.Thread(target=_bg_poll, daemon=True).start()
 
-    print(f"[VIS] 日志源: {target}")
+    print(f"[VIS] 数据源: {target}")
     print(f"[VIS] Logs 目录: {logs_dir}")
     print(f"[VIS] 访问地址: http://{args.host}:{args.port}")
     sys.stdout.flush()

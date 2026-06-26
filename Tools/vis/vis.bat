@@ -1,15 +1,18 @@
 @echo off
 chcp 65001 >nul 2>&1
-REM UAV 仿真日志可视化 —— 启动脚本(Windows)
-REM 后台启动 Python 标准库 HTTP 服务,实时监听 UE 运行时日志,返回访问地址。
+REM UAV 仿真可视化 —— 启动脚本(Windows)
+REM 后台启动 Python 标准库 HTTP 服务,实时监听 UE 追加写的遥测数据流,返回访问地址。
 REM 用法:
-REM   Tools\vis\vis.bat [--watch <日志文件>] [--port <端口>] [--foreground]
+REM   Tools\vis\vis.bat [--watch <ndjson文件>] [--port <端口>] [--foreground]
+REM 数据源默认 Logs\telemetry.ndjson(UAV TelemetryRecorder 追加写的专用数据流)。
 
 setlocal enabledelayedexpansion
 
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-for %%I in ("%SCRIPT_DIR%") do set "PROJECT_ROOT=%%~dpI"
+for %%I in ("%SCRIPT_DIR%") do set "TOOLS_DIR=%%~dpI"
+set "TOOLS_DIR=%TOOLS_DIR:~0,-1%"
+for %%I in ("%TOOLS_DIR%") do set "PROJECT_ROOT=%%~dpI"
 set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 if defined PYTHON ( set "PY=%PYTHON%" ) else ( set "PY=python" )
 set "PORT=8765"

@@ -16,6 +16,7 @@ class UWindField;
 class UScenario;
 class UScenarioLoader;
 class UScenarioEvaluatorComponent;
+class UTelemetryRecorder;
 
 /**
  * 多机协同 GameMode
@@ -41,6 +42,10 @@ public:
 	/** 获取场景级 WindField 单例（ADR-0002） */
 	UFUNCTION(BlueprintCallable, Category = "Environment")
 	UWindField* GetWindField() const { return WindField; }
+
+	/** 获取遥测记录器（可视化专用数据源，ndjson 流） */
+	UFUNCTION(BlueprintCallable, Category = "Telemetry")
+	UTelemetryRecorder* GetTelemetryRecorder() const { return TelemetryRecorder; }
 
 	/** 默认场景资产引用（命令行未指定 -Scenario= 时使用） */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario")
@@ -221,6 +226,10 @@ protected:
 	// 场景验收器组件（周期快照 + 最终判决）
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Scenario")
 	TObjectPtr<UScenarioEvaluatorComponent> ScenarioEvaluatorComponent;
+
+	// 遥测记录器（可视化专用 ndjson 数据源，全关卡单例）
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Telemetry")
+	TObjectPtr<UTelemetryRecorder> TelemetryRecorder;
 
 	// 场景装配出的机队（供 Evaluator / 外部查询）
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Scenario")

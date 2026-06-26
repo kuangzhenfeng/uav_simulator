@@ -138,6 +138,40 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|State")
 	bool IsCrashed() const { return FlightState == EFlightState::Crashed; }
 
+	// ---- 仿真指标只读访问（供 TelemetryRecorder 等外部模块拉取，单一数据源） ----
+
+	// 当前速度比（当前速度 / 型号最大速度），与 [SIM_SUMMARY] 同一口径
+	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
+	float GetSpeedRatio() const
+	{
+		const float Speed = CurrentState.Velocity.Size();
+		return MetricsMaxVelocity > 0.0f ? Speed / MetricsMaxVelocity : 0.0f;
+	}
+
+	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
+	float GetMaxLowSpeedDuration() const { return MetricsMaxLowSpeedDuration; }
+	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
+	float GetMaxCrossTrackDev() const { return MetricsMaxCrossTrackDev; }
+	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
+	float GetMaxRoll() const { return MetricsMaxRoll; }
+	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
+	float GetMaxPitch() const { return MetricsMaxPitch; }
+	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
+	float GetAttitudeInstabilityTime() const { return MetricsAttitudeInstabilityTime; }
+	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
+	int32 GetNMPCStuckCount() const { return MetricsNMPCStuckCount; }
+	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
+	int32 GetForceCompleteCount() const { return MetricsForceCompleteCount; }
+
+	// 最近一次 SIM_RESULT 事件名（NumericalFailure/ObstaclePenetration/Crash/ForceComplete），
+	// 空串表示本机尚未发生任何事件。供遥测按边沿采样，无需解析日志。
+	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
+	const FString& GetLastSimEvent() const { return LastSimEvent; }
+
+	// SIM_RESULT 事件序号，单调递增。Recorder 用它检测边沿（只取变化后的最新事件）。
+	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
+	int32 GetSimEventSeq() const { return SimEventSeq; }
+
 #if WITH_DEV_AUTOMATION_TESTS
 	// 测试专用：允许自动化测试触发炸机、检查残骸状态并验证偏差保护
 	void TestTriggerCrash() { TriggerCrash(); }
@@ -496,6 +530,10 @@ private:
 		int32 MetricsNMPCStuckCount = 0;
 		bool  bMetricsPrevStuck = false;
 		int32 MetricsForceCompleteCount = 0;
+
+		// 最近一次 SIM_RESULT 事件名 + 单调序号，供遥测边沿采样（与 [SIM_RESULT] 日志同步赋值）
+		FString LastSimEvent;
+		int32 SimEventSeq = 0;
 
 		// 汇总节流计时
 		float MetricsSummaryTimer = 0.0f;

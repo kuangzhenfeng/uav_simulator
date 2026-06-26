@@ -1,13 +1,14 @@
 #!/bin/bash
-# UAV 仿真日志可视化 —— 启动脚本(macOS/Linux)
-# 后台启动 Python 标准库 HTTP 服务,实时监听 UE 运行时日志,返回访问地址。
+# UAV 仿真可视化 —— 启动脚本(macOS/Linux)
+# 后台启动 Python 标准库 HTTP 服务,实时监听 UE 追加写的遥测数据流,返回访问地址。
 # 用法:
-#   Tools/vis/vis.sh [--watch <日志文件>] [--port <端口>] [--foreground]
+#   Tools/vis/vis.sh [--watch <ndjson文件>] [--port <端口>] [--foreground]
+# 数据源默认 Logs/telemetry.ndjson(UAV TelemetryRecorder 追加写的专用数据流)。
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 PYTHON="${PYTHON:-python3}"
 PORT=8765
 WATCH_ARG=""

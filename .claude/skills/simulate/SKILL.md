@@ -98,7 +98,7 @@ macOS/Linux 使用对应 `.sh`。
 Tools/vis/vis.sh          # macOS/Linux；Windows 用 Tools\vis\vis.bat
 ```
 
-可视化是只读辅助工具：解析 UE 实时日志，不阻塞修复主循环。启动失败（端口占用/Python 缺失）只告警不中断。
+可视化是只读辅助工具：解析 UE 专用遥测数据流 `Logs/telemetry.ndjson`（UAV `TelemetryRecorder` 按帧追加写的结构化数据），不依赖运行时日志正则解析，不阻塞修复主循环。启动失败（端口占用/Python 缺失）只告警不中断。
 
 测试规则：
 

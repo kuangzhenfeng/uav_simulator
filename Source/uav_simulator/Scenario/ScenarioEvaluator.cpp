@@ -5,6 +5,7 @@
 #include "../Core/UAVPawn.h"
 #include "../Mission/MissionComponent.h"
 #include "../Planning/ObstacleManager.h"
+#include "../Telemetry/TelemetryRecorder.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HAL/PlatformFileManager.h"
@@ -266,7 +267,7 @@ void UScenarioEvaluatorComponent::TickComponent(float DeltaTime, ELevelTick Tick
 		Snapshot.ElapsedSec = ElapsedTime;
 
 		const FScenarioVerdict Verdict = UScenarioEvaluator::Evaluate(Snapshot, Criteria);
-		UScenarioEvaluator::WriteResultJson(Scenario->Name, Scenario->RandomSeed, Verdict);
+		EvaluateAndRecord(Verdict, /*bFinal=*/false);
 	}
 }
 
@@ -282,7 +283,7 @@ void UScenarioEvaluatorComponent::FlushFinalResult()
 	Final.ElapsedSec = ElapsedTime;
 
 	const FScenarioVerdict Verdict = UScenarioEvaluator::Evaluate(Final, Criteria);
-	UScenarioEvaluator::WriteResultJson(Scenario->Name, Scenario->RandomSeed, Verdict);
+	EvaluateAndRecord(Verdict, /*bFinal=*/true);
 }
 
 void UScenarioEvaluatorComponent::HandleMissionCompleted(bool bSuccess)
@@ -299,4 +300,26 @@ void UScenarioEvaluatorComponent::HandleMissionFailed(FString Reason)
 {
 	// 任务失败：直接写最终结果（多为 FAIL）
 	FlushFinalResult();
+}
+
+void UScenarioEvaluatorComponent::SetTelemetryRecorder(UTelemetryRecorder* InRecorder)
+{
+	TelemetryRecorder = InRecorder;
+}
+
+void UScenarioEvaluatorComponent::EvaluateAndRecord(const FScenarioVerdict& Verdict, bool bFinal)
+{
+	// 写 scenario_result.json（权威判决，sim.sh 退出码协议依赖它）
+	UScenarioEvaluator::WriteResultJson(Scenario->Name, Scenario->RandomSeed, Verdict);
+
+	// 同步推 telemetry.ndjson（可视化专用数据源），与 JSON 判决同一份口径
+	if (TelemetryRecorder.IsValid())
+	{
+		const float SimTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+		TelemetryRecorder->WriteVerdict(
+			SimTime, bFinal,
+			Verdict.Metrics.WaypointsReached, Verdict.Metrics.WaypointsTotal,
+			Verdict.Metrics.MinClearanceCm, Verdict.Metrics.MaxLateralDeviationCm,
+			Verdict.Metrics.ElapsedSec, Verdict.Metrics.bCollided, Verdict.Failures);
+	}
 }

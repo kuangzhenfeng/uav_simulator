@@ -18,6 +18,7 @@
 #include "../Scenario/ScenarioLoader.h"
 #include "../Scenario/ScenarioTypes.h"
 #include "../Scenario/ScenarioEvaluator.h"
+#include "../Telemetry/TelemetryRecorder.h"
 #include "uav_simulator/Utility/Filter.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -72,6 +73,12 @@ void AMultiAgentGameMode::BeginPlay()
 	// 创建任务分配器和监控器
 	TaskAllocatorInstance = NewObject<UTaskAllocator>(this);
 	TaskMonitorInstance = NewObject<UTaskMonitor>(this);
+
+	// 创建遥测记录器并注入共享风场：作为可视化 Web 的专用 ndjson 数据源。
+	// 始终创建（非场景化关卡也记录，便于单机 PIE 可视化）。
+	TelemetryRecorder = NewObject<UTelemetryRecorder>(this);
+	TelemetryRecorder->RegisterComponent();
+	TelemetryRecorder->SetWindField(WindField);
 
 	// 场景系统装配（ADR-0001）：解析 -Scenario= 命令行（优先），否则用 DefaultScenario。
 	LoadAndAssembleScenario();
@@ -146,6 +153,8 @@ void AMultiAgentGameMode::LoadAndAssembleScenario()
 		ScenarioEvaluatorComponent = NewObject<UScenarioEvaluatorComponent>(this);
 		ScenarioEvaluatorComponent->RegisterComponent();
 		ScenarioEvaluatorComponent->Initialize(ScenarioToLoad, Fleet[0]);
+		// 把遥测记录器注入验收器，使周期/最终判决同步落 ndjson
+		ScenarioEvaluatorComponent->SetTelemetryRecorder(TelemetryRecorder);
 	}
 
 	UE_LOG(LogUAVMultiAgent, Log, TEXT("[Scenario] Assembly complete: %d UAV(s)"), Fleet.Num());

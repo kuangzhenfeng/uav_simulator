@@ -182,7 +182,8 @@
 - 飞行稳定性评分（0-100，EMA 平滑）
 - 分模块日志等级控制
 - 结构化仿真指标日志（速度、姿态、偏差、NMPC/CBF 求解、安全失败汇总）
-- 离线日志可视化（`Tools/vis/`）：解析仿真日志做 3D 轨迹/障碍/航点/风场 + 时序图表 + 验收面板，边跑边实时刷新、跑完可拖拽回放，无需启动 UE 编辑器
+- 仿真遥测流（`TelemetryRecorder` → `Logs/telemetry.ndjson`）：按帧追加写的结构化数据流（机队位姿/速度/净空/指标/判决/事件），作为可视化专用数据源
+- 离线可视化（`Tools/vis/`）：解析遥测流做 3D 轨迹/障碍/航点/风场 + 时序图表 + 验收面板，边跑边实时刷新、跑完可拖拽回放，无需启动 UE 编辑器
 
 ### 场景资产化系统
 - 声明式仿真场景（`UScenario` DataAsset）：障碍布局、风场、机队、任务航点、验收标准、随机种子
@@ -213,6 +214,7 @@ uav_simulator/
 │   ├── AI/             # AI 控制器与行为树节点
 │   ├── MultiAgent/     # 多机协同（AgentManager、CBF-QP、编队控制）
 │   ├── Environment/    # 环境模拟（风场、天气）
+│   ├── Telemetry/      # 仿真遥测记录器（TelemetryRecorder → ndjson）
 │   ├── Debug/          # 调试与可视化工具
 │   ├── UI/             # 用户界面（视角切换 Widget）
 │   ├── Utility/        # 工具函数
