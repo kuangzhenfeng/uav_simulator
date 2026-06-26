@@ -53,17 +53,3 @@
 
 用户重新编译并启动 UE 后,用以下命令验证:
   `soft-ue-cli check-setup`
-
-## Agent 技能
-
-### Issue 跟踪
-
-Issues 跟踪在本仓库的 GitHub Issues 中,使用 `gh` CLI。详见 `docs/agents/issue-tracker.md`。
-
-### Triage 标签
-
-沿用 5 个默认角色字符串作为标签:needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix。详见 `docs/agents/triage-labels.md`。
-
-### 领域文档
-
-Single-context 布局:根目录 `CONTEXT.md` + `docs/adr/`(尚不存在,由 `/grill-with-docs` 懒创建)。详见 `docs/agents/domain.md`。
