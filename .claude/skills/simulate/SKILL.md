@@ -92,6 +92,14 @@ Script\sim.bat <duration> <slomo>
 
 macOS/Linux 使用对应 `.sh`。
 
+启动仿真前，默认后台拉起日志可视化工具（边跑边看 3D 轨迹/障碍/航点/风场/指标，跑完可拖拽回放）：
+
+```bash
+Tools/vis/vis.sh          # macOS/Linux；Windows 用 Tools\vis\vis.bat
+```
+
+可视化是只读辅助工具：解析 UE 实时日志，不阻塞修复主循环。启动失败（端口占用/Python 缺失）只告警不中断。
+
 测试规则：
 
 - 当前 `Script/test.*` 运行完整 `UAVSimulator` 测试集，不支持目标过滤。

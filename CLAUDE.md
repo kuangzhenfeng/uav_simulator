@@ -6,6 +6,7 @@
 
 ## 基本规范
 
+- 用中文回答
 - 注释用中文，日志用英文。
 - 永远不要主动提交代码，除非我明确要求你这么做。如需提交代码，提交纪录不要带有Co-Authored-By。
 - 新增或修改功能时，必须更新README.md中的功能特性描述，保持文档与代码的一致性。
@@ -53,3 +54,17 @@
 
 用户重新编译并启动 UE 后,用以下命令验证:
   `soft-ue-cli check-setup`
+
+## Agent skills
+
+### Issue tracker
+
+本地 markdown：issues 以文件形式存放在 `.scratch/<feature>/` 下，不走 GitHub/GitLab。See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+五个 triage 角色采用默认字符串：needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix。See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+单上下文：根目录 `CONTEXT.md` + `docs/adr/`。See `docs/agents/domain.md`.

@@ -15,9 +15,12 @@ Saved/
 .claude/*.json
 .cache/
 .ignore
+.playwright-mcp/
+.omo/
 compile_commands.json
 Logs/
 Plugins/
 Content/KiteDemo/
 Plugins/
 instance.json
+__pycache__/

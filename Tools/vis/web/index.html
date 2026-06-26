@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UAV 仿真可视化</title>
+<link rel="stylesheet" href="/web/style.css" />
+<!-- import map: bare specifier 'three' -> 本地内置模块 -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "/web/vendor/three.module.js",
+    "three/addons/": "/web/vendor/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app">
+  <!-- 顶部状态条 -->
+  <header id="topbar">
+    <div class="brand">🛩️ UAV Sim Visualizer</div>
+    <div id="status" class="status">连接中…</div>
+    <div id="verdict" class="verdict"></div>
+  </header>
+
+  <main id="main">
+    <!-- 3D 视图 -->
+    <section id="scene-wrap">
+      <div id="scene-overlay">
+        <div class="legend" id="legend"></div>
+        <div class="hint">左键旋转 · 右键平移 · 滚轮缩放</div>
+      </div>
+      <canvas id="three-canvas"></canvas>
+    </section>
+
+    <!-- 右侧面板:指标 + 图表 -->
+    <aside id="panel">
+      <div class="card">
+        <div class="card-title">验收判决</div>
+        <div id="verdict-detail" class="verdict-detail">等待数据…</div>
+      </div>
+      <div class="card">
+        <div class="card-title">机队指标 <span class="muted">(最近汇总)</span></div>
+        <div id="summary-table" class="summary-table"></div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title">速度 (m/s)</div>
+        <canvas class="chart" id="chart-speed"></canvas>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title">高度 (m)</div>
+        <canvas class="chart" id="chart-alt"></canvas>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title">避障净空 (m)</div>
+        <canvas class="chart" id="chart-clear"></canvas>
+      </div>
+      <div class="card">
+        <div class="card-title">事件</div>
+        <div id="events" class="events muted">无</div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- 底部时间轴 -->
+  <footer id="timeline">
+    <button id="play-btn">▶</button>
+    <input type="range" id="scrub" min="0" max="1000" value="0" />
+    <span id="time-label" class="time-label">0.0s</span>
+    <span class="sep"></span>
+    <span id="wind-label" class="wind-label muted"></span>
+  </footer>
+</div>
+
+<script type="module" src="/web/app.js"></script>
+</body>
+</html>
