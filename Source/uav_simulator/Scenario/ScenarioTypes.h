@@ -111,6 +111,18 @@ struct FScenarioAgentEntry
 	/** 是否为编队长机（二期编队使用） */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Agent")
 	bool bIsLeader = false;
+
+	/**
+	 * 该机内联航线（航点序列）。
+	 * 非空时由 Loader 下发到本机的 MissionComponent，实现"每机独立航线"。
+	 * 为空时回退到 UScenario.MissionProfile（向后兼容单航线场景）。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Agent")
+	TArray<FMissionWaypoint> Waypoints;
+
+	/** 本机内联航线的任务模式（Once/Loop/PingPong） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Agent")
+	EMissionMode MissionMode = EMissionMode::Once;
 };
 
 /**

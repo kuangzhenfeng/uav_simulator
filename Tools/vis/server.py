@@ -54,6 +54,9 @@ class NdjsonState:
         self.speed_series = {}     # id -> [[t,v_ms]]
         self.alt_series = {}       # id -> [[t,alt_m]]
         self.clearance_series = {} # id -> [[t,v_m]]  (每帧最后一个值降噪)
+        # 未来轨迹最新快照（覆盖式，区别于历史 traces 的累积式）
+        # id -> {"opt":[[x,y,z],...], "plan":[[x,y,z],...], "nmpc":[[x,y,z,cost],...]}
+        self.future = {}
         self.obstacles = {}        # id -> entry
         self.dynamic_count = 0
         self.waypoints = {}        # idx -> [x,y,z]
@@ -208,6 +211,25 @@ class NdjsonState:
                 self.has_final = True
             return
 
+        if typ in ("traj_opt", "traj_plan", "traj_nmpc"):
+            aid = obj.get("agent")
+            if aid is None:
+                return
+            self._ensure_agent(aid)
+            raw_pts = obj.get("pts") or []
+            key = {"traj_opt": "opt", "traj_plan": "plan", "traj_nmpc": "nmpc"}[typ]
+            # 坐标 cm->m + 坐标系变换；nmpc 额外保留 cost（第4元素）
+            out = []
+            for p in raw_pts:
+                if typ == "traj_nmpc" and len(p) >= 4:
+                    w = to_web(p[0], p[1], p[2])
+                    out.append([w[0], w[1], w[2], float(p[3])])
+                elif len(p) >= 3:
+                    out.append(to_web(p[0], p[1], p[2]))
+            # 覆盖式快照：只保留最新一份（区别于历史 trace 的累积式）
+            self.future.setdefault(aid, {})[key] = out
+            return
+
     def _push_wind(self, t, w_ue):
         speed_ms = round(math.hypot(math.hypot(w_ue[0], w_ue[1]), w_ue[2]) / 100.0, 2)
         vec = to_web(w_ue[0], w_ue[1], w_ue[2])
@@ -219,10 +241,14 @@ class NdjsonState:
         agents = []
         for aid in sorted(self.agent_meta.keys()):
             m = self.agent_meta[aid]
+            fut = self.future.get(aid, {})
             agents.append({
                 "id": aid, "model": m["model"], "color": m["color"],
                 "maxVelMs": m["maxVelMs"], "collisionRadiusM": m["collisionRadiusM"],
                 "initPos": m["initPos"], "trace": self.traces.get(aid, []),
+                "futureOpt": fut.get("opt", []),
+                "futurePlan": fut.get("plan", []),
+                "futureNmpc": fut.get("nmpc", []),
             })
         verdict = self._build_verdict()
         duration_ms = 0
@@ -508,6 +534,8 @@ def _guess_mime(path):
         return "text/html; charset=utf-8"
     if path.endswith(".json"):
         return "application/json"
+    if path.endswith(".svg"):
+        return "image/svg+xml"
     return "application/octet-stream"
 
 

@@ -435,6 +435,11 @@ bool AUAVPawn::HasReachedTarget(float Tolerance) const
 	return FVector::Dist(CurrentState.Position, TargetPosition) <= Tolerance;
 }
 
+bool AUAVPawn::HasValidNMPCPrediction() const
+{
+	return bHasCachedNMPC && CachedNMPCResult.PredictedTrajectory.Num() >= 2;
+}
+
 void AUAVPawn::UpdateSensors(float DeltaTime)
 {
 	// 更新所有传感器
@@ -638,6 +643,7 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 	bNMPCStuck = Result.bStuck;
 	CachedNMPCAcceleration = Result.OptimalAcceleration;
 	CachedNMPCCorrectedTarget = Result.CorrectedTarget;
+	CachedNMPCResult = Result;       // 缓存完整结果（含预测轨迹），供可视化拉取
 	bHasCachedNMPC = true;
 	bHasCachedNMPCTarget = true;
 

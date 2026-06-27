@@ -37,7 +37,11 @@ if defined SCENARIO_ASSET (
 
 REM Run UE5 directly (blocking) - suppress verbose logs
 echo Starting UE5 (will be stopped after %SIM_DURATION%s real time)...
-"%UE_EDITOR%" "%PROJECT_PATH%" -game -NullRHI -NoSound -NoSplash -unattended -nopause -NOSAVECONFIG %EXTRA_ARGS% -ExecCmds="slomo %SLOMO%" -silent -LogCmds="Global Warning, LogUAVActor Log, LogUAVPlanning Log, LogUAVMission Log, LogUAVAI Log, LogUAVAttitude Log, LogUAVMultiAgent Log, LogUAVSensor Log, LogUAVMetrics Log, LogUAVProfiling Log, LogScenarioEval Log" >nul 2>&1
+REM 默认仿真关卡：SimScenarioMap（空白舞台，含静态美术但不预放 UAV；
+REM 机队/航点/障碍/风场全部由 ScenarioLoader 声明式装配，避免关卡预放机
+REM 与场景程序装配机职责重叠）。
+if not defined SIM_MAP set "SIM_MAP=/Game/Scenarios/SimScenarioMap.SimScenarioMap"
+"%UE_EDITOR%" "%PROJECT_PATH%" "%SIM_MAP%" -game -NullRHI -NoSound -NoSplash -unattended -nopause -NOSAVECONFIG %EXTRA_ARGS% -ExecCmds="slomo %SLOMO%" -silent -LogCmds="Global Warning, LogUAVActor Log, LogUAVPlanning Log, LogUAVMission Log, LogUAVAI Log, LogUAVAttitude Log, LogUAVMultiAgent Log, LogUAVSensor Log, LogUAVMetrics Log, LogUAVProfiling Log, LogScenarioEval Log" >nul 2>&1
 
 REM Kill lingering killer process so MSYS bash does not hang
 taskkill /F /IM ping.exe >nul 2>&1

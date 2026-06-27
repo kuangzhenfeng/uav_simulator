@@ -44,6 +44,20 @@ public:
 	void SetWindField(UWindField* InWindField);
 
 	/**
+	 * 覆盖默认输出路径（默认 ProjectDir/Logs/telemetry.ndjson）。
+	 * 必须在文件句柄首次打开之前调用。供单元测试重定向输出，避免污染真实遥测文件。
+	 */
+	void SetOutputPath(const FString& InPath) { OutputPathOverride = InPath; }
+
+	/**
+	 * 显式初始化：打开输出文件句柄并重置采样累加器。
+	 * 正常运行由 BeginPlay 自动调用；单元测试中组件未走完整注册流程，
+	 * 显式调用本方法避免依赖 BeginPlay 的 bRegistered 断言。
+	 * @return 文件句柄是否成功打开
+	 */
+	bool InitializeOutput();
+
+	/**
 	 * 写一帧判决行（周期快照或终局，由 ScenarioEvaluatorComponent 调用）。
 	 * 同一份判决同时落 ndjson（这里）与 scenario_result.json（由调用方写）。
 	 */
@@ -51,11 +65,22 @@ public:
 		float ClearanceCm, float LateralDevCm, float ElapsedSec,
 		bool bCollided, const TArray<FString>& Failures);
 
+	/**
+	 * 等距降采样索引（保证首尾点入选）。
+	 * 纯函数：从 Total 个点中均匀取最多 MaxCount 个索引，保证首尾入选、单调递增。
+	 * 公开供单元测试验证未来轨迹点数上限的数据契约。
+	 */
+	static void SampleIndices(int32 Total, int32 MaxCount, TArray<int32>& OutIndices);
+
 protected:
 	// 帧采样节拍（仿真秒），默认 20Hz
 	float FrameIntervalSec = 0.05f;
 	// 指标采样节拍（仿真秒），默认 1Hz
 	float MetricsIntervalSec = 1.0f;
+	// 未来轨迹采样节拍（仿真秒），默认 5Hz。三类未来轨迹共用，避免 ndjson 体积失控
+	float TrajectoryIntervalSec = 0.2f;
+	// 单条未来轨迹降采样后的最大点数
+	int32 MaxTrajectoryPoints = 32;
 
 private:
 	// 持久追加写句柄（share-read，外部可同时读取）
@@ -64,11 +89,17 @@ private:
 	// 注入的风场（弱引用，避免循环）
 	TWeakObjectPtr<UWindField> WindField;
 
+	// 输出路径覆盖（默认空 -> ProjectDir/Logs/telemetry.ndjson；测试可注入临时路径）
+	FString OutputPathOverride;
+
 	// 帧采样累加器（仿真秒）
 	float FrameAccum = 0.0f;
 
 	// 指标采样累加器（仿真秒）
 	float MetricsAccum = 0.0f;
+
+	// 未来轨迹采样累加器（仿真秒）
+	float TrajectoryAccum = 0.0f;
 
 	// 静态数据是否已写
 	bool bStaticWritten = false;
@@ -90,4 +121,11 @@ private:
 
 	// 指标采样：写 metrics（从各 Pawn public getter 拉累计指标）
 	void WriteMetrics(float SimTime);
+
+	// 未来轨迹采样：遍历机队写三类未来轨迹行
+	//   traj_opt  —— TrajectoryTracker 正在跟踪的优化轨迹
+	//   traj_plan —— PlanningVisualizer 持久化规划路径
+	//   traj_nmpc —— NMPC 预测轨迹（含障碍代价 cost）
+	// 仅当对应数据有效时写该 agent 的行，停止后自然停写（消费端覆盖式快照）
+	void WriteFutureTrajectories(float SimTime);
 };

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161b2e"/>
+      <stop offset="1" stop-color="#0f1320"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="13.25" fill="none" stroke="#2c3552" stroke-width="1.5"/>
+  <!-- 四臂 -->
+  <g stroke="#8b95b8" stroke-width="3.5" stroke-linecap="round">
+    <line x1="32" y1="32" x2="18" y2="18"/>
+    <line x1="32" y1="32" x2="46" y2="18"/>
+    <line x1="32" y1="32" x2="18" y2="46"/>
+    <line x1="32" y1="32" x2="46" y2="46"/>
+  </g>
+  <!-- 旋翼:半透明圆表示旋转中的桨叶 -->
+  <g fill="#4f8cff" opacity="0.4">
+    <circle cx="18" cy="18" r="7.5"/>
+    <circle cx="46" cy="18" r="7.5"/>
+    <circle cx="18" cy="46" r="7.5"/>
+    <circle cx="46" cy="46" r="7.5"/>
+  </g>
+  <!-- 旋翼电机中心 -->
+  <g fill="#4f8cff">
+    <circle cx="18" cy="18" r="2.5"/>
+    <circle cx="46" cy="18" r="2.5"/>
+    <circle cx="18" cy="46" r="2.5"/>
+    <circle cx="46" cy="46" r="2.5"/>
+  </g>
+  <!-- 中心机身 -->
+  <rect x="25.5" y="25.5" width="13" height="13" rx="3.5" fill="#4f8cff"/>
+  <circle cx="32" cy="32" r="2" fill="#0f1320"/>
+</svg>

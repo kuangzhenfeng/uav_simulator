@@ -216,6 +216,16 @@ void UPlanningVisualizer::SetPersistentPath(const TArray<FVector>& Path)
 	PersistentPath = Path;
 }
 
+bool UPlanningVisualizer::GetPersistentPath(TArray<FVector>& OutPath) const
+{
+	if (PersistentPath.Num() < 2)
+	{
+		return false;
+	}
+	OutPath = PersistentPath;
+	return true;
+}
+
 void UPlanningVisualizer::SetPersistentTrajectory(const FTrajectory& Trajectory)
 {
 	PersistentTrajectory = Trajectory;

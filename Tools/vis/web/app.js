@@ -24,6 +24,8 @@ const App = {
   // 实时
   es: null,
   finished: false,
+  // 未来轨迹显示开关（优化轨迹默认开，规划路径/NMPC 预测默认关，避免初始过载）
+  showFuture: { opt: true, plan: false, nmpc: false },
 };
 
 // 仅用于运行时调试/自检:暴露内部状态(无副作用)
@@ -235,10 +237,25 @@ function rebuildScene(d) {
     obj.body.traverse(c => { if (c.material && c.material.color) c.material.color.set(a.color); });
     obj.sphere.material.color.set(a.color);
     obj.sphere.material.opacity = 0.12;
-    // 轨迹
+    // 轨迹（历史，累积式）
     obj.trail.geometry.dispose();
     obj.trail.geometry = trailGeometry(a.trace);
     obj.trail.material.color.set(a.color);
+
+    // 未来轨迹（覆盖式最新快照）
+    // 优化轨迹：实线，可见性受开关控制
+    obj.futureOpt.geometry.dispose();
+    obj.futureOpt.geometry = pointsGeometry(a.futureOpt || []);
+    obj.futureOpt.material.color.set(a.color);
+    obj.futureOpt.visible = App.showFuture.opt && (a.futureOpt && a.futureOpt.length >= 2);
+    // 规划路径：蓝色，受开关控制
+    obj.futurePlan.geometry.dispose();
+    obj.futurePlan.geometry = pointsGeometry(a.futurePlan || []);
+    obj.futurePlan.visible = App.showFuture.plan && (a.futurePlan && a.futurePlan.length >= 2);
+    // NMPC 预测：橙色，受开关控制；点按 cost 热度着色（线色仍橙，热点另见下）
+    obj.futureNmpc.geometry.dispose();
+    obj.futureNmpc.geometry = pointsGeometry(a.futureNmpc || []);
+    obj.futureNmpc.visible = App.showFuture.nmpc && (a.futureNmpc && a.futureNmpc.length >= 2);
   });
 
   // 风场箭头(角落指示全局风向)
@@ -329,14 +346,37 @@ function makeAgent(a) {
   );
   grp.add(sphere);
 
-  // 轨迹折线
+  // 轨迹折线（历史）
   const trail = new THREE.Line(
     new THREE.BufferGeometry(),
     new THREE.LineBasicMaterial({ color: a.color, transparent: true, opacity: 0.7 })
   );
   grp.add(trail);
 
-  return { group: grp, body, sphere, trail, def: a };
+  // 未来轨迹（覆盖式最新快照，区别于历史 trail 的累积式）。
+  // 三类各一线：优化轨迹(实线高透明)、规划路径(虚线)、NMPC 预测(虚线+按 cost 热度)。
+  // 着色沿用 agent 主色，靠透明度/虚线样式区分，保证多机可分辨。
+  const futureOpt = new THREE.Line(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({ color: a.color, transparent: true, opacity: 0.85 })
+  );
+  grp.add(futureOpt);
+
+  const futurePlan = new THREE.Line(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({ color: 0x4f8cff, transparent: true, opacity: 0.6 })
+  );
+  futurePlan.material.linewidth = 2;
+  // 虚线（DashedMaterial 需 computeLineDistances）
+  grp.add(futurePlan);
+
+  const futureNmpc = new THREE.Line(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({ color: 0xff922b, transparent: true, opacity: 0.7 })
+  );
+  grp.add(futureNmpc);
+
+  return { group: grp, body, sphere, trail, futureOpt, futurePlan, futureNmpc, def: a };
 }
 
 function trailGeometry(trace) {
@@ -347,6 +387,26 @@ function trailGeometry(trace) {
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   return geo;
 }
+
+// 由点数组 [x,y,z(,cost)] 构造几何体（未来轨迹快照用）。
+// cost 仅用于 NMPC 热度着色，几何构造时不参与。
+function pointsGeometry(pts) {
+  const geo = new THREE.BufferGeometry();
+  if (!pts || !pts.length) return geo;
+  const pos = new Float32Array(pts.length * 3);
+  pts.forEach((p, i) => { pos[i*3] = p[0]; pos[i*3+1] = p[1]; pos[i*3+2] = p[2]; });
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  return geo;
+}
+
+// NMPC 预测点按障碍代价 cost 热度着色（复刻 PlanningVisualizer 色映射：cost 越高越红）
+function costToColor(cost) {
+  const ratio = Math.max(0, Math.min(1, cost / 10.0));
+  const r = Math.round(255 * (1 - ratio) + 255 * ratio);       // 始终接近 255
+  const g = Math.round(255 * (1 - ratio) + 100 * ratio * (1 - ratio) * 0);
+  return rgbToInt(r, Math.round(165 * (1 - ratio)), 0);
+}
+function rgbToInt(r, g, b) { return (r << 16) | (g << 8) | b; }
 
 function updateWindArrow(d) {
   const samples = d.wind?.samples || [];
@@ -527,6 +587,9 @@ function renderLegend(d) {
   const items = d.agents.map(a => `<div class="legend-item"><span class="legend-dot" style="background:${a.color}"></span>Agent ${a.id} · ${a.model}</div>`);
   items.push(`<div class="legend-item"><span class="legend-dot" style="background:#${COLORS.obstacle.toString(16).padStart(6,'0')}"></span>静态障碍</div>`);
   items.push(`<div class="legend-item"><span class="legend-dot" style="background:#${COLORS.wind.toString(16).padStart(6,'0')}"></span>风场方向</div>`);
+  items.push(`<div class="legend-item"><span class="legend-dot" style="background:#4f8cff"></span>优化轨迹(未来)</div>`);
+  items.push(`<div class="legend-item"><span class="legend-dot" style="background:#4f8cff;opacity:.5"></span>规划路径(未来)</div>`);
+  items.push(`<div class="legend-item"><span class="legend-dot" style="background:#ff922b"></span>NMPC预测(未来)</div>`);
   el.innerHTML = items.join('');
 }
 
@@ -649,6 +712,18 @@ function bindUI() {
   playBtn.addEventListener('click', () => {
     App.playing = !App.playing;
     playBtn.textContent = App.playing ? '⏸' : '▶';
+  });
+  // 未来轨迹显示开关
+  const fmap = { 'toggle-opt': 'opt', 'toggle-plan': 'plan', 'toggle-nmpc': 'nmpc' };
+  Object.keys(fmap).forEach(id => {
+    const cb = document.getElementById(id);
+    if (cb) {
+      cb.checked = App.showFuture[fmap[id]];
+      cb.addEventListener('change', () => {
+        App.showFuture[fmap[id]] = cb.checked;
+        if (App.data) rebuildScene(App.data);
+      });
+    }
   });
 }
 

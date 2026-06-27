@@ -116,6 +116,13 @@ public:
 	void SetPersistentPath(const TArray<FVector>& Path);
 
 	/**
+	 * 获取持久化规划路径（可视化遥测拉取用）。
+	 * @param OutPath 输出路径点（cm，UE 原生坐标系）
+	 * @return 路径是否有效（点数 >= 2）
+	 */
+	bool GetPersistentPath(TArray<FVector>& OutPath) const;
+
+	/**
 	 * 设置持久化轨迹（每帧绘制）
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Planning Visualization")

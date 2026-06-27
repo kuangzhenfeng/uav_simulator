@@ -6,6 +6,9 @@
 #include "../Core/UAVProductManager.h"
 #include "../Core/UAVTypes.h"
 #include "../Planning/ObstacleManager.h"
+#include "../Planning/TrajectoryTracker.h"
+#include "../Planning/PlanningVisualizer.h"
+#include "../Planning/NMPCAvoidance.h"
 #include "../Mission/MissionComponent.h"
 #include "../Environment/WindField.h"
 #include "../Environment/EnvironmentTypes.h"
@@ -43,8 +46,14 @@ void UTelemetryRecorder::SetWindField(UWindField* InWindField)
 void UTelemetryRecorder::BeginPlay()
 {
 	Super::BeginPlay();
+	InitializeOutput();
+}
 
-	const FString Path = FPaths::Combine(FPaths::ProjectDir(), TEXT("Logs/telemetry.ndjson"));
+bool UTelemetryRecorder::InitializeOutput()
+{
+	const FString Path = OutputPathOverride.IsEmpty()
+		? FPaths::Combine(FPaths::ProjectDir(), TEXT("Logs/telemetry.ndjson"))
+		: OutputPathOverride;
 
 	// 确保目录存在
 	FPlatformFileManager::Get().GetPlatformFile().CreateDirectoryTree(*FPaths::GetPath(Path));
@@ -58,14 +67,16 @@ void UTelemetryRecorder::BeginPlay()
 	if (!FileHandle.IsValid())
 	{
 		UE_LOG(LogTelemetry, Error, TEXT("[Telemetry] Failed to open %s for writing"), *Path);
-		return;
+		return false;
 	}
 
 	UE_LOG(LogTelemetry, Log, TEXT("[Telemetry] Recording to %s"), *Path);
 	FrameAccum = 0.0f;
 	MetricsAccum = 0.0f;
+	TrajectoryAccum = 0.0f;
 	bStaticWritten = false;
 	LastEventSeq.Reset();
+	return true;
 }
 
 void UTelemetryRecorder::BeginDestroy()
@@ -278,6 +289,103 @@ void UTelemetryRecorder::WriteMetrics(float SimTime)
 	}
 }
 
+void UTelemetryRecorder::SampleIndices(int32 Total, int32 MaxCount, TArray<int32>& OutIndices)
+{
+	OutIndices.Reset();
+	if (Total <= 0) return;
+	if (Total <= MaxCount)
+	{
+		for (int32 i = 0; i < Total; ++i) OutIndices.Add(i);
+		return;
+	}
+	// 等距降采样：首尾入选，中间均匀取点
+	for (int32 i = 0; i < MaxCount; ++i)
+	{
+		const int32 Idx = FMath::Min(Total - 1, FMath::RoundToInt(static_cast<float>(i) * (Total - 1) / (MaxCount - 1)));
+		OutIndices.Add(Idx);
+	}
+}
+
+void UTelemetryRecorder::WriteFutureTrajectories(float SimTime)
+{
+	TArray<AUAVPawn*> Agents;
+	CollectAgents(Agents);
+
+	for (AUAVPawn* P : Agents)
+	{
+		const int32 AgentID = P->GetAgentID();
+
+		// ---- traj_opt：优化轨迹（TrajectoryTracker 正在跟踪的 FTrajectory）----
+		UTrajectoryTracker* Tracker = P->GetTrajectoryTracker();
+		if (Tracker && Tracker->IsTracking())
+		{
+			const FTrajectory& Opt = Tracker->GetTrajectory();
+			if (Opt.bIsValid && Opt.Points.Num() >= 2)
+			{
+				TArray<int32> Idx;
+				SampleIndices(Opt.Points.Num(), MaxTrajectoryPoints, Idx);
+				FString PtsJson;
+				for (int32 k = 0; k < Idx.Num(); ++k)
+				{
+					const FVector& Pos = Opt.Points[Idx[k]].Position;
+					PtsJson += FString::Printf(TEXT("%s[%.1f,%.1f,%.1f]"),
+						k > 0 ? TEXT(",") : TEXT(""), Pos.X, Pos.Y, Pos.Z);
+				}
+				WriteLine(FString::Printf(
+					TEXT("{\"type\":\"traj_opt\",\"t\":%.3f,\"agent\":%d,\"valid\":true,\"pts\":[%s]}"),
+					SimTime, AgentID, *PtsJson));
+			}
+		}
+
+		// ---- traj_plan：规划路径（PlanningVisualizer 持久化路径）----
+		if (UPlanningVisualizer* Vis = P->GetPlanningVisualizer())
+		{
+			TArray<FVector> PlanPath;
+			if (Vis->GetPersistentPath(PlanPath))
+			{
+				TArray<int32> Idx;
+				SampleIndices(PlanPath.Num(), MaxTrajectoryPoints, Idx);
+				FString PtsJson;
+				for (int32 k = 0; k < Idx.Num(); ++k)
+				{
+					const FVector& Pos = PlanPath[Idx[k]];
+					PtsJson += FString::Printf(TEXT("%s[%.1f,%.1f,%.1f]"),
+						k > 0 ? TEXT(",") : TEXT(""), Pos.X, Pos.Y, Pos.Z);
+				}
+				WriteLine(FString::Printf(
+					TEXT("{\"type\":\"traj_plan\",\"t\":%.3f,\"agent\":%d,\"pts\":[%s]}"),
+					SimTime, AgentID, *PtsJson));
+			}
+		}
+
+		// ---- traj_nmpc：NMPC 预测轨迹（含障碍代价 cost）----
+		if (P->HasValidNMPCPrediction())
+		{
+			if (const FNMPCAvoidanceResult* Result = P->GetLastNMPCResult())
+			{
+				const TArray<FNMPCPredictionStep>& Pred = Result->PredictedTrajectory;
+				if (Pred.Num() >= 2)
+				{
+					TArray<int32> Idx;
+					SampleIndices(Pred.Num(), MaxTrajectoryPoints, Idx);
+					FString PtsJson;
+					for (int32 k = 0; k < Idx.Num(); ++k)
+					{
+						const FNMPCPredictionStep& Step = Pred[Idx[k]];
+						PtsJson += FString::Printf(TEXT("%s[%.1f,%.1f,%.1f,%.2f]"),
+							k > 0 ? TEXT(",") : TEXT(""),
+							Step.Position.X, Step.Position.Y, Step.Position.Z,
+							Step.ObstacleCost);
+					}
+					WriteLine(FString::Printf(
+						TEXT("{\"type\":\"traj_nmpc\",\"t\":%.3f,\"agent\":%d,\"pts\":[%s]}"),
+						SimTime, AgentID, *PtsJson));
+				}
+			}
+		}
+	}
+}
+
 void UTelemetryRecorder::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
@@ -306,6 +414,14 @@ void UTelemetryRecorder::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 	{
 		MetricsAccum = 0.0f;
 		WriteMetrics(SimTime);
+	}
+
+	// 未来轨迹采样：低于帧率的节拍（默认 5Hz），避免 ndjson 体积失控
+	TrajectoryAccum += DeltaTime;
+	if (TrajectoryAccum >= TrajectoryIntervalSec)
+	{
+		TrajectoryAccum = 0.0f;
+		WriteFutureTrajectories(SimTime);
 	}
 }
 

@@ -209,9 +209,18 @@ public:
 	// NMPC stuck 状态查询
 	bool IsNMPCStuck() const { return bNMPCStuck; }
 
-
 	// 获取当前 NMPC 加速度（供 AgentManager 状态缓存传播到 CBF-QP）
 	FVector GetNMPCAcceleration() const { return SmoothedNMPCAcceleration; }
+
+	// 获取最近一次 NMPC 求解结果（含预测轨迹，可视化用）。
+	// bHasCachedNMPC 为 false 时返回 nullptr。
+	const FNMPCAvoidanceResult* GetLastNMPCResult() const
+	{
+		return bHasCachedNMPC ? &CachedNMPCResult : nullptr;
+	}
+
+	// 获取最近一次 NMPC 求解是否有效（有预测轨迹）。
+	bool HasValidNMPCPrediction() const;
 		// 获取 UAV 碰撞半径（cm），基于 ArmLength + 安全余量
 		// 用于障碍物感知时替代 GetActorBounds 返回的过大包围盒
 		float GetCollisionRadius() const
@@ -389,6 +398,8 @@ private:
 	FVector CachedNMPCAcceleration = FVector::ZeroVector;
 	FVector SmoothedNMPCAcceleration = FVector::ZeroVector;
 	bool bHasCachedNMPC = false;
+	// 最近一次 NMPC 完整结果（供可视化拉取预测轨迹）
+	FNMPCAvoidanceResult CachedNMPCResult;
 
 	// stuck 逃逸冷却：stuck 时延长不求解时间，让逃逸加速度持续生效
 	float StuckEscapeCooldown = 0.0f;

@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" type="image/svg+xml" href="/web/favicon.svg" />
 <title>UAV 仿真可视化</title>
 <link rel="stylesheet" href="/web/style.css" />
 <!-- import map: bare specifier 'three' -> 本地内置模块 -->
@@ -69,7 +70,11 @@
     <input type="range" id="scrub" min="0" max="1000" value="0" />
     <span id="time-label" class="time-label">0.0s</span>
     <span class="sep"></span>
-    <span id="wind-label" class="wind-label muted"></span>
+    <span class="wind-label muted" id="wind-label"></span>
+    <span class="sep"></span>
+    <label class="future-toggle"><input type="checkbox" id="toggle-opt" />优化轨迹</label>
+    <label class="future-toggle"><input type="checkbox" id="toggle-plan" />规划路径</label>
+    <label class="future-toggle"><input type="checkbox" id="toggle-nmpc" />NMPC预测</label>
   </footer>
 </div>
 
