@@ -10,7 +10,7 @@ public class uav_simulator : ModuleRules
 
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "AIModule", "GameplayTasks", "NavigationSystem", "UMG" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore", "HTTP", "HTTPServer", "Sockets", "Networking", "Json", "JsonUtilities" });
 
 		// 测试模块依赖（仅编辑器构建）
 		if (Target.bBuildEditor)

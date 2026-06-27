@@ -201,6 +201,30 @@ void UScenarioEvaluatorComponent::Initialize(UScenario* InScenario, AUAVPawn* In
 	}
 }
 
+void UScenarioEvaluatorComponent::Reset()
+{
+	// 解绑旧 LeadUAV 的任务委托，避免复用组件时重复绑定。
+	// （AddDynamic 到已 Destroy 对象的委托会自动失效，但若旧 Pawn 仍存活则需显式移除。）
+	if (LeadUAV)
+	{
+		if (UMissionComponent* Mission = LeadUAV->FindComponentByClass<UMissionComponent>())
+		{
+			Mission->OnMissionCompleted.RemoveAll(this);
+			Mission->OnMissionFailed.RemoveAll(this);
+		}
+	}
+
+	// 累积指标复位：MinClearance 取极小(FLT_MAX)、MaxLateral 取极大(0)，与 FScenarioMetrics 默认一致
+	Accumulated = FScenarioMetrics();
+	SnapshotAccumulator = 0.0f;
+	ElapsedTime = 0.0f;
+	bFinalFlushed = false;
+
+	Scenario = nullptr;
+	LeadUAV = nullptr;
+	Criteria = nullptr;
+}
+
 FScenarioMetrics UScenarioEvaluatorComponent::CollectMetrics() const
 {
 	FScenarioMetrics M = Accumulated;

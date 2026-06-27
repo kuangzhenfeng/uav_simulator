@@ -26,6 +26,13 @@ public:
 		UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) override;
 	virtual FString GetStaticDescription() const override;
 
+	/**
+	 * 取消所有挂起的延迟退出。
+	 * 进程内场景热重载前由编排者调用：把退出标志置为取消，使已注册的延迟退出 Timer
+	 * 在触发时不再 RequestExit，防止旧场景结束误杀进程、阻断新场景装配。
+	 */
+	static void CancelPendingExit();
+
 protected:
 	// 退出前的延迟（秒），用于确保日志刷新完成
 	UPROPERTY(EditAnywhere, Category = "Simulation",

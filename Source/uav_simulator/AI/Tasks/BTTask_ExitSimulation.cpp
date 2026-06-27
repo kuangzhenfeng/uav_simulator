@@ -6,6 +6,10 @@
 #include "GenericPlatform/GenericPlatformMisc.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 
+// 进程内热重载用：置 true 时，已挂起的延迟退出 Timer 触发也不再 RequestExit。
+// 由 CancelPendingExit() 置 true，新场景装配前清零，避免旧场景任务完成误杀进程。
+static bool gbExitCancelled = false;
+
 UBTTask_ExitSimulation::UBTTask_ExitSimulation()
 {
 	NodeName = TEXT("Exit Simulation");
@@ -53,6 +57,14 @@ void UBTTask_ExitSimulation::RequestDelayedExit(UWorld* World) const
 		TimerHandle,
 		FTimerDelegate::CreateLambda([]()
 		{
+			// 热重载可能在该 Timer 挂起期间取消退出；取消则放弃 RequestExit。
+			if (gbExitCancelled)
+			{
+				UE_LOG(LogUAVAI, Log,
+					TEXT("BTTask_ExitSimulation: Pending exit cancelled by scenario reload"));
+				gbExitCancelled = false; // 消费一次，恢复默认
+				return;
+			}
 			UE_LOG(LogUAVAI, Log,
 				TEXT("BTTask_ExitSimulation: Executing graceful shutdown"));
 			GLog->Flush();
@@ -61,6 +73,12 @@ void UBTTask_ExitSimulation::RequestDelayedExit(UWorld* World) const
 		ExitDelay,
 		false
 	);
+}
+
+void UBTTask_ExitSimulation::CancelPendingExit()
+{
+	gbExitCancelled = true;
+	UE_LOG(LogUAVAI, Log, TEXT("BTTask_ExitSimulation: Pending exit cancel requested (scenario reload)"));
 }
 
 FString UBTTask_ExitSimulation::GetStaticDescription() const

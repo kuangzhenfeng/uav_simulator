@@ -17,6 +17,9 @@ class UScenario;
 class UScenarioLoader;
 class UScenarioEvaluatorComponent;
 class UTelemetryRecorder;
+class ADynamicObstacleActor;
+class UBTTask_ExitSimulation;
+class UHttpControlComponent;
 
 /**
  * 多机协同 GameMode
@@ -39,6 +42,26 @@ public:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaTime) override;
 
+	/**
+	 * 进程内场景热重载：销毁当前机队、重置全部持久子系统状态、用新 Scenario 重新装配。
+	 * 不重启进程，秒级完成。bReloading 互斥期间拒绝并发 reload，避免半装配态采指标。
+	 * @param NewScenario 新装配用的内存 UScenario（通常由 UScenarioFactory::BuildFromDto 生成）
+	 * @return 是否成功完成重载
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Scenario")
+	bool ReloadScenario(UScenario* NewScenario);
+
+	/** 热重载是否进行中（供 HTTP 控制端/遥测器判断是否暂停采集） */
+	bool IsReloading() const { return bReloading; }
+
+	/**
+	 * 实时设置仿真时标（不改命令行 slomo）。
+	 * 走 WorldSettings->SetTimeDilation，与 TelemetryRecorder 读取时标的口径一致，
+	 * 立即生效（下一帧物理积分按新时标）。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Sim Control")
+	void SetSlomo(float Scale);
+
 	/** 获取场景级 WindField 单例（ADR-0002） */
 	UFUNCTION(BlueprintCallable, Category = "Environment")
 	UWindField* GetWindField() const { return WindField; }
@@ -46,6 +69,10 @@ public:
 	/** 获取遥测记录器（可视化专用数据源，ndjson 流） */
 	UFUNCTION(BlueprintCallable, Category = "Telemetry")
 	UTelemetryRecorder* GetTelemetryRecorder() const { return TelemetryRecorder; }
+
+	/** 获取当前机队（供 HttpControl 等外部模块按目标分发调参） */
+	UFUNCTION(BlueprintCallable, Category = "Scenario")
+	TArray<AUAVPawn*> GetScenarioFleet() const;
 
 	/** 默认场景资产引用（命令行未指定 -Scenario= 时使用） */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario")
@@ -215,6 +242,20 @@ protected:
 	/** 装配场景：解析 -Scenario= 命令行或回退 DefaultScenario，按子流程装配世界 */
 	void LoadAndAssembleScenario();
 
+	/**
+	 * 用指定 UScenario 装配世界（reload 与冷启动共用核心装配逻辑）。
+	 * bIsReload=true 时跳过命令行/DefaultScenario 解析，直接装配传入的 Scenario，
+	 * 并在装配完成后写一行 reload 事件到 telemetry.ndjson 通知前端。
+	 */
+	void AssembleScenario(UScenario* ScenarioToLoad, bool bIsReload);
+
+	/**
+	 * 热重载前置清理：销毁旧机队、复位注册表/缓存/持久子组件、取消挂起退出。
+	 * 必须在 AssembleScenario 前调用，保证新场景从干净状态启动。
+	 */
+	void TearDownForReload();
+
+protected:
 	// 当前生效的场景资产
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Scenario")
 	TObjectPtr<UScenario> ActiveScenario;
@@ -230,6 +271,10 @@ protected:
 	// 遥测记录器（可视化专用 ndjson 数据源，全关卡单例）
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Telemetry")
 	TObjectPtr<UTelemetryRecorder> TelemetryRecorder;
+
+	// Web 控制端组件（HTTP 反向命令通道，headless 启动）
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Network")
+	TObjectPtr<UHttpControlComponent> HttpControl;
 
 	// 场景装配出的机队（供 Evaluator / 外部查询）
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Scenario")
@@ -267,6 +312,9 @@ private:
 
 	// 状态缓存更新累加器
 	float StateCacheAccumulator = 0.0f;
+
+	// 热重载互斥标志（true 时拒绝并发 reload，暂停验收/遥测采集）
+	bool bReloading = false;
 
 	// 编队偏移量缓存（当编队配置不变时复用）
 	TArray<FVector> CachedFormationOffsets;

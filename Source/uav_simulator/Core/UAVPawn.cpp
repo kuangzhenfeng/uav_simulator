@@ -266,6 +266,32 @@ FVector AUAVPawn::ApplyHardLimitCorrectionForTest(const FVector& Acceleration, f
 }
 #endif
 
+void AUAVPawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	Super::EndPlay(EndPlayReason);
+
+	// 多机模式：从 GameMode 注销本机，释放 AgentID 与注册表条目
+	if (bIsMultiAgentMode)
+	{
+		if (AMultiAgentGameMode* MultiAgentGM = GetWorld() ? GetWorld()->GetAuthGameMode<AMultiAgentGameMode>() : nullptr)
+		{
+			MultiAgentGM->UnregisterAgent(AgentID);
+		}
+	}
+
+	// 残骸 Actor 由本 Pawn 持有，随 Pawn 销毁
+	if (ActiveWreckActor)
+	{
+		ActiveWreckActor->Destroy();
+		ActiveWreckActor = nullptr;
+	}
+
+	// 释放场景级风场引用（风场本身由 GameMode 持有，这里只断开本机缓存）
+	SceneWindField = nullptr;
+
+	UE_LOG(LogUAVActor, Log, TEXT("[EndPlay] Agent %d cleaned up (Reason=%d)"), AgentID, (int32)EndPlayReason);
+}
+
 void AUAVPawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
@@ -1913,4 +1939,162 @@ void AUAVPawn::OutputProfilingSummary()
 		AgentID, FrameTime * 1000.0f, Speed,
 		CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
 		(int32)ControlMode);
+}
+
+// ========== 指标复位与实时调参 ==========
+
+void AUAVPawn::ResetMetrics()
+{
+	// 注意：MetricsMaxVelocity 缓存的是型号最大速度（BeginPlay 时由 Spec.MaxVelocity 写入），
+	// 作为速度比 SpeedRatio 的分母，不属于累计指标，复位时保留。
+	// 若运行时换型号，应由 SetModelID 路径重新写入，不在此归零。
+
+	// 低速
+	MetricsLowSpeedTimer = 0.0f;
+	MetricsMaxLowSpeedDuration = 0.0f;
+	bMetricsInLowSpeed = false;
+
+	// 避障恢复
+	MetricsLastAvoidanceEnd = -100.0f;
+	bMetricsWasAvoiding = false;
+	bMetricsCBFActiveThisFrame = false;
+
+	// 横向偏差
+	MetricsCurrentCrossTrackDev = 0.0f;
+	MetricsMaxCrossTrackDev = 0.0f;
+	MetricsHighDeviationTimer = 0.0f;
+	bMetricsInSevereDeviation = false;
+	bMetricsTriggeredSevere = false;
+
+	// 姿态
+	MetricsMaxRoll = 0.0f;
+	MetricsMaxPitch = 0.0f;
+	MetricsAttitudeInstabilityTime = 0.0f;
+
+	// NMPC 求解时间历史
+	MetricsSolveTimes.Reset();
+
+	// 事件计数
+	MetricsNMPCStuckCount = 0;
+	bMetricsPrevStuck = false;
+	MetricsForceCompleteCount = 0;
+
+	// 事件序列
+	LastSimEvent.Reset();
+	SimEventSeq = 0;
+
+	// 汇总节流
+	MetricsSummaryTimer = 0.0f;
+
+	UE_LOG(LogUAVMetrics, Log, TEXT("[METRICS_RESET] Agent=%d MaxVelocity=%.0f preserved"),
+		AgentID, MetricsMaxVelocity);
+}
+
+void AUAVPawn::SetAttitudePID(int32 Axis, float Kp, float Ki, float Kd)
+{
+	if (!AttitudeControllerComponent)
+	{
+		UE_LOG(LogUAVActor, Warning, TEXT("[Tune] SetAttitudePID ignored: AttitudeController null"));
+		return;
+	}
+
+	switch (Axis)
+	{
+	case 0: // Roll
+		AttitudeControllerComponent->RollPID = FPIDParams(Kp, Ki, Kd);
+		break;
+	case 1: // Pitch
+		AttitudeControllerComponent->PitchPID = FPIDParams(Kp, Ki, Kd);
+		break;
+	case 2: // Yaw
+		AttitudeControllerComponent->YawPID = FPIDParams(Kp, Ki, Kd);
+		break;
+	default:
+		UE_LOG(LogUAVActor, Warning, TEXT("[Tune] SetAttitudePID invalid Axis=%d"), Axis);
+		return;
+	}
+
+	UE_LOG(LogUAVActor, Log,
+		TEXT("[Tune] AttitudePID Axis=%d Kp=%.4f Ki=%.4f Kd=%.4f"),
+		Axis, Kp, Ki, Kd);
+}
+
+void AUAVPawn::SetPositionPIDGains(float Kp, float Ki, float Kd)
+{
+	if (!PositionControllerComponent)
+	{
+		UE_LOG(LogUAVActor, Warning, TEXT("[Tune] SetPositionPIDGains ignored: PositionController null"));
+		return;
+	}
+
+	PositionControllerComponent->Kp_Position = Kp;
+	PositionControllerComponent->Ki_Position = Ki;
+	PositionControllerComponent->Kd_Position = Kd;
+
+	UE_LOG(LogUAVActor, Log,
+		TEXT("[Tune] PositionPID Kp=%.4f Ki=%.4f Kd=%.4f"),
+		Kp, Ki, Kd);
+}
+
+void AUAVPawn::SetVelocityPIDGains(float Kp, float Ki, float Kd)
+{
+	if (!PositionControllerComponent)
+	{
+		UE_LOG(LogUAVActor, Warning, TEXT("[Tune] SetVelocityPIDGains ignored: PositionController null"));
+		return;
+	}
+
+	PositionControllerComponent->Kp_Velocity = Kp;
+	PositionControllerComponent->Ki_Velocity = Ki;
+	PositionControllerComponent->Kd_Velocity = Kd;
+
+	UE_LOG(LogUAVActor, Log,
+		TEXT("[Tune] VelocityPID Kp=%.4f Ki=%.4f Kd=%.4f"),
+		Kp, Ki, Kd);
+}
+
+void AUAVPawn::SetNMPCConfig(const FNMPCConfig& InConfig)
+{
+	if (!NMPCComponent)
+	{
+		UE_LOG(LogUAVActor, Warning, TEXT("[Tune] SetNMPCConfig ignored: NMPC component null"));
+		return;
+	}
+
+	NMPCComponent->Config = InConfig;
+
+	// 同步线性 MPC 懒加载实例（若已创建），避免类型切换后两套配置不一致
+	if (LinearMPCComponent)
+	{
+		LinearMPCComponent->Config = InConfig;
+	}
+
+	UE_LOG(LogUAVActor, Log,
+		TEXT("[Tune] NMPCConfig updated MPCType=%d Horizon=%.1f Steps=%d"),
+		(int32)InConfig.MPCType, InConfig.Solver.PredictionHorizon, InConfig.Solver.PredictionSteps);
+}
+
+void AUAVPawn::SetMPCType(EMPCType InType)
+{
+	if (!NMPCComponent)
+	{
+		UE_LOG(LogUAVActor, Warning, TEXT("[Tune] SetMPCType ignored: NMPC component null"));
+		return;
+	}
+
+	NMPCComponent->Config.MPCType = InType;
+
+	UE_LOG(LogUAVActor, Log, TEXT("[Tune] MPCType=%d"), (int32)InType);
+}
+
+void AUAVPawn::SetCBFQPConfig(const FCBFQPConfig& InConfig)
+{
+	CBFQPConfig = InConfig;
+
+	// CBFQPFilter 每次 Filter() 调用时直接读取传入的 CBFQPConfig 参数，不持有独立副本，
+	// 故无需调用更新方法；仅 PreviousQPSolution 热启动缓冲留在组件内。
+
+	UE_LOG(LogUAVActor, Log,
+		TEXT("[Tune] CBFQPConfig updated Mode=%d DSafe=%.1f MaxVel=%.0f"),
+		(int32)CBFQPConfig.Mode, CBFQPConfig.DSafe, CBFQPConfig.MaxVelocity);
 }

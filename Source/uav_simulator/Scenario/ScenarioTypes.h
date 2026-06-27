@@ -16,9 +16,25 @@ class AUAVPawn;
 // ==================== 场景系统的子资产 ====================
 
 /**
+ * 动态障碍运动模型。
+ * - Static：完全静止。
+ * - LinearVelocity：沿 Velocity 匀速直线（出界后销毁，由驱动器决定）。
+ * - PatrolLoop：沿 PatrolPoints 循环往返的巡逻路径。
+ * - PatrolPingPong：沿 PatrolPoints 到达末端后反向，往返运动。
+ */
+UENUM(BlueprintType)
+enum class EObstacleMovementType : uint8
+{
+	Static			UMETA(DisplayName = "Static"),
+	LinearVelocity	UMETA(DisplayName = "Linear Velocity"),
+	PatrolLoop		UMETA(DisplayName = "Patrol Loop"),
+	PatrolPingPong	UMETA(DisplayName = "Patrol Ping-Pong")
+};
+
+/**
  * 单个障碍物的场景声明。
- * 描述逻辑几何，由 ScenarioLoader 注册到 ObstacleManager 并 Spawn 可视化 Mesh。
- * 运动轨迹字段预留（动态障碍二期启用）。
+ * 描述逻辑几何，由 ScenarioLoader 注册到 ObstacleManager 并 Spawn 可视化/驱动 Actor。
+ * 动态障碍按 MovementType 决定运动模型。
  */
 USTRUCT(BlueprintType)
 struct FScenarioObstacleEntry
@@ -45,13 +61,24 @@ struct FScenarioObstacleEntry
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Obstacle", meta = (ClampMin = "0.0"))
 	float SafetyMargin = 50.0f;
 
-	/** 是否为动态障碍物（二期启用，MVP 保持 false） */
+	/** 运动模型（决定该障碍是否动态及如何运动） */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Obstacle")
-	bool bIsDynamic = false;
+	EObstacleMovementType MovementType = EObstacleMovementType::Static;
 
-	/** 动态障碍匀速速度（cm/s，二期启用） */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Obstacle", meta = (EditCondition = "bIsDynamic"))
+	/** LinearVelocity 模式的匀速速度（cm/s） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Obstacle", meta = (EditCondition = "MovementType == EObstacleMovementType::LinearVelocity"))
 	FVector Velocity = FVector::ZeroVector;
+
+	/**
+	 * 巡逻航点（世界坐标 cm，PatrolLoop/PatrolPingPong 用）。
+	 * 为空时缺省以 Center 为唯一巡逻点（即原地不动）。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Obstacle", meta = (EditCondition = "MovementType == EObstacleMovementType::PatrolLoop || MovementType == EObstacleMovementType::PatrolPingPong"))
+	TArray<FVector> PatrolPoints;
+
+	/** 巡逻/直线运动速度（cm/s，PatrolLoop/PatrolPingPong 沿航点推进的速率） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Obstacle", meta = (ClampMin = "0.0"))
+	float PatrolSpeed = 300.0f;
 };
 
 /**

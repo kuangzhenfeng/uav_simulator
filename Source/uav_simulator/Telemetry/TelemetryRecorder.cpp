@@ -79,10 +79,38 @@ bool UTelemetryRecorder::InitializeOutput()
 	return true;
 }
 
+void UTelemetryRecorder::ResetForNewScenario()
+{
+	// 先关闭旧句柄（BeginPlay/上一次打开的），再 truncate 重开，确保文件被覆盖而非追加。
+	FileHandle.Reset();
+	InitializeOutput();
+}
+
+void UTelemetryRecorder::WriteReloadMarker()
+{
+	if (!FileHandle.IsValid()) return;
+	// reload 标记无仿真时间意义，t 取 0；前端据此重置游标、刷新静态数据。
+	WriteLine(TEXT("{\"type\":\"reload\",\"t\":0.0}"));
+}
+
 void UTelemetryRecorder::BeginDestroy()
 {
 	FileHandle.Reset();
 	Super::BeginDestroy();
+}
+
+void UTelemetryRecorder::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// 关闭持久文件句柄：World 销毁时立即释放，避免句柄泄漏导致后续场景/测试 truncate 打开失败。
+	// （此前只在 BeginDestroy 释放，但 BeginDestroy 在 GC 时才触发，测试间 World 快速销毁时
+	//  旧句柄仍占着 telemetry.ndjson，导致下一个测试 OpenWrite 失败。）
+	CloseOutput();
+	Super::EndPlay(EndPlayReason);
+}
+
+void UTelemetryRecorder::CloseOutput()
+{
+	FileHandle.Reset();
 }
 
 void UTelemetryRecorder::WriteLine(const FString& JsonLine)

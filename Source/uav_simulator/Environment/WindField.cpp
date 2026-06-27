@@ -70,6 +70,29 @@ void UWindField::SetWindConfig(const FWindConfig& InConfig)
 	UE_LOG(LogUAVWind, Log, TEXT("[WindField] Config updated: type=%d"), static_cast<int32>(Config.WindType));
 }
 
+void UWindField::ResetDynamicState()
+{
+	// 阵风相位
+	bGustActive = false;
+	GustTimer = 0.0f;
+	CurrentGustVelocity = FVector::ZeroVector;
+	TargetGustVelocity = FVector::ZeroVector;
+	NextGustTime = 0.0f;
+
+	// Dryden 湍流滤波器状态
+	DrydenStateX = FVector::ZeroVector;
+	DrydenStateY = FVector::ZeroVector;
+	DrydenStateZ = FVector::ZeroVector;
+
+	// 当前合成风仅保留稳态分量（Gust/Turbulence 分量清零）
+	CurrentState.GustComponent = FVector::ZeroVector;
+	CurrentState.TurbulenceComponent = FVector::ZeroVector;
+	CurrentState.WindVelocity = CurrentState.SteadyComponent;
+	CurrentState.WindSpeed = CurrentState.WindVelocity.Size();
+
+	UE_LOG(LogUAVWind, Log, TEXT("[WindField] Dynamic state reset (gust/dryden phase cleared)"));
+}
+
 void UWindField::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);

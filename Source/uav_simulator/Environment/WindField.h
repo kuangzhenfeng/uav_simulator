@@ -38,6 +38,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Wind")
 	void SetWindConfig(const FWindConfig& InConfig);
 
+	/**
+	 * 重置阵风/Dryden 湍流的内部动态状态（不影响 Config）。
+	 * 进程内场景热重载时调用，避免新场景开局带着上一场景半截的阵风相位 / 湍流滤波状态。
+	 * SetWindConfig 只重算时间常数与稳态分量，不重置这些相位状态，故需独立接口。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Wind")
+	void ResetDynamicState();
+
 	// 获取指定位置的风速（支持空间变化，当前实现为均匀风场）
 	UFUNCTION(BlueprintCallable, Category = "Wind")
 	FVector GetWindAtPosition(const FVector& WorldPosition) const;

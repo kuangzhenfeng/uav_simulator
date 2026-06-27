@@ -63,6 +63,12 @@ public:
 	 */
 	bool HasValidAllocation() const { return bHasValidAllocation; }
 
+	/**
+	 * 复位分配状态（清空当前分配，使 HasValidAllocation 返回 false）。
+	 * 进程内场景热重载前调用，避免上一场景的任务分配残留影响新场景。
+	 */
+	void Reset();
+
 	// ---- 内部方法 (public for testing) ----
 
 	/**

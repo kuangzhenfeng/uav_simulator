@@ -7,6 +7,12 @@ UTaskAllocator::UTaskAllocator()
 {
 }
 
+void UTaskAllocator::Reset()
+{
+	CurrentAllocation = FTaskAllocationResult();
+	bHasValidAllocation = false;
+}
+
 FTaskAllocationResult UTaskAllocator::Allocate(
 	const TArray<FTaskDescriptor>& Tasks,
 	const TArray<FUAVCapability>& UAVCapabilities,

@@ -29,7 +29,8 @@ const App = {
 };
 
 // 仅用于运行时调试/自检:暴露内部状态(无副作用)
-if (typeof window !== 'undefined') window.__vis = { App };
+// pickMode 供控制面板(control.js)开启 3D 拾取,点击地面/障碍回填表单坐标。
+if (typeof window !== 'undefined') window.__vis = { App, pickMode: false };
 
 // 主循环状态变量(模块级,避免在 loop 调用前进入 TDZ)
 let lastTs = performance.now();
@@ -90,6 +91,30 @@ function initThree() {
   rebuildGround([[-50, -50], [150, 50]]);
 
   window.addEventListener('resize', onResize);
+
+  // 3D 拾取:控制面板开启 pickMode 时,点击地面把 web 坐标回填表单。
+  const canvas = document.getElementById('three-canvas');
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // y=0 地面
+  const hitPoint = new THREE.Vector3();
+  canvas.addEventListener('click', (ev) => {
+    if (!window.__vis || !window.__vis.pickMode) return;
+    const rect = canvas.getBoundingClientRect();
+    ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, App.camera);
+    // 优先命中障碍/航点 mesh,其次地面
+    const targets = [...App.obstacleObjects, ...App.waypointObjects];
+    const hits = raycaster.intersectObjects(targets, true);
+    let pt = null;
+    if (hits.length) {
+      pt = hits[0].point;
+    } else if (raycaster.ray.intersectPlane(groundPlane, hitPoint)) {
+      pt = hitPoint.clone();
+    }
+    if (pt && window.__cpPick) window.__cpPick([pt.x, pt.y, pt.z]);
+  });
 }
 
 function rebuildGround(bounds) {
@@ -161,6 +186,17 @@ function onNewData() {
   setStatus(d.finished ? (d.scenario ? `已结束 · ${d.scenario}` : '已结束') : `实时仿真中 · ${d.scenario || ''}`, live);
 
   App.durationSec = Math.max(d.duration_ms / 1000, 0.001);
+  // reload epoch 变化:热重载发生,重置回放游标并清轨迹,避免上一场景残留。
+  if (d.reloadEpoch != null && d.reloadEpoch !== App._lastReloadEpoch) {
+    const first = App._lastReloadEpoch === undefined;
+    App._lastReloadEpoch = d.reloadEpoch;
+    if (!first) {
+      App.cursorT = 0;
+      App.playing = true;
+      // 清空所有 agent 历史轨迹(下一帧 rebuildScene 用新数据重建)
+      for (const [, obj] of App.agentObjects) { obj.def = obj.def || {}; }
+    }
+  }
   // 实时播放时游标跟随到末尾
   if (live && App.playing) {
     App.cursorT = App.durationSec;

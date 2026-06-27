@@ -57,6 +57,12 @@ public:
 	 */
 	int32 GetTotalTaskCount() const;
 
+	/**
+	 * 复位监控状态（清空任务进度跟踪、Agent 位置历史、停滞/偏离计数）。
+	 * 进程内场景热重载前调用，避免上一场景的任务进度残留。
+	 */
+	void Reset();
+
 	// 事件委托
 	UPROPERTY()
 	FOnTaskCompleted OnTaskCompleted;

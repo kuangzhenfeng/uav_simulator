@@ -184,11 +184,13 @@
 - 结构化仿真指标日志（速度、姿态、偏差、NMPC/CBF 求解、安全失败汇总）
 - 仿真遥测流（`TelemetryRecorder` → `Logs/telemetry.ndjson`）：按帧追加写的结构化数据流（机队位姿/速度/净空/指标/判决/事件 + 优化轨迹/规划路径/NMPC 预测三类未来轨迹），作为可视化专用数据源
 - 离线可视化（`Tools/vis/`）：解析遥测流做 3D 历史轨迹与三类未来轨迹（优化/规划/NMPC预测，可独立开关）、障碍/航点/风场 + 时序图表 + 验收面板，边跑边实时刷新、跑完可拖拽回放，无需启动 UE 编辑器
+- Web 控制面板：浏览器内配置机队/障碍/航线/风场·验收/仿真参数 → 一键触发 UE 进程内场景热重载（秒级，无需重启）；运行中实时调参（姿态 PID/CBF-QP/风场/slomo，可选全队/长机/单机）；3D 视图拾取坐标回填表单；配置可存为命名预设或导入导出 JSON。前端只连可视化端口（`:8765`），经 Python 反代到 UE 内置 HTTP 控制端（`:8770`，仅 127.0.0.1）；控制端离线时面板自动置灰，不影响只读可视化
 
 ### 场景资产化系统
 - 声明式仿真场景（`UScenario` DataAsset）：障碍布局、风场、机队、任务航点、验收标准、随机种子
 - 组合引用式资产：`UScenario` 外壳引用 5 个可复用子资产（`UObstacleLayout`/`UWindProfile`/`UFleetSetup`/`UMissionProfile`/`UAcceptanceCriteria`）
 - 场景装配器（`UScenarioLoader`）：运行时按声明内容 Spawn 机队、注册障碍、配置风场、下发任务
+- 动态障碍驱动 Actor（`ADynamicObstacleActor`）：按场景声明的运动模型（LinearVelocity/PatrolLoop/PatrolPingPong）自驱动，ObstacleManager 从 LinkedActor 反算位置/速度
 - 场景验收器（`UScenarioEvaluator`）：周期快照指标，对照验收标准判定 PASS/FAIL，输出 `scenario_result.json`（不依赖进程正常退出，pkill 强杀时留最近一次快照）；fail-closed——场景缺失验收标准时直接判 FAIL，避免任务失败被误报为 PASS
 - 命令行驱动：`-Scenario=<资产路径>` 指定运行场景，`sim.sh` 据退出码（PASS=0/FAIL=1/缺失=2）供 CI 判定
 - 风场为场景级单例（挂在 `AMultiAgentGameMode`，全关卡共享）
@@ -215,6 +217,7 @@ uav_simulator/
 │   ├── MultiAgent/     # 多机协同（AgentManager、CBF-QP、编队控制）
 │   ├── Environment/    # 环境模拟（风场、天气）
 │   ├── Telemetry/      # 仿真遥测记录器（TelemetryRecorder → ndjson）
+│   ├── Network/        # Web 控制端 HTTP 通道（HttpControlComponent）
 │   ├── Debug/          # 调试与可视化工具
 │   ├── UI/             # 用户界面（视角切换 Widget）
 │   ├── Utility/        # 工具函数
@@ -257,6 +260,15 @@ Script\sim.bat 30 8 "/Game/Scenarios/S" # 指定场景资产（可选第 3 参�
 仿真日志保存至 `Logs/uav.log`。传入场景资产时，进程退出码反映判决：`0`=PASS、`1`=FAIL、`2`=结果缺失。
 
 也可在编辑器中打开关卡 `Content/Environment/Levels/UavSimulatorMap`，放置 `BP_UAVPawn_Default` 后点击 Play。
+
+### Web 控制面板（边跑边配置/调参）
+1. 启动一次 headless 仿真（让 UE 内置控制端监听 `:8770`）：`Script\sim.bat 600`
+2. 另开终端启动可视化/控制后端：`Tools\vis\vis.bat`
+3. 浏览器打开打印的 `http://127.0.0.1:8765`，点右上角"⚙ 控制面板"：
+   - **配置**：填写机队/障碍/航线/风场·验收/仿真参数 → 点"重跑"触发热重载，3D 场景按新配置刷新
+   - **实时调参**：运行中拖动 PID/CBF-QP/风场/slomo 滑块，可选作用范围（全队/长机/单机），即时生效
+   - **预设**：当前配置另存为命名预设、加载、导入/导出 JSON
+   - 勾选底部"3D 拾取"后点击 3D 视图地面/障碍，坐标自动回填到当前表单字段
 
 ### 配置 AI 行为
 1. 在 UAV Pawn 蓝图中设置 AI Controller Class 为 `BP_UAVAIController`

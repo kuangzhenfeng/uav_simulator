@@ -3,6 +3,7 @@
 #include "ScenarioLoader.h"
 #include "../uav_simulator.h"
 #include "../Planning/ObstacleManager.h"
+#include "../Planning/DynamicObstacleActor.h"
 #include "../Core/UAVTypes.h"
 #include "../Core/UAVPawn.h"
 #include "../Mission/MissionComponent.h"
@@ -53,10 +54,17 @@ int32 UScenarioLoader::AssembleObstacles(const UScenario* Scenario, UObstacleMan
 		Obstacle.Extents = Entry.Extents;
 		Obstacle.Rotation = Entry.Rotation;
 		Obstacle.SafetyMargin = Entry.SafetyMargin;
-		Obstacle.bIsDynamic = Entry.bIsDynamic;
-		Obstacle.Velocity = Entry.Velocity;
+		// Scenario 层用 MovementType 表达运动模型，运行时层用 bIsDynamic + Velocity。
+		// 非 Static 即动态；LinearVelocity 模式取声明速度，PatrolLoop/PingPong 的速度由
+		// 驱动 Actor 每帧驱动，ObstacleManager 会从 LinkedActor 反算（此处初值置零）。
+		Obstacle.bIsDynamic = (Entry.MovementType != EObstacleMovementType::Static);
+		Obstacle.Velocity = (Entry.MovementType == EObstacleMovementType::LinearVelocity)
+			? Entry.Velocity : FVector::ZeroVector;
 
-		// Spawn 可视化 Actor 并建立关联（逻辑几何与可视化表现同源）。
+		// Spawn 可视化/驱动 Actor 并建立关联（逻辑几何与可视化表现同源）。
+		// - Static：Spawn 裸 AActor 作 LinkedActor，位置静止。
+		// - 非 Static：Spawn ADynamicObstacleActor 自驱动运动，ObstacleManager
+		//   会从 LinkedActor 反算位置/速度从而按动态处理。
 		// SpawnActor 对裸 AActor 基类不会自动落地 Location（无 RootComponent），
 		// 真实场景使用 BP_Obstacle_Default 时其 RootComponent 会处理位姿；
 		// 此处显式 SetActorLocation/Rotation 保证裸 Actor 也落到声明位姿。
@@ -64,10 +72,25 @@ int32 UScenarioLoader::AssembleObstacles(const UScenario* Scenario, UObstacleMan
 		{
 			FActorSpawnParameters SpawnParams;
 			SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-			AActor* VisualActor = World->SpawnActor<AActor>(AActor::StaticClass(), Entry.Center, Entry.Rotation, SpawnParams);
-			if (VisualActor)
+
+			if (Entry.MovementType == EObstacleMovementType::Static)
 			{
-				Obstacle.LinkedActor = VisualActor;
+				AActor* VisualActor = World->SpawnActor<AActor>(AActor::StaticClass(), Entry.Center, Entry.Rotation, SpawnParams);
+				if (VisualActor)
+				{
+					VisualActor->SetActorLocation(Entry.Center, false, nullptr, ETeleportType::ResetPhysics);
+					VisualActor->SetActorRotation(Entry.Rotation, ETeleportType::ResetPhysics);
+					Obstacle.LinkedActor = VisualActor;
+				}
+			}
+			else
+			{
+				ADynamicObstacleActor* DynamicActor = World->SpawnActor<ADynamicObstacleActor>(ADynamicObstacleActor::StaticClass(), Entry.Center, Entry.Rotation, SpawnParams);
+				if (DynamicActor)
+				{
+					DynamicActor->Configure(Entry);
+					Obstacle.LinkedActor = DynamicActor;
+				}
 			}
 		}
 
@@ -135,15 +158,39 @@ int32 UScenarioLoader::AssembleFleetAndMission(
 		}
 	}
 
-	// 把任务档案下发给首个 UAV 的 MissionComponent 并启动任务。
-	const UMissionProfile* MissionProfile = Scenario->MissionProfile.LoadSynchronous();
-	if (MissionProfile && OutFleet.Num() > 0)
+	// 全局任务档案（作为每机内联航线为空时的回退）。
+	const UMissionProfile* GlobalMissionProfile = Scenario->MissionProfile.LoadSynchronous();
+
+	// 逐机装配航线：优先用 Agent 内联航点，为空则回退全局 MissionProfile。
+	// 实现每机独立航线（修复历史"只装配到 Fleet[0]"的限制）。
+	for (int32 Idx = 0; Idx < OutFleet.Num(); ++Idx)
 	{
-		AUAVPawn* Lead = OutFleet[0];
-		if (UMissionComponent* Mission = Lead->FindComponentByClass<UMissionComponent>())
+		const FScenarioAgentEntry& Entry = Fleet->Agents[Idx];
+		AUAVPawn* UAV = OutFleet[Idx];
+		if (!UAV)
 		{
-			Mission->SetMissionMode(MissionProfile->Mode);
-			Mission->SetMissionWaypoints(MissionProfile->Waypoints);
+			continue;
+		}
+
+		UMissionComponent* Mission = UAV->FindComponentByClass<UMissionComponent>();
+		if (!Mission)
+		{
+			continue;
+		}
+
+		// 内联航线非空 -> 该机独立航线；否则回退全局（若无全局则该机无任务，靠编队/行为树跟随）。
+		const bool bHasInlineMission = Entry.Waypoints.Num() > 0;
+		if (bHasInlineMission)
+		{
+			Mission->SetMissionMode(Entry.MissionMode);
+			Mission->SetMissionWaypoints(Entry.Waypoints);
+			Mission->StartMission();
+		}
+		else if (GlobalMissionProfile)
+		{
+			// 向后兼容：无内联航线时下发全局任务（含历史 Leader 行为）。
+			Mission->SetMissionMode(GlobalMissionProfile->Mode);
+			Mission->SetMissionWaypoints(GlobalMissionProfile->Waypoints);
 			Mission->StartMission();
 		}
 	}

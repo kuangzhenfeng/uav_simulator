@@ -17,6 +17,12 @@ _spec.loader.exec_module(vis_server)
 
 NdjsonState = vis_server.NdjsonState
 to_web = vis_server.to_web
+validate_scenario_dto = vis_server.validate_scenario_dto
+SCHEMA = vis_server.SCHEMA
+list_presets = vis_server.list_presets
+read_preset = vis_server.read_preset
+write_preset = vis_server.write_preset
+delete_preset = vis_server.delete_preset
 
 
 def _feed_lines(state, lines):
@@ -142,16 +148,125 @@ def test_missing_agent_field_skipped():
     assert s.snapshot()["agents"] == []
 
 
+# ==================== schema / 预设库 ====================
+
+def test_schema_enums_consistent():
+    """schema 枚举应与 validate_scenario_dto 的合法集合一致（单一数据源契约）"""
+    # 模型
+    schema_models = {m["id"] for m in SCHEMA["models"]}
+    assert schema_models == vis_server.VALID_MODELS, "模型集合不一致"
+    assert set(SCHEMA["obstacleTypes"]) == vis_server.VALID_OBS_TYPES, "障碍类型不一致"
+    assert set(SCHEMA["movements"]) == set(vis_server.VALID_MOVEMENTS), "运动类型不一致"
+    assert set(SCHEMA["missionModes"]) == set(vis_server.VALID_MODES), "任务模式不一致"
+    # 默认配置应通过 DTO 校验
+    ok, err = validate_scenario_dto(SCHEMA["defaults"])
+    assert ok, f"defaults 未通过校验: {err}"
+
+
+def _preset_dto(name="ut"):
+    return {
+        "name": name,
+        "fleet": [{"model": "Agri_AG20", "initPos": [0, 0, 100], "mode": "Once",
+                   "waypoints": [{"pos": [5000, 0, 1000]}]}],
+        "obstacles": [],
+    }
+
+
+def test_preset_roundtrip(tmp_path, monkeypatch):
+    """保存 -> 列举 -> 读取 -> 删除 全链路"""
+    monkeypatch.setattr(vis_server, "PRESET_DIR", str(tmp_path))
+    dto = _preset_dto("rt")
+    ok, err = write_preset("roundtrip", dto)
+    assert ok, err
+    assert "roundtrip" in list_presets()
+    loaded = read_preset("roundtrip")
+    assert loaded is not None
+    assert loaded["fleet"][0]["initPos"] == [0, 0, 100]
+    ok2, _ = delete_preset("roundtrip")
+    assert ok2
+    assert read_preset("roundtrip") is None
+    assert "roundtrip" not in list_presets()
+
+
+def test_preset_invalid_name_rejected(tmp_path, monkeypatch):
+    """非法预设名（含路径分隔/点/空格）应被拒绝，禁止越权写文件"""
+    monkeypatch.setattr(vis_server, "PRESET_DIR", str(tmp_path))
+    ok, err = write_preset("../escape", _preset_dto())
+    assert not ok
+    ok2, _ = write_preset("has space", _preset_dto())
+    assert not ok2
+    ok3, _ = write_preset("dot.json", _preset_dto())
+    assert not ok3
+    assert list_presets() == []
+
+
+def test_preset_invalid_dto_rejected(tmp_path, monkeypatch):
+    """非法 DTO（空 fleet）不应被保存（write_preset 自身不做语义校验，
+    语义校验在 Handler.do_POST；这里直接测 write_preset 的文件约束 +
+    validate_scenario_dto 拒绝非法）"""
+    monkeypatch.setattr(vis_server, "PRESET_DIR", str(tmp_path))
+    ok, err = validate_scenario_dto({"fleet": []})
+    assert not ok
+    # write_preset 仍允许写入合法路径的任意内容（薄工具层），但 Handler 层会先用
+    # validate_scenario_dto 拦截；这里验证工具层与校验层解耦且各自正确
+    ok2, err2 = write_preset("valid-name", _preset_dto())
+    assert ok2
+
+
 if __name__ == "__main__":
-    # 简单自跑（无 pytest 也能执行）
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    passed = 0
-    for t in tests:
+    # 简单自跑（无 pytest 也能执行）。pytest fixture(tmp_path/monkeypatch)在此回退。
+    import tempfile, shutil
+
+    class _MonkeyPatch:
+        def setattr(self, mod, name, value):
+            self._orig = getattr(mod, name)
+            setattr(mod, name, value)
+            setattr(self, "_mod", mod)
+            setattr(self, "_name", name)
+        def undo(self):
+            setattr(self._mod, self._name, self._orig)
+
+    # schema 一致性（不依赖 fixture）
+    try:
+        test_schema_enums_consistent()
+        print("  PASS  test_schema_enums_consistent")
+        passed_schema = True
+    except Exception as e:
+        print(f"  FAIL  test_schema_enums_consistent: {e}")
+        passed_schema = False
+
+    tmp_path = PathLikeTempDir = tempfile.mkdtemp(prefix="uav_vis_test_")
+    mp = _MonkeyPatch()
+    fixture_tests = [
+        ("test_preset_roundtrip", test_preset_roundtrip),
+        ("test_preset_invalid_name_rejected", test_preset_invalid_name_rejected),
+        ("test_preset_invalid_dto_rejected", test_preset_invalid_dto_rejected),
+    ]
+    passed = 1 if passed_schema else 0
+    total = 1
+    for name, fn in fixture_tests:
+        total += 1
+        mp.setattr(vis_server, "PRESET_DIR", tmp_path)
+        try:
+            fn(tmp_path, mp)
+            print(f"  PASS  {name}")
+            passed += 1
+        except Exception as e:
+            print(f"  FAIL  {name}: {e}")
+    shutil.rmtree(tmp_path, ignore_errors=True)
+
+    # 其余无 fixture 测试
+    simple_tests = [v for k, v in sorted(globals().items())
+                    if k.startswith("test_") and callable(v)
+                    and k not in ("test_preset_roundtrip", "test_preset_invalid_name_rejected",
+                                  "test_preset_invalid_dto_rejected", "test_schema_enums_consistent")]
+    for t in simple_tests:
+        total += 1
         try:
             t()
             print(f"  PASS  {t.__name__}")
             passed += 1
         except Exception as e:
             print(f"  FAIL  {t.__name__}: {e}")
-    print(f"\n{passed}/{len(tests)} passed")
-    sys.exit(0 if passed == len(tests) else 1)
+    print(f"\n{passed}/{total} passed")
+    sys.exit(0 if passed == total else 1)

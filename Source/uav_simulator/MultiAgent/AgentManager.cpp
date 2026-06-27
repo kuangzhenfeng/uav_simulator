@@ -6,6 +6,8 @@
 #include "uav_simulator/Core/UAVPlayerController.h"
 #include "uav_simulator/Mission/MissionComponent.h"
 #include "uav_simulator/Mission/MissionTypes.h"
+#include "uav_simulator/AI/Tasks/BTTask_ExitSimulation.h"
+#include "uav_simulator/Planning/DynamicObstacleActor.h"
 #include "JointNMPCSolver.h"
 #include "TaskAllocator.h"
 #include "TaskMonitor.h"
@@ -19,11 +21,14 @@
 #include "../Scenario/ScenarioTypes.h"
 #include "../Scenario/ScenarioEvaluator.h"
 #include "../Telemetry/TelemetryRecorder.h"
+#include "../Network/HttpControlComponent.h"
 #include "uav_simulator/Utility/Filter.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "UObject/SavePackage.h"
 #include "UObject/ConstructorHelpers.h"
+#include "EngineUtils.h"
+#include "GameFramework/WorldSettings.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAgentManager, Log, All);
 
@@ -81,7 +86,13 @@ void AMultiAgentGameMode::BeginPlay()
 	TelemetryRecorder->SetWindField(WindField);
 
 	// 场景系统装配（ADR-0001）：解析 -Scenario= 命令行（优先），否则用 DefaultScenario。
+	// 场景系统装配（ADR-0001）：解析 -Scenario= 命令行（优先），否则用 DefaultScenario。
 	LoadAndAssembleScenario();
+
+	// Web 控制端：headless 也启动，供外部（Python 反代）触发重载/调参。
+	// 独立于 SoftUEBridge（后者 -unattended 跳过），命令面板正是为自动化仿真设计。
+	HttpControl = NewObject<UHttpControlComponent>(this);
+	HttpControl->RegisterComponent();
 
 	UE_LOG(LogUAVMultiAgent, Log, TEXT("[AgentManager] Initialized, all subsystems created"));
 }
@@ -110,6 +121,16 @@ void AMultiAgentGameMode::LoadAndAssembleScenario()
 	if (!ScenarioToLoad)
 	{
 		return; // 无场景，保持原行为（非场景化关卡零影响）
+	}
+
+	AssembleScenario(ScenarioToLoad, /*bIsReload=*/false);
+}
+
+void AMultiAgentGameMode::AssembleScenario(UScenario* ScenarioToLoad, bool bIsReload)
+{
+	if (!ScenarioToLoad)
+	{
+		return;
 	}
 
 	ActiveScenario = ScenarioToLoad;
@@ -150,14 +171,144 @@ void AMultiAgentGameMode::LoadAndAssembleScenario()
 		}
 
 		// 挂载验收器组件：周期快照 + 最终判决
-		ScenarioEvaluatorComponent = NewObject<UScenarioEvaluatorComponent>(this);
-		ScenarioEvaluatorComponent->RegisterComponent();
+		// 热重载时复用旧组件（先 Reset 再 Initialize），冷启动则新建。
+		if (!ScenarioEvaluatorComponent)
+		{
+			ScenarioEvaluatorComponent = NewObject<UScenarioEvaluatorComponent>(this);
+			ScenarioEvaluatorComponent->RegisterComponent();
+		}
+		else
+		{
+			ScenarioEvaluatorComponent->Reset();
+		}
 		ScenarioEvaluatorComponent->Initialize(ScenarioToLoad, Fleet[0]);
 		// 把遥测记录器注入验收器，使周期/最终判决同步落 ndjson
 		ScenarioEvaluatorComponent->SetTelemetryRecorder(TelemetryRecorder);
 	}
 
-	UE_LOG(LogUAVMultiAgent, Log, TEXT("[Scenario] Assembly complete: %d UAV(s)"), Fleet.Num());
+	// 热重载完成：truncate 重开 telemetry 并写一行 reload 事件通知前端刷新。
+	if (bIsReload && TelemetryRecorder)
+	{
+		TelemetryRecorder->ResetForNewScenario();
+		TelemetryRecorder->WriteReloadMarker();
+	}
+
+	UE_LOG(LogUAVMultiAgent, Log, TEXT("[Scenario] Assembly complete: %d UAV(s)%s"),
+		Fleet.Num(), bIsReload ? TEXT(" (reload)") : TEXT(""));
+}
+
+void AMultiAgentGameMode::TearDownForReload()
+{
+	UWorld* World = GetWorld();
+
+	// 1. 取消 BTTask_ExitSimulation 挂起的延迟退出，避免旧场景任务完成误杀进程
+	UBTTask_ExitSimulation::CancelPendingExit();
+
+	// 2. 销毁旧机队：触发各 AUAVPawn::EndPlay（反注册 Agent、清残骸、断风场引用）
+	for (TObjectPtr<AUAVPawn>& Pawn : ScenarioFleet)
+	{
+		if (Pawn)
+		{
+			Pawn->ResetMetrics();
+			Pawn->Destroy();
+		}
+	}
+	ScenarioFleet.Empty();
+
+	// 3. 兜底清理注册表（EndPlay 反注册后应为空，此处防御性清空）
+	AgentRegistry.Empty();
+	StateCache.Empty();
+	JointNMPCResultCache.Empty();
+	NextAgentID = 0;
+	JointNMPCSolveAccumulator = 0.0f;
+	StateCacheAccumulator = 0.0f;
+	CachedFormationType = EFormationType::None;
+
+	// 4. 销毁关卡中残留的动态障碍驱动 Actor（热重载可能遗留未随 Pawn 销毁的 Actor）
+	if (World)
+	{
+		for (TActorIterator<ADynamicObstacleActor> It(World); It; ++It)
+		{
+			if (*It)
+			{
+				It->Destroy();
+			}
+		}
+	}
+
+	// 5. 复位持久子组件状态
+	if (ScenarioEvaluatorComponent)
+	{
+		ScenarioEvaluatorComponent->Reset();
+	}
+	if (TelemetryRecorder)
+	{
+		TelemetryRecorder->ResetForNewScenario();
+	}
+	if (WindField)
+	{
+		WindField->ResetDynamicState();
+	}
+	if (TaskAllocatorInstance)
+	{
+		TaskAllocatorInstance->Reset();
+	}
+	if (TaskMonitorInstance)
+	{
+		TaskMonitorInstance->Reset();
+	}
+}
+
+bool AMultiAgentGameMode::ReloadScenario(UScenario* NewScenario)
+{
+	if (!NewScenario)
+	{
+		UE_LOG(LogUAVMultiAgent, Warning, TEXT("[Scenario] ReloadScenario: null scenario"));
+		return false;
+	}
+	if (bReloading)
+	{
+		UE_LOG(LogUAVMultiAgent, Warning, TEXT("[Scenario] ReloadScenario: already reloading, rejected"));
+		return false;
+	}
+
+	bReloading = true;
+	UE_LOG(LogUAVMultiAgent, Log, TEXT("[Scenario] Reload start: '%s'"), *NewScenario->Name);
+
+	TearDownForReload();
+	AssembleScenario(NewScenario, /*bIsReload=*/true);
+
+	bReloading = false;
+	UE_LOG(LogUAVMultiAgent, Log, TEXT("[Scenario] Reload done: %d UAV(s)"), ScenarioFleet.Num());
+	return true;
+}
+
+void AMultiAgentGameMode::SetSlomo(float Scale)
+{
+	if (Scale <= 0.0f)
+	{
+		UE_LOG(LogUAVMultiAgent, Warning, TEXT("[AgentManager] SetSlomo: invalid scale %.3f"), Scale);
+		return;
+	}
+	if (UWorld* World = GetWorld())
+	{
+		if (AWorldSettings* WS = World->GetWorldSettings())
+		{
+			WS->SetTimeDilation(Scale);
+			UE_LOG(LogUAVMultiAgent, Log, TEXT("[AgentManager] Slomo set to %.3f"), Scale);
+		}
+	}
+}
+
+TArray<AUAVPawn*> AMultiAgentGameMode::GetScenarioFleet() const
+{
+	TArray<AUAVPawn*> Result;
+	Result.Reserve(ScenarioFleet.Num());
+	for (const TObjectPtr<AUAVPawn>& Pawn : ScenarioFleet)
+	{
+		Result.Add(Pawn.Get());
+	}
+	return Result;
 }
 
 void AMultiAgentGameMode::Tick(float DeltaTime)

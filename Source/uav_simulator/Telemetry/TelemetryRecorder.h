@@ -39,6 +39,7 @@ public:
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void BeginDestroy() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	/** 注入共享风场单例（由 GameMode 提供） */
 	void SetWindField(UWindField* InWindField);
@@ -58,12 +59,28 @@ public:
 	bool InitializeOutput();
 
 	/**
+	 * 为新场景重置录制器：关闭旧句柄、truncate 重开输出文件、复位采样累加器与首帧标志。
+	 * 进程内场景热重载前调用，使新场景获得干净的 telemetry.ndjson（旧场景数据被覆盖）。
+	 * 直接复用 InitializeOutput 的"打开+重置"动作，避免逻辑重复。
+	 */
+	void ResetForNewScenario();
+
+	/** 关闭底层文件句柄。EndPlay/测试清理时调用，避免句柄泄漏导致后续 truncate 打开失败。 */
+	void CloseOutput();
+
+	/**
 	 * 写一帧判决行（周期快照或终局，由 ScenarioEvaluatorComponent 调用）。
 	 * 同一份判决同时落 ndjson（这里）与 scenario_result.json（由调用方写）。
 	 */
 	void WriteVerdict(float SimTime, bool bFinal, int32 Reached, int32 Total,
 		float ClearanceCm, float LateralDevCm, float ElapsedSec,
 		bool bCollided, const TArray<FString>& Failures);
+
+	/**
+	 * 写一行 reload 标记到 ndjson，通知前端场景已热重载、应重置回放并刷新静态数据。
+	 * 由 AMultiAgentGameMode::AssembleScenario 在热重载完成后调用。
+	 */
+	void WriteReloadMarker();
 
 	/**
 	 * 等距降采样索引（保证首尾点入选）。

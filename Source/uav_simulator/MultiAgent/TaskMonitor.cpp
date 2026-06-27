@@ -22,7 +22,6 @@ void UTaskMonitor::Initialize(const FTaskAllocationResult& Allocation,
 	ProgressCheckAccumulator = 0.0f;
 	bInitialized = true;
 
-	// 初始化任务进度
 	for (const FTaskAssignment& Assignment : Allocation.Assignments)
 	{
 		FTaskProgress Progress;
@@ -37,6 +36,17 @@ void UTaskMonitor::Initialize(const FTaskAllocationResult& Allocation,
 	}
 
 	UE_LOG(LogUAVMultiAgent, Log, TEXT("[TaskMonitor] Initialized with %d tasks"), TaskProgresses.Num());
+}
+
+void UTaskMonitor::Reset()
+{
+	TaskProgresses.Empty();
+	AgentPositionHistory.Empty();
+	StalledFrameCount.Empty();
+	DeviationFrameCount.Empty();
+	ElapsedTime = 0.0f;
+	ProgressCheckAccumulator = 0.0f;
+	bInitialized = false;
 }
 
 void UTaskMonitor::Update(float DeltaTime, const TArray<FAgentStateSnapshot>& AgentStates)

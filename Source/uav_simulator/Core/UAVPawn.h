@@ -53,6 +53,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:
 	virtual void Tick(float DeltaTime) override;
@@ -172,6 +173,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
 	int32 GetSimEventSeq() const { return SimEventSeq; }
 
+	// 复位累计指标（速度比基准/低速/偏差/姿态/事件计数/事件序号），供热重载/场景重跑复用同一 Pawn。
+	UFUNCTION(BlueprintCallable, Category = "UAV|Metrics")
+	void ResetMetrics();
+
 #if WITH_DEV_AUTOMATION_TESTS
 	// 测试专用：允许自动化测试触发炸机、检查残骸状态并验证偏差保护
 	void TestTriggerCrash() { TriggerCrash(); }
@@ -221,14 +226,15 @@ public:
 
 	// 获取最近一次 NMPC 求解是否有效（有预测轨迹）。
 	bool HasValidNMPCPrediction() const;
-		// 获取 UAV 碰撞半径（cm），基于 ArmLength + 安全余量
-		// 用于障碍物感知时替代 GetActorBounds 返回的过大包围盒
-		float GetCollisionRadius() const
-		{
-			// ArmLength 单位是 m，转换为 cm，乘以 2.5 得到机体等效半径（含桨叶）
-			const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
-			return Spec.ArmLength * 100.0f * 2.5f;
-		}
+
+	// 获取 UAV 碰撞半径（cm），基于 ArmLength + 安全余量
+	// 用于障碍物感知时替代 GetActorBounds 返回的过大包围盒
+	float GetCollisionRadius() const
+	{
+		// ArmLength 单位是 m，转换为 cm，乘以 2.5 得到机体等效半径（含桨叶）
+		const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
+		return Spec.ArmLength * 100.0f * 2.5f;
+	}
 
 	// ---- 多机协同接口 ----
 
@@ -382,6 +388,35 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV Model")
 	EUAVModelID GetModelID() const { return ModelID; }
 
+	// ---- 实时调参 Setter（运行时热更新，供 Web 控制面板调用） ----
+
+	// 设置姿态环 PID 增益。Axis: 0=Roll 1=Pitch 2=Yaw
+	UFUNCTION(BlueprintCallable, Category = "UAV|Tuning")
+	void SetAttitudePID(int32 Axis, float Kp, float Ki, float Kd);
+
+	// 设置位置环 PID 增益（外环）
+	UFUNCTION(BlueprintCallable, Category = "UAV|Tuning")
+	void SetPositionPIDGains(float Kp, float Ki, float Kd);
+
+	// 设置速度环 PID 增益（内环）
+	UFUNCTION(BlueprintCallable, Category = "UAV|Tuning")
+	void SetVelocityPIDGains(float Kp, float Ki, float Kd);
+
+	// 设置 NMPC 配置（整结构替换）
+	UFUNCTION(BlueprintCallable, Category = "UAV|Tuning")
+	void SetNMPCConfig(const FNMPCConfig& InConfig);
+
+	// 设置 MPC 求解类型（Nonlinear / Linear），切换线性/非线性求解器
+	UFUNCTION(BlueprintCallable, Category = "UAV|Tuning")
+	void SetMPCType(EMPCType InType);
+
+	// 获取 CBF-QP 配置
+	const FCBFQPConfig& GetCBFQPConfig() const { return CBFQPConfig; }
+
+	// 设置 CBF-QP 配置
+	UFUNCTION(BlueprintCallable, Category = "UAV|Tuning")
+	void SetCBFQPConfig(const FCBFQPConfig& InConfig);
+
 protected:
 	// 型号选择
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Model")
@@ -428,7 +463,7 @@ private:
 	UPROPERTY()
 	TObjectPtr<UCBFQPFilter> CBFQPFilter;
 
-	// CBF-QP 配置
+	// CBF-QP 配置（public：供 Web 控制面板热更新）
 	FCBFQPConfig CBFQPConfig;
 
 	// ---- 原有私有方法 ----

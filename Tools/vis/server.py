@@ -12,6 +12,8 @@ import os
 import sys
 import time
 import threading
+import urllib.request
+import urllib.error
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
@@ -65,6 +67,7 @@ class NdjsonState:
         self.verdict_timeline = [] # [{t,passed,reached,total,clearanceM,lateralDevM,elapsedS,final}]
         self.summary = {}          # id -> dict(取最后一次 metrics)
         self.events = []           # [{t,type,agent,detail}]
+        self.reload_epoch = 0      # 收到 reload 标记自增，前端据此重置回放游标/清轨迹
         self.first_t = None
         self.last_t = None
         self.has_final = False
@@ -92,6 +95,11 @@ class NdjsonState:
 
         if typ == "meta":
             self.meta = obj
+            return
+
+        if typ == "reload":
+            # 场景热重载标记：自增 epoch，快照中带出，前端据此清轨迹/重置游标
+            self.reload_epoch += 1
             return
 
         if typ == "wind_config":
@@ -259,6 +267,7 @@ class NdjsonState:
             "scenario": self.meta.get("scenario", "") if self.meta else "",
             "t0_ms": None,
             "duration_ms": max(0, duration_ms),
+            "reloadEpoch": self.reload_epoch,
             "agents": agents,
             "obstacles": [v for v in self.obstacles.values() if not v.get("_dyn")],
             "dynamicActorCount": self.dynamic_count,
@@ -340,6 +349,100 @@ def resolve_target(args, project_root):
 
 
 # ---------------------------------------------------------------------------
+# UE HTTP 控制端端口发现
+# ---------------------------------------------------------------------------
+
+def resolve_control_port(project_root):
+    """读 Saved/.uav-ctrl/port.json 获取 UE 控制端端口；读不到返回 None（控制不可用）。"""
+    path = os.path.join(project_root, "Saved", ".uav-ctrl", "port.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("port")
+    except (OSError, ValueError):
+        return None
+
+
+def forward_to_control(state, sub_path, body_obj=None):
+    """把控制命令转发到 UE 控制端 http://127.0.0.1:<port>/control<sub_path>。
+    返回 (ok, result_dict)。控制端不可用时返回 (False, {...})。"""
+    if not state.control_port:
+        return False, {"ok": False, "error": "control endpoint unavailable"}
+    url = f"http://127.0.0.1:{state.control_port}/control{sub_path}"
+    data = json.dumps(body_obj or {}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+            try:
+                return True, json.loads(raw)
+            except ValueError:
+                return True, {"ok": True, "raw": raw}
+    except Exception as e:
+        return False, {"ok": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Scenario DTO 基本校验（防 UE 端崩溃的前置门）
+# ---------------------------------------------------------------------------
+
+VALID_MODELS = {"Agri_AG20", "Agri_AG60", "Agri_AG100", "Map_SVPro", "Map_SVLiDAR"}
+VALID_OBS_TYPES = {"Sphere", "Box", "Cylinder"}
+VALID_MOVEMENTS = {"Static", "LinearVelocity", "PatrolLoop", "PatrolPingPong"}
+VALID_MODES = {"Once", "Loop", "PingPong"}
+
+
+def _is_vec3(v):
+    return isinstance(v, (list, tuple)) and len(v) == 3 and all(isinstance(x, (int, float)) for x in v)
+
+
+def validate_scenario_dto(dto):
+    """返回 (ok: bool, error: str|None)。仅做边界/枚举校验，不校验语义。"""
+    if not isinstance(dto, dict):
+        return False, "dto must be an object"
+    fleet = dto.get("fleet")
+    if not isinstance(fleet, list) or len(fleet) == 0:
+        return False, "fleet must be a non-empty array"
+    if len(fleet) > 16:
+        return False, "fleet too large (max 16)"
+    for i, a in enumerate(fleet):
+        if not isinstance(a, dict):
+            return False, f"fleet[{i}] must be an object"
+        if a.get("model") not in VALID_MODELS:
+            return False, f"fleet[{i}].model invalid"
+        if not _is_vec3(a.get("initPos", [0, 0, 0])):
+            return False, f"fleet[{i}].initPos must be [x,y,z]"
+        mode = a.get("mode", "Once")
+        if mode not in VALID_MODES:
+            return False, f"fleet[{i}].mode invalid"
+        for j, w in enumerate(a.get("waypoints", [])):
+            if not isinstance(w, dict) or not _is_vec3(w.get("pos")):
+                return False, f"fleet[{i}].waypoints[{j}].pos invalid"
+    obs = dto.get("obstacles", [])
+    if isinstance(obs, list):
+        if len(obs) > 64:
+            return False, "too many obstacles (max 64)"
+        for k, o in enumerate(obs):
+            if not isinstance(o, dict):
+                return False, f"obstacles[{k}] must be an object"
+            if o.get("type", "Box") not in VALID_OBS_TYPES:
+                return False, f"obstacles[{k}].type invalid"
+            if o.get("movement", "Static") not in VALID_MOVEMENTS:
+                return False, f"obstacles[{k}].movement invalid"
+            if not _is_vec3(o.get("center", [0, 0, 0])):
+                return False, f"obstacles[{k}].center invalid"
+            speed = o.get("patrolSpeed", 300)
+            if not isinstance(speed, (int, float)) or speed < 0:
+                return False, f"obstacles[{k}].patrolSpeed must be >= 0"
+    sim = dto.get("sim", {})
+    if isinstance(sim, dict):
+        slomo = sim.get("slomo", 0)
+        if not isinstance(slomo, (int, float)) or slomo < 0:
+            return False, "sim.slomo must be >= 0"
+    return True, None
+
+
+# ---------------------------------------------------------------------------
 # HTTP 服务
 # ---------------------------------------------------------------------------
 
@@ -354,6 +457,8 @@ class State:
         self.last_mtime = 0
         self.finished = False
         self.last_change_time = time.monotonic()
+        # UE HTTP 控制端端口（None 表示控制端不可用，面板置灰）
+        self.control_port = resolve_control_port(args.project)
         self._initial_load()
 
     def _feed_text(self, text):
@@ -450,6 +555,98 @@ class State:
 
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+PRESET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
+
+
+# ---------------------------------------------------------------------------
+# Scenario Schema：前后端共享的枚举/范围契约，前端表单单一数据源
+# 与 server.py validate_scenario_dto、UE ScenarioFactory 的 Parse* 保持一致
+# ---------------------------------------------------------------------------
+
+SCHEMA = {
+    "models": [
+        {"id": "Agri_AG20", "label": "农业 AG20"},
+        {"id": "Agri_AG60", "label": "农业 AG60"},
+        {"id": "Agri_AG100", "label": "农业 AG100"},
+        {"id": "Map_SVPro", "label": "测绘 SVPro"},
+        {"id": "Map_SVLiDAR", "label": "测绘 SVLiDAR"},
+    ],
+    "obstacleTypes": ["Sphere", "Box", "Cylinder"],
+    "movements": ["Static", "LinearVelocity", "PatrolLoop", "PatrolPingPong"],
+    "windTypes": ["None", "Constant", "Gust", "Turbulent"],
+    "missionModes": ["Once", "Loop", "PingPong"],
+    "controlModes": ["Attitude", "Position", "Trajectory"],
+    "mpcTypes": ["Nonlinear", "Linear"],
+    # 默认值：前端新建字段时直接取用，保证空配置可合法下发
+    "defaults": {
+        "name": "WebScenario",
+        "fleet": [{
+            "model": "Agri_AG20", "initPos": [0, 0, 100],
+            "yaw": 0, "isLeader": True, "mode": "Once", "waypoints": [],
+        }],
+        "obstacles": [],
+        "wind": {"type": "Constant", "steady": [300, 0, 0], "enabled": True,
+                 "gustAmplitude": 200, "turbulenceIntensity": 100},
+        "acceptance": {"requireAllWaypoints": True, "waypointRadiusCm": 300,
+                       "minClearanceCm": 0, "maxLateralDeviationCm": 300,
+                       "timeoutSec": 120, "energyBudget": 0},
+        "sim": {"slomo": 8, "durationSec": 60, "controlMode": "", "mpcType": ""},
+    },
+}
+
+
+def _preset_path(name):
+    """预设名 -> 文件路径。仅允许字母/数字/下划线/短横，禁止路径分隔。"""
+    if not name or not isinstance(name, str):
+        return None
+    if not all(c.isalnum() or c in "_-" for c in name):
+        return None
+    return os.path.join(PRESET_DIR, f"{name}.json")
+
+
+def list_presets():
+    if not os.path.isdir(PRESET_DIR):
+        return []
+    out = []
+    for fn in sorted(os.listdir(PRESET_DIR)):
+        if fn.endswith(".json"):
+            out.append(fn[:-5])
+    return out
+
+
+def read_preset(name):
+    fp = _preset_path(name)
+    if not fp or not os.path.isfile(fp):
+        return None
+    try:
+        with open(fp, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def write_preset(name, dto):
+    fp = _preset_path(name)
+    if not fp:
+        return False, "invalid preset name"
+    os.makedirs(PRESET_DIR, exist_ok=True)
+    try:
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(dto, f, ensure_ascii=False, indent=2)
+        return True, None
+    except OSError as e:
+        return False, str(e)
+
+
+def delete_preset(name):
+    fp = _preset_path(name)
+    if not fp or not os.path.isfile(fp):
+        return False, "not found"
+    try:
+        os.remove(fp)
+        return True, None
+    except OSError as e:
+        return False, str(e)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -474,7 +671,27 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file("index.html", "text/html; charset=utf-8")
         elif path == "/api/data":
             data = self.state_holder.snapshot_with_result()
+            data["controlAvailable"] = self.state_holder.control_port is not None
             self._send(200, "application/json", json.dumps(data).encode())
+        elif path == "/api/schema":
+            # 前端表单枚举/默认值的单一数据源，附带当前控制端可用性
+            schema = dict(SCHEMA)
+            schema["controlAvailable"] = self.state_holder.control_port is not None
+            self._send(200, "application/json", json.dumps(schema).encode())
+        elif path == "/api/presets":
+            self._send(200, "application/json",
+                       json.dumps({"presets": list_presets()}).encode())
+        elif path.startswith("/api/presets/"):
+            name = path[len("/api/presets/"):]
+            data = read_preset(name)
+            if data is None:
+                self._send(404, "application/json", b'{"ok":false,"error":"not found"}')
+            else:
+                self._send(200, "application/json", json.dumps(data).encode())
+        elif path == "/api/control/status":
+            ok, result = forward_to_control(self.state_holder, "/status", None)
+            result["controlAvailable"] = self.state_holder.control_port is not None
+            self._send(200 if ok else 502, "application/json", json.dumps(result).encode())
         elif path == "/api/finish":
             self.state_holder.mark_finished()
             self._send(200, "application/json", b'{"ok":true}')
@@ -484,6 +701,71 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file(path[len("/web/"):], _guess_mime(path))
         else:
             self._send(404, "text/plain", b"not found")
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        # 预设库：保存/覆盖
+        if path.startswith("/api/presets/"):
+            name = path[len("/api/presets/"):]
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                dto = json.loads(raw.decode("utf-8")) if raw else {}
+            except ValueError:
+                self._send(400, "application/json", b'{"ok":false,"error":"invalid json"}')
+                return
+            ok_msg, err = validate_scenario_dto(dto)
+            if not ok_msg:
+                self._send(400, "application/json",
+                           json.dumps({"ok": False, "error": err}).encode())
+                return
+            ok, werr = write_preset(name, dto)
+            code = 200 if ok else 400
+            payload = {"ok": ok} if ok else {"ok": False, "error": werr}
+            self._send(code, "application/json", json.dumps(payload).encode())
+            return
+
+        # 统一校验：仅接受已知控制路由
+        valid = ("/api/control/reload", "/api/control/slomo",
+                 "/api/control/wind", "/api/control/params")
+        if path not in valid:
+            self._send(404, "application/json", b'{"ok":false,"error":"not found"}')
+            return
+
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        try:
+            body = json.loads(raw.decode("utf-8")) if raw else {}
+        except ValueError:
+            self._send(400, "application/json", b'{"ok":false,"error":"invalid json"}')
+            return
+
+        # 基本校验，防 UE 端崩溃
+        if path == "/api/control/reload":
+            ok_msg, err = validate_scenario_dto(body)
+            if not ok_msg:
+                self._send(400, "application/json",
+                           json.dumps({"ok": False, "error": err}).encode())
+                return
+
+        sub_path = path[len("/api/control"):]  # -> /reload, /slomo, ...
+        ok, result = forward_to_control(self.state_holder, sub_path, body)
+        code = 200 if ok else 502
+        self._send(code, "application/json", json.dumps(result).encode())
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path.startswith("/api/presets/"):
+            name = path[len("/api/presets/"):]
+            ok, err = delete_preset(name)
+            code = 200 if ok else 404
+            payload = {"ok": True} if ok else {"ok": False, "error": err}
+            self._send(code, "application/json", json.dumps(payload).encode())
+            return
+        self._send(404, "application/json", b'{"ok":false,"error":"not found"}')
 
     def _serve_file(self, rel, mime):
         fp = os.path.join(WEB_DIR, rel)

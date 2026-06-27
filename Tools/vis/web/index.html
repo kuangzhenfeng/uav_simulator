@@ -23,6 +23,7 @@
     <div class="brand">🛩️ UAV Sim Visualizer</div>
     <div id="status" class="status">连接中…</div>
     <div id="verdict" class="verdict"></div>
+    <button id="toggle-panel-btn" class="panel-toggle" title="配置/控制面板">⚙ 控制面板</button>
   </header>
 
   <main id="main">
@@ -64,6 +65,24 @@
     </aside>
   </main>
 
+  <!-- 左侧抽屉:配置 + 实时调参 + 预设 (control.js 接管内部 DOM) -->
+  <aside id="control-panel" class="closed">
+    <div class="cp-tabs">
+      <button class="cp-tab active" data-cp-tab="config">配置</button>
+      <button class="cp-tab" data-cp-tab="tune">实时调参</button>
+      <button class="cp-tab" data-cp-tab="preset">预设</button>
+      <span id="cp-avail-badge" class="cp-badge muted">检测控制端…</span>
+    </div>
+    <div class="cp-body">
+      <!-- 配置 Tab (由 control.js 渲染) -->
+      <section id="cp-config" class="cp-section active"></section>
+      <!-- 实时调参 Tab -->
+      <section id="cp-tune" class="cp-section"></section>
+      <!-- 预设 Tab -->
+      <section id="cp-preset" class="cp-section"></section>
+    </div>
+  </aside>
+
   <!-- 底部时间轴 -->
   <footer id="timeline">
     <button id="play-btn">▶</button>
@@ -75,9 +94,11 @@
     <label class="future-toggle"><input type="checkbox" id="toggle-opt" />优化轨迹</label>
     <label class="future-toggle"><input type="checkbox" id="toggle-plan" />规划路径</label>
     <label class="future-toggle"><input type="checkbox" id="toggle-nmpc" />NMPC预测</label>
+    <label class="future-toggle"><input type="checkbox" id="toggle-pick" />3D拾取</label>
   </footer>
 </div>
 
 <script type="module" src="/web/app.js"></script>
+<script type="module" src="/web/control.js"></script>
 </body>
 </html>

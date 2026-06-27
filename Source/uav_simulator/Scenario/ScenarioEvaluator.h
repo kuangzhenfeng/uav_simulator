@@ -133,6 +133,14 @@ public:
 	/** 初始化：绑定场景资产与机队，订阅任务完成委托，启动周期快照 */
 	void Initialize(UScenario* InScenario, AUAVPawn* InLeadUAV);
 
+	/**
+	 * 复位累积状态（指标极值 / 已耗时 / 终局标志 / 委托绑定）。
+	 * 进程内场景热重载前调用，避免上一场景的累积指标污染新场景判决，
+	 * 并防止 bFinalFlushed 卡死新场景的最终判决输出。
+	 * 复位后调用方需重新 Initialize(NewScenario, NewLeadUAV)。
+	 */
+	void Reset();
+
 	/** 注入遥测记录器，使周期/最终判决同步落 telemetry.ndjson */
 	void SetTelemetryRecorder(UTelemetryRecorder* InRecorder);
 
