@@ -12,10 +12,12 @@
 #include "../Mission/MissionComponent.h"
 #include "../Environment/WindField.h"
 #include "../Environment/EnvironmentTypes.h"
+#include "../Debug/DebugDrawBuffer.h"
 
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HAL/PlatformFileManager.h"
+#include "HAL/FileManager.h"
 #include "EngineUtils.h"
 #include "GameFramework/WorldSettings.h"
 
@@ -158,8 +160,8 @@ void UTelemetryRecorder::WriteStaticOnce(float SimTime)
 		}
 	}
 	WriteLine(FString::Printf(
-		TEXT("{\"type\":\"meta\",\"t\":%.3f,\"version\":1,\"slomo\":%.3f}"),
-		SimTime, TimeDilation));
+		TEXT(R"({"type":"meta","t":%.3f,"version":2,"slomo":%.3f,"scenario":"%s"})"),
+		SimTime, TimeDilation, *JsonEscape(ScenarioName)));
 
 	// ---- wind_config ----
 	if (WindField.IsValid())
@@ -451,6 +453,14 @@ void UTelemetryRecorder::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		TrajectoryAccum = 0.0f;
 		WriteFutureTrajectories(SimTime);
 	}
+
+	// Debug 原语采样：与 frame 同节拍（20Hz）
+	DebugAccum += DeltaTime;
+	if (DebugAccum >= FrameIntervalSec)
+	{
+		DebugAccum = 0.0f;
+		WriteDebugFrame(SimTime);
+	}
 }
 
 void UTelemetryRecorder::WriteVerdict(float SimTime, bool bFinal, int32 Reached, int32 Total,
@@ -476,4 +486,123 @@ void UTelemetryRecorder::WriteVerdict(float SimTime, bool bFinal, int32 Reached,
 		bCollided ? TEXT("true") : TEXT("false"),
 		(Failures.Num() == 0) ? TEXT("true") : TEXT("false"),
 		*FailArray));
+
+	if (bFinal)
+	{
+		ArchiveCurrentTask();
+	}
+}
+
+void UTelemetryRecorder::WriteDebugFrame(float SimTime)
+{
+	if (!FileHandle.IsValid()) return;
+
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+	if (!Buffer || Buffer->IsEmpty()) return;
+
+	TArray<FBufferedPrimitive> Prims = Buffer->FlushAndReset();
+	if (Prims.Num() == 0) return;
+
+	TMap<int32, FString> PerAgentJson;
+	for (const FBufferedPrimitive& P : Prims)
+	{
+		FString PrimJson;
+		const TCHAR* TypeName = TEXT("sphere");
+		switch (P.Type)
+		{
+		case EDebugPrimType::Sphere: TypeName = TEXT("sphere"); break;
+		case EDebugPrimType::Line: TypeName = TEXT("line"); break;
+		case EDebugPrimType::Arrow: TypeName = TEXT("arrow"); break;
+		case EDebugPrimType::Box: TypeName = TEXT("box"); break;
+		case EDebugPrimType::Point: TypeName = TEXT("point"); break;
+		case EDebugPrimType::Text: TypeName = TEXT("text"); break;
+		}
+
+		switch (P.Type)
+		{
+		case EDebugPrimType::Sphere:
+			PrimJson = FString::Printf(
+				TEXT("{\"t\":\"sphere\",\"p\":[%.1f,%.1f,%.1f],\"r\":%.1f,\"c\":[%d,%d,%d,%d],\"d\":%.2f,\"layer\":\"%s\"}"),
+				P.Points[0].X, P.Points[0].Y, P.Points[0].Z, P.Radius,
+				P.Color.R, P.Color.G, P.Color.B, P.Color.A, P.Duration, *P.Layer);
+			break;
+		case EDebugPrimType::Line:
+			PrimJson = FString::Printf(
+				TEXT("{\"t\":\"line\",\"a\":[%.1f,%.1f,%.1f],\"b\":[%.1f,%.1f,%.1f],\"c\":[%d,%d,%d,%d],\"th\":%.1f,\"d\":%.2f,\"layer\":\"%s\"}"),
+				P.Points[0].X, P.Points[0].Y, P.Points[0].Z,
+				P.Points[1].X, P.Points[1].Y, P.Points[1].Z,
+				P.Color.R, P.Color.G, P.Color.B, P.Color.A, P.Thickness, P.Duration, *P.Layer);
+			break;
+		case EDebugPrimType::Arrow:
+			PrimJson = FString::Printf(
+				TEXT("{\"t\":\"arrow\",\"a\":[%.1f,%.1f,%.1f],\"b\":[%.1f,%.1f,%.1f],\"sz\":%.1f,\"c\":[%d,%d,%d,%d],\"th\":%.1f,\"d\":%.2f,\"layer\":\"%s\"}"),
+				P.Points[0].X, P.Points[0].Y, P.Points[0].Z,
+				P.Points[1].X, P.Points[1].Y, P.Points[1].Z, P.ArrowSize,
+				P.Color.R, P.Color.G, P.Color.B, P.Color.A, P.Thickness, P.Duration, *P.Layer);
+			break;
+		case EDebugPrimType::Box:
+			PrimJson = FString::Printf(
+				TEXT("{\"t\":\"box\",\"p\":[%.1f,%.1f,%.1f],\"e\":[%.1f,%.1f,%.1f],\"q\":[%.4f,%.4f,%.4f,%.4f],\"c\":[%d,%d,%d,%d],\"d\":%.2f,\"layer\":\"%s\"}"),
+				P.Points[0].X, P.Points[0].Y, P.Points[0].Z,
+				P.Radius, P.Thickness, P.ArrowSize,
+				P.Rotation.X, P.Rotation.Y, P.Rotation.Z, P.Rotation.W,
+				P.Color.R, P.Color.G, P.Color.B, P.Color.A, P.Duration, *P.Layer);
+			break;
+		case EDebugPrimType::Point:
+			PrimJson = FString::Printf(
+				TEXT("{\"t\":\"point\",\"p\":[%.1f,%.1f,%.1f],\"sz\":%.1f,\"c\":[%d,%d,%d,%d],\"d\":%.2f,\"layer\":\"%s\"}"),
+				P.Points[0].X, P.Points[0].Y, P.Points[0].Z, P.Thickness,
+				P.Color.R, P.Color.G, P.Color.B, P.Color.A, P.Duration, *P.Layer);
+			break;
+		case EDebugPrimType::Text:
+			PrimJson = FString::Printf(
+				TEXT("{\"t\":\"text\",\"p\":[%.1f,%.1f,%.1f],\"s\":\"%s\",\"c\":[%d,%d,%d,%d],\"d\":%.2f,\"layer\":\"%s\"}"),
+				P.Points[0].X, P.Points[0].Y, P.Points[0].Z, *JsonEscape(P.Text),
+				P.Color.R, P.Color.G, P.Color.B, P.Color.A, P.Duration, *P.Layer);
+			break;
+		}
+
+		FString& AgentJson = PerAgentJson.FindOrAdd(P.AgentID);
+		if (!AgentJson.IsEmpty()) AgentJson += TEXT(",");
+		AgentJson += PrimJson;
+	}
+
+	for (auto& Pair : PerAgentJson)
+	{
+		WriteLine(FString::Printf(
+			TEXT("{\"type\":\"debug\",\"t\":%.3f,\"agent\":%d,\"prims\":[%s]}"),
+			SimTime, Pair.Key, *Pair.Value));
+	}
+}
+
+void UTelemetryRecorder::ArchiveCurrentTask()
+{
+	const FString LogsDir = FPaths::Combine(FPaths::ProjectDir(), TEXT("Logs"));
+	const FString TasksDir = FPaths::Combine(LogsDir, TEXT("tasks"));
+
+	const FString Timestamp = FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S"));
+	const FString TaskId = CurrentTaskId.IsEmpty()
+		? FString::Printf(TEXT("%s_%s"), *Timestamp, *JsonEscape(ScenarioName))
+		: CurrentTaskId;
+
+	const FString TaskDir = FPaths::Combine(TasksDir, *TaskId);
+	FPlatformFileManager::Get().GetPlatformFile().CreateDirectoryTree(*TaskDir);
+
+	const FString SrcNdjson = FPaths::Combine(LogsDir, TEXT("telemetry.ndjson"));
+	const FString DstNdjson = FPaths::Combine(TaskDir, TEXT("telemetry.ndjson"));
+	const FString SrcResult = FPaths::Combine(LogsDir, TEXT("scenario_result.json"));
+	const FString DstResult = FPaths::Combine(TaskDir, TEXT("result.json"));
+
+	const bool bHasSrcNdjson = FPaths::FileExists(SrcNdjson);
+	if (bHasSrcNdjson)
+	{
+		IFileManager::Get().Copy(*DstNdjson, *SrcNdjson);
+	}
+	if (FPaths::FileExists(SrcResult))
+	{
+		IFileManager::Get().Copy(*DstResult, *SrcResult);
+	}
+
+	CurrentTaskId.Reset();
+	UE_LOG(LogTelemetry, Log, TEXT("[Telemetry] Task archived to %s"), *TaskDir);
 }

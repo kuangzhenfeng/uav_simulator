@@ -4,9 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <link rel="icon" type="image/svg+xml" href="/web/favicon.svg" />
-<title>UAV 仿真可视化</title>
+<title>UAV 仿真可视化 · UE 镜像</title>
 <link rel="stylesheet" href="/web/style.css" />
-<!-- import map: bare specifier 'three' -> 本地内置模块 -->
+<link rel="stylesheet" href="/web/vendor/uPlot.min.css" />
+<script src="/web/vendor/uPlot.iife.min.js"></script>
 <script type="importmap">
 {
   "imports": {
@@ -18,45 +19,54 @@
 </head>
 <body>
 <div id="app">
-  <!-- 顶部状态条 -->
   <header id="topbar">
-    <div class="brand">🛩️ UAV Sim Visualizer</div>
+    <div class="brand">🛩️ UAV 仿真可视化</div>
     <div id="status" class="status">连接中…</div>
     <div id="verdict" class="verdict"></div>
-    <button id="toggle-panel-btn" class="panel-toggle" title="配置/控制面板">⚙ 控制面板</button>
   </header>
 
   <main id="main">
-    <!-- 3D 视图 -->
     <section id="scene-wrap">
+      <div id="layer-panel" class="layer-panel"></div>
+      <div id="camera-panel" class="camera-panel"></div>
       <div id="scene-overlay">
-        <div class="legend" id="legend"></div>
-        <div class="hint">左键旋转 · 右键平移 · 滚轮缩放</div>
+        <div class="hint">左键旋转 · 右键平移 · 滚轮缩放 · Camera 面板跟随无人机</div>
       </div>
       <canvas id="three-canvas"></canvas>
     </section>
 
-    <!-- 右侧面板:指标 + 图表 -->
     <aside id="panel">
+      <div class="card">
+        <div class="card-title">启动仿真</div>
+        <div id="sim-panel" class="sim-panel"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">任务选择</div>
+        <select id="task-select" class="task-select"></select>
+      </div>
       <div class="card">
         <div class="card-title">验收判决</div>
         <div id="verdict-detail" class="verdict-detail">等待数据…</div>
       </div>
       <div class="card">
-        <div class="card-title">机队指标 <span class="muted">(最近汇总)</span></div>
+        <div class="card-title">机队指标</div>
         <div id="summary-table" class="summary-table"></div>
       </div>
       <div class="card chart-card">
-        <div class="card-title">速度 (m/s)</div>
-        <canvas class="chart" id="chart-speed"></canvas>
+        <div class="card-title">速度 SPEED (M/S)</div>
+        <div id="chart-speed" class="chart"></div>
       </div>
       <div class="card chart-card">
-        <div class="card-title">高度 (m)</div>
-        <canvas class="chart" id="chart-alt"></canvas>
+        <div class="card-title">高度 ALT (M)</div>
+        <div id="chart-alt" class="chart"></div>
       </div>
       <div class="card chart-card">
-        <div class="card-title">避障净空 (m)</div>
-        <canvas class="chart" id="chart-clear"></canvas>
+        <div class="card-title">净空 CLEARANCE (M)</div>
+        <div id="chart-clearance" class="chart"></div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title">风速 WIND (M/S)</div>
+        <div id="chart-wind" class="chart"></div>
       </div>
       <div class="card">
         <div class="card-title">事件</div>
@@ -65,40 +75,13 @@
     </aside>
   </main>
 
-  <!-- 左侧抽屉:配置 + 实时调参 + 预设 (control.js 接管内部 DOM) -->
-  <aside id="control-panel" class="closed">
-    <div class="cp-tabs">
-      <button class="cp-tab active" data-cp-tab="config">配置</button>
-      <button class="cp-tab" data-cp-tab="tune">实时调参</button>
-      <button class="cp-tab" data-cp-tab="preset">预设</button>
-      <span id="cp-avail-badge" class="cp-badge muted">检测控制端…</span>
-    </div>
-    <div class="cp-body">
-      <!-- 配置 Tab (由 control.js 渲染) -->
-      <section id="cp-config" class="cp-section active"></section>
-      <!-- 实时调参 Tab -->
-      <section id="cp-tune" class="cp-section"></section>
-      <!-- 预设 Tab -->
-      <section id="cp-preset" class="cp-section"></section>
-    </div>
-  </aside>
-
-  <!-- 底部时间轴 -->
   <footer id="timeline">
     <button id="play-btn">▶</button>
     <input type="range" id="scrub" min="0" max="1000" value="0" />
     <span id="time-label" class="time-label">0.0s</span>
-    <span class="sep"></span>
-    <span class="wind-label muted" id="wind-label"></span>
-    <span class="sep"></span>
-    <label class="future-toggle"><input type="checkbox" id="toggle-opt" />优化轨迹</label>
-    <label class="future-toggle"><input type="checkbox" id="toggle-plan" />规划路径</label>
-    <label class="future-toggle"><input type="checkbox" id="toggle-nmpc" />NMPC预测</label>
-    <label class="future-toggle"><input type="checkbox" id="toggle-pick" />3D拾取</label>
   </footer>
 </div>
 
 <script type="module" src="/web/app.js"></script>
-<script type="module" src="/web/control.js"></script>
 </body>
 </html>

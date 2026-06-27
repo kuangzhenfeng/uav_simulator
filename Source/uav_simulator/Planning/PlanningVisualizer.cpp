@@ -3,6 +3,7 @@
 #include "PlanningVisualizer.h"
 #include "../uav_simulator.h"
 #include "DrawDebugHelpers.h"
+#include "../Debug/DebugDrawBuffer.h"
 
 UPlanningVisualizer::UPlanningVisualizer()
 {
@@ -33,24 +34,27 @@ void UPlanningVisualizer::DrawPath(const TArray<FVector>& Path, FColor Color, fl
 		return;
 	}
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+	int32 AgentID = -1;
+
 	// 绘制路径线段
 	for (int32 i = 1; i < Path.Num(); ++i)
 	{
-		DrawDebugLine(GetWorld(), Path[i - 1], Path[i], Color, false, Duration, 0, Thickness);
+		Buffer->AddLine(GetWorld(), Path[i - 1], Path[i], Color, Thickness, Duration, AgentID, TEXT("path"));
 	}
 
 	// 绘制路径点
 	for (int32 i = 0; i < Path.Num(); ++i)
 	{
 		float PointSize = (i == 0 || i == Path.Num() - 1) ? 15.0f : 8.0f;
-		DrawDebugPoint(GetWorld(), Path[i], PointSize, Color, false, Duration);
+		Buffer->AddPoint(GetWorld(), Path[i], PointSize, Color, Duration, AgentID, TEXT("path"));
 	}
 
 	// 绘制起点和终点标记
 	if (Path.Num() > 0)
 	{
-		DrawDebugSphere(GetWorld(), Path[0], 25.0f, 8, FColor::Green, false, Duration, 0, 2.0f);
-		DrawDebugSphere(GetWorld(), Path.Last(), 25.0f, 8, FColor::Red, false, Duration, 0, 2.0f);
+		Buffer->AddSphere(GetWorld(), Path[0], 25.0f, FColor::Green, Duration, AgentID, TEXT("path"));
+		Buffer->AddSphere(GetWorld(), Path.Last(), 25.0f, FColor::Red, Duration, AgentID, TEXT("path"));
 	}
 }
 
@@ -61,11 +65,14 @@ void UPlanningVisualizer::DrawTrajectory(const FTrajectory& Trajectory, FColor C
 		return;
 	}
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+	int32 AgentID = -1;
+
 	// 绘制轨迹曲线
 	for (int32 i = 1; i < Trajectory.Points.Num(); ++i)
 	{
-		DrawDebugLine(GetWorld(), Trajectory.Points[i - 1].Position, Trajectory.Points[i].Position,
-			Color, false, Duration, 0, LineThickness);
+		Buffer->AddLine(GetWorld(), Trajectory.Points[i - 1].Position, Trajectory.Points[i].Position,
+			Color, LineThickness, Duration, AgentID, TEXT("trajectory"));
 	}
 
 	// 绘制速度向量
@@ -78,15 +85,15 @@ void UPlanningVisualizer::DrawTrajectory(const FTrajectory& Trajectory, FColor C
 			if (!Point.Velocity.IsNearlyZero())
 			{
 				FVector VelocityEnd = Point.Position + Point.Velocity * 0.2f; // 缩放速度向量
-				DrawDebugDirectionalArrow(GetWorld(), Point.Position, VelocityEnd, 30.0f,
-					FColor::Yellow, false, Duration, 0, 1.5f);
+				Buffer->AddArrow(GetWorld(), Point.Position, VelocityEnd, 30.0f,
+					FColor::Yellow, 1.5f, Duration, AgentID, TEXT("trajectory"));
 			}
 		}
 	}
 
 	// 绘制起点和终点
-	DrawDebugSphere(GetWorld(), Trajectory.Points[0].Position, 20.0f, 8, FColor::Green, false, Duration, 0, 2.0f);
-	DrawDebugSphere(GetWorld(), Trajectory.Points.Last().Position, 20.0f, 8, FColor::Red, false, Duration, 0, 2.0f);
+	Buffer->AddSphere(GetWorld(), Trajectory.Points[0].Position, 20.0f, FColor::Green, Duration, AgentID, TEXT("trajectory"));
+	Buffer->AddSphere(GetWorld(), Trajectory.Points.Last().Position, 20.0f, FColor::Red, Duration, AgentID, TEXT("trajectory"));
 }
 
 void UPlanningVisualizer::DrawTrackingPoint(const FTrajectoryPoint& Point, float Radius, FColor Color)
@@ -96,14 +103,17 @@ void UPlanningVisualizer::DrawTrackingPoint(const FTrajectoryPoint& Point, float
 		return;
 	}
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+	int32 AgentID = -1;
+
 	// 绘制当前位置球体
-	DrawDebugSphere(GetWorld(), Point.Position, Radius, 12, Color, false, -1.0f, 0, 2.0f);
+	Buffer->AddSphere(GetWorld(), Point.Position, Radius, Color, -1.0f, AgentID, TEXT("tracking"));
 
 	// 绘制速度方向
 	if (!Point.Velocity.IsNearlyZero())
 	{
 		FVector VelocityEnd = Point.Position + Point.Velocity.GetSafeNormal() * (Radius * 3.0f);
-		DrawDebugDirectionalArrow(GetWorld(), Point.Position, VelocityEnd, 20.0f, FColor::Cyan, false, -1.0f, 0, 2.0f);
+		Buffer->AddArrow(GetWorld(), Point.Position, VelocityEnd, 20.0f, FColor::Cyan, 2.0f, -1.0f, AgentID, TEXT("tracking"));
 	}
 }
 
@@ -127,20 +137,22 @@ void UPlanningVisualizer::DrawObstacle(const FObstacleInfo& Obstacle, FColor Col
 		return;
 	}
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+	int32 AgentID = -1;
+
 	FColor SafetyColor = FColor(Color.R, Color.G, Color.B, 100);
 
 	switch (Obstacle.Type)
 	{
 	case EObstacleType::Sphere:
-		DrawDebugSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.X, 16, Color, false, Duration, 0, 2.0f);
+		Buffer->AddSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.X, Color, Duration, AgentID, TEXT("obstacle"));
 		// 绘制安全边距
-		DrawDebugSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.X + Obstacle.SafetyMargin, 16,
-			SafetyColor, false, Duration, 0, 1.0f);
+		Buffer->AddSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.X + Obstacle.SafetyMargin, SafetyColor, Duration, AgentID, TEXT("obstacle"));
 		break;
 
 	case EObstacleType::Box:
-		DrawDebugBox(GetWorld(), Obstacle.Center, Obstacle.Extents, Obstacle.Rotation.Quaternion(),
-			Color, false, Duration, 0, 2.0f);
+		Buffer->AddBox(GetWorld(), Obstacle.Center, Obstacle.Extents, Obstacle.Rotation.Quaternion(),
+			Color, Duration, AgentID, TEXT("obstacle"));
 		break;
 
 	case EObstacleType::Cylinder:
@@ -160,15 +172,15 @@ void UPlanningVisualizer::DrawObstacle(const FObstacleInfo& Obstacle, FColor Col
 				FVector P2Bottom = Obstacle.Center + FVector(FMath::Cos(Angle2) * Obstacle.Extents.X,
 					FMath::Sin(Angle2) * Obstacle.Extents.X, -Obstacle.Extents.Z);
 
-				DrawDebugLine(GetWorld(), P1Top, P2Top, Color, false, Duration, 0, 2.0f);
-				DrawDebugLine(GetWorld(), P1Bottom, P2Bottom, Color, false, Duration, 0, 2.0f);
-				DrawDebugLine(GetWorld(), P1Top, P1Bottom, Color, false, Duration, 0, 2.0f);
+				Buffer->AddLine(GetWorld(), P1Top, P2Top, Color, 2.0f, Duration, AgentID, TEXT("obstacle"));
+				Buffer->AddLine(GetWorld(), P1Bottom, P2Bottom, Color, 2.0f, Duration, AgentID, TEXT("obstacle"));
+				Buffer->AddLine(GetWorld(), P1Top, P1Bottom, Color, 2.0f, Duration, AgentID, TEXT("obstacle"));
 			}
 		}
 		break;
 
 	default:
-		DrawDebugSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.GetMax(), 16, Color, false, Duration, 0, 2.0f);
+		Buffer->AddSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.GetMax(), Color, Duration, AgentID, TEXT("obstacle"));
 		break;
 	}
 }
@@ -180,10 +192,13 @@ void UPlanningVisualizer::DrawSearchBounds(const FVector& MinBounds, const FVect
 		return;
 	}
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+	int32 AgentID = -1;
+
 	FVector Center = (MinBounds + MaxBounds) * 0.5f;
 	FVector Extent = (MaxBounds - MinBounds) * 0.5f;
 
-	DrawDebugBox(GetWorld(), Center, Extent, Color, false, Duration, 0, 1.0f);
+	Buffer->AddBox(GetWorld(), Center, Extent, FQuat::Identity, Color, Duration, AgentID, TEXT("search_bounds"));
 }
 
 void UPlanningVisualizer::DrawWaypoints(const TArray<FVector>& Waypoints, float Radius, FColor Color, float Duration)
@@ -193,13 +208,16 @@ void UPlanningVisualizer::DrawWaypoints(const TArray<FVector>& Waypoints, float 
 		return;
 	}
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+	int32 AgentID = -1;
+
 	for (int32 i = 0; i < Waypoints.Num(); ++i)
 	{
-		DrawDebugSphere(GetWorld(), Waypoints[i], Radius, 12, Color, false, Duration, 0, 2.0f);
+		Buffer->AddSphere(GetWorld(), Waypoints[i], Radius, Color, Duration, AgentID, TEXT("waypoint"));
 
 		// 绘制航点编号
 		FString Label = FString::Printf(TEXT("%d"), i);
-		DrawDebugString(GetWorld(), Waypoints[i] + FVector(0, 0, Radius + 10.0f), Label, nullptr, Color, Duration);
+		Buffer->AddText(GetWorld(), Waypoints[i] + FVector(0, 0, Radius + 10.0f), Label, Color, Duration, AgentID, TEXT("waypoint"));
 	}
 }
 
@@ -245,6 +263,9 @@ void UPlanningVisualizer::DrawNMPCPrediction(const FVector& Position, const FNMP
 		return;
 	}
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+	int32 AgentID = -1;
+
 	// 绘制预测轨迹线（橙色）
 	if (Result.PredictedTrajectory.Num() >= 2)
 	{
@@ -252,7 +273,7 @@ void UPlanningVisualizer::DrawNMPCPrediction(const FVector& Position, const FNMP
 		{
 			const FNMPCPredictionStep& Prev = Result.PredictedTrajectory[i - 1];
 			const FNMPCPredictionStep& Curr = Result.PredictedTrajectory[i];
-			DrawDebugLine(GetWorld(), Prev.Position, Curr.Position, FColor::Orange, false, -1.0f, 0, 2.5f);
+			Buffer->AddLine(GetWorld(), Prev.Position, Curr.Position, FColor::Orange, 2.5f, -1.0f, AgentID, TEXT("nmpc"));
 
 			// 障碍物代价越高，球体越红越大
 			float CostRatio = FMath::Clamp(Curr.ObstacleCost / 10.0f, 0.0f, 1.0f);
@@ -260,7 +281,7 @@ void UPlanningVisualizer::DrawNMPCPrediction(const FVector& Position, const FNMP
 			uint8 G = FMath::Lerp(165, 0, CostRatio);
 			uint8 B = 0;
 			float Radius = FMath::Lerp(5.0f, 20.0f, CostRatio);
-			DrawDebugPoint(GetWorld(), Curr.Position, Radius, FColor(R, G, B), false, -1.0f);
+			Buffer->AddPoint(GetWorld(), Curr.Position, Radius, FColor(R, G, B), -1.0f, AgentID, TEXT("nmpc"));
 		}
 
 		// 绘制控制输入箭头（青色，每隔几步显示一次）
@@ -271,7 +292,7 @@ void UPlanningVisualizer::DrawNMPCPrediction(const FVector& Position, const FNMP
 			if (!PredStep.ControlInput.IsNearlyZero())
 			{
 				FVector ArrowEnd = PredStep.Position + PredStep.ControlInput * 0.5f;
-				DrawDebugDirectionalArrow(GetWorld(), PredStep.Position, ArrowEnd, 15.0f, FColor::Cyan, false, -1.0f, 0, 1.5f);
+				Buffer->AddArrow(GetWorld(), PredStep.Position, ArrowEnd, 15.0f, FColor::Cyan, 1.5f, -1.0f, AgentID, TEXT("nmpc"));
 			}
 		}
 	}
@@ -279,14 +300,14 @@ void UPlanningVisualizer::DrawNMPCPrediction(const FVector& Position, const FNMP
 	// 绘制修正目标（黄色球）
 	if (Result.bNeedsCorrection)
 	{
-		DrawDebugSphere(GetWorld(), Result.CorrectedTarget, 25.0f, 8, FColor::Yellow, false, -1.0f, 0, 2.0f);
-		DrawDebugDirectionalArrow(GetWorld(), Position, Result.CorrectedTarget, 25.0f, FColor::Yellow, false, -1.0f, 0, 2.5f);
+		Buffer->AddSphere(GetWorld(), Result.CorrectedTarget, 25.0f, FColor::Yellow, -1.0f, AgentID, TEXT("nmpc"));
+		Buffer->AddArrow(GetWorld(), Position, Result.CorrectedTarget, 25.0f, FColor::Yellow, 2.5f, -1.0f, AgentID, TEXT("nmpc"));
 	}
 
 	// Stuck 状态标记（紫色球）
 	if (Result.bStuck)
 	{
-		DrawDebugSphere(GetWorld(), Position, 50.0f, 8, FColor::Purple, false, -1.0f, 0, 3.0f);
+		Buffer->AddSphere(GetWorld(), Position, 50.0f, FColor::Purple, -1.0f, AgentID, TEXT("nmpc"));
 	}
 }
 

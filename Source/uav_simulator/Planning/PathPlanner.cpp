@@ -3,6 +3,7 @@
 #include "PathPlanner.h"
 #include "DrawDebugHelpers.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
+#include "../Debug/DebugDrawBuffer.h"
 
 UPathPlanner::UPathPlanner()
 {
@@ -176,11 +177,13 @@ void UPathPlanner::VisualizeResult(float Duration)
 
 	DrawDebugPath(LastPath, FColor::Green, Duration, 3.0f);
 
-	// 绘制起点和终点
 	if (LastPath.Num() > 0)
 	{
-		DrawDebugSphere(GetWorld(), LastPath[0], 20.0f, 12, FColor::Blue, false, Duration);
-		DrawDebugSphere(GetWorld(), LastPath.Last(), 20.0f, 12, FColor::Red, false, Duration);
+		if (UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this))
+		{
+			Buffer->AddSphere(GetWorld(), LastPath[0], 20.0f, FColor::Blue, Duration, -1, TEXT("planner_path"));
+			Buffer->AddSphere(GetWorld(), LastPath.Last(), 20.0f, FColor::Red, Duration, -1, TEXT("planner_path"));
+		}
 	}
 }
 
@@ -191,9 +194,13 @@ void UPathPlanner::DrawDebugPath(const TArray<FVector>& Path, const FColor& Colo
 		return;
 	}
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
 	for (int32 i = 1; i < Path.Num(); ++i)
 	{
-		DrawDebugLine(GetWorld(), Path[i - 1], Path[i], Color, false, Duration, 0, Thickness);
-		DrawDebugPoint(GetWorld(), Path[i], 10.0f, Color, false, Duration);
+		if (Buffer)
+		{
+			Buffer->AddLine(GetWorld(), Path[i - 1], Path[i], Color, Thickness, Duration, -1, TEXT("planner_path"));
+			Buffer->AddPoint(GetWorld(), Path[i], 10.0f, Color, Duration, -1, TEXT("planner_path"));
+		}
 	}
 }

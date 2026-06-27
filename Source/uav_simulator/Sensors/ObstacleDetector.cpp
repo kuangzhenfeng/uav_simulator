@@ -5,6 +5,7 @@
 #include "DrawDebugHelpers.h"
 #include "uav_simulator/Planning/ObstacleManager.h"
 #include "../Core/UAVPawn.h"
+#include "../Debug/DebugDrawBuffer.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Utility/Filter.h"
 
@@ -314,14 +315,18 @@ void UObstacleDetector::DrawDebugInfo() const
 		return;
 	}
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
 	FVector ScanOrigin = GetOwner()->GetActorLocation();
 
 	if (bShowDebugTraces)
 	{
 		for (const FHitResult& Hit : CachedHitResults)
 		{
-			DrawDebugLine(World, ScanOrigin, Hit.ImpactPoint, FColor::Red, false, -1.0f, 0, 1.0f);
-			DrawDebugPoint(World, Hit.ImpactPoint, 5.0f, FColor::Red, false, -1.0f);
+			if (Buffer)
+			{
+				Buffer->AddLine(World, ScanOrigin, Hit.ImpactPoint, FColor::Red, 1.0f, -1.0f, -1, TEXT("sensor_traces"));
+				Buffer->AddPoint(World, Hit.ImpactPoint, 5.0f, FColor::Red, -1.0f, -1, TEXT("sensor_traces"));
+			}
 		}
 	}
 
@@ -330,12 +335,14 @@ void UObstacleDetector::DrawDebugInfo() const
 		for (const TPair<FVector, float>& Point : PointCloudCache)
 		{
 			float t = FMath::Clamp(FVector::Dist(ScanOrigin, Point.Key) / ScanRange, 0.0f, 1.0f);
-			// Jet colormap: 近=蓝 → 青 → 绿 → 黄 → 远=红
 			float R = FMath::Clamp(1.5f - FMath::Abs(4.0f * t - 3.0f), 0.0f, 1.0f);
 			float G = FMath::Clamp(1.5f - FMath::Abs(4.0f * t - 2.0f), 0.0f, 1.0f);
 			float B = FMath::Clamp(1.5f - FMath::Abs(4.0f * t - 1.0f), 0.0f, 1.0f);
 			FColor Color((uint8)(R * 255), (uint8)(G * 255), (uint8)(B * 255));
-			DrawDebugPoint(World, Point.Key, 4.0f, Color, false, -1.0f);
+			if (Buffer)
+			{
+				Buffer->AddPoint(World, Point.Key, 4.0f, Color, -1.0f, -1, TEXT("sensor_points"));
+			}
 		}
 	}
 
@@ -343,33 +350,43 @@ void UObstacleDetector::DrawDebugInfo() const
 	{
 		for (const FDetectedObstacle& Obstacle : DetectedObstacles)
 		{
-			// 已知障碍物用绿色，未知用黄色
 			FColor Color = (Obstacle.RegisteredObstacleID > 0) ? FColor::Green : FColor::Yellow;
 
 			switch (Obstacle.EstimatedType)
 			{
 			case EObstacleType::Sphere:
-				DrawDebugSphere(World, Obstacle.Center, Obstacle.EstimatedExtents.X, 12, Color, false, -1.0f, 0, 2.0f);
+				if (Buffer)
+				{
+					Buffer->AddSphere(World, Obstacle.Center, Obstacle.EstimatedExtents.X, Color, -1.0f, -1, TEXT("sensor_detected"));
+				}
 				break;
 
 			case EObstacleType::Box:
-				DrawDebugBox(World, Obstacle.Center, Obstacle.EstimatedExtents, Color, false, -1.0f, 0, 2.0f);
+				if (Buffer)
+				{
+					Buffer->AddBox(World, Obstacle.Center, Obstacle.EstimatedExtents, FQuat::Identity, Color, -1.0f, -1, TEXT("sensor_detected"));
+				}
 				break;
 
 			case EObstacleType::Cylinder:
-				DrawDebugCylinder(World,
-					Obstacle.Center - FVector(0, 0, Obstacle.EstimatedExtents.Z),
-					Obstacle.Center + FVector(0, 0, Obstacle.EstimatedExtents.Z),
-					Obstacle.EstimatedExtents.X, 12, Color, false, -1.0f, 0, 2.0f);
+				if (Buffer)
+				{
+					Buffer->AddSphere(World, Obstacle.Center, Obstacle.EstimatedExtents.X, Color, -1.0f, -1, TEXT("sensor_detected"));
+				}
 				break;
 
 			default:
-				DrawDebugSphere(World, Obstacle.Center, Obstacle.EstimatedExtents.GetMax(), 12, Color, false, -1.0f, 0, 2.0f);
+				if (Buffer)
+				{
+					Buffer->AddSphere(World, Obstacle.Center, Obstacle.EstimatedExtents.GetMax(), Color, -1.0f, -1, TEXT("sensor_detected"));
+				}
 				break;
 			}
 
-			// 绘制从传感器到障碍物的连线
-			DrawDebugLine(World, ScanOrigin, Obstacle.Center, FColor(Color.R, Color.G, Color.B, 64), false, -1.0f, 0, 1.0f);
+			if (Buffer)
+			{
+				Buffer->AddLine(World, ScanOrigin, Obstacle.Center, FColor(Color.R, Color.G, Color.B, 64), 1.0f, -1.0f, -1, TEXT("sensor_detected"));
+			}
 		}
 	}
 }

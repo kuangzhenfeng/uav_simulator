@@ -5,6 +5,7 @@
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "Logging/LogVerbosity.h"
+#include "../Debug/DebugDrawBuffer.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Utility/Filter.h"
 #include "../Core/UAVPawn.h"
@@ -693,6 +694,8 @@ void UObstacleManager::DrawDebugObstacles() const
 		return;
 	}
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+
 	for (const FObstacleInfo& Obstacle : Obstacles)
 	{
 		FColor Color = Obstacle.bIsDynamic ? FColor::Orange : FColor::Red;
@@ -700,18 +703,23 @@ void UObstacleManager::DrawDebugObstacles() const
 		switch (Obstacle.Type)
 		{
 		case EObstacleType::Sphere:
-			DrawDebugSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.X, 16, Color, false, -1.0f, 0, 2.0f);
-			DrawDebugSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.X + Obstacle.SafetyMargin, 16,
-				FColor(Color.R, Color.G, Color.B, 128), false, -1.0f, 0, 1.0f);
+			if (Buffer)
+			{
+				Buffer->AddSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.X, Color, -1.0f, -1, TEXT("obstacle_mgr"));
+				Buffer->AddSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.X + Obstacle.SafetyMargin,
+					FColor(Color.R, Color.G, Color.B, 128), -1.0f, -1, TEXT("obstacle_mgr"));
+			}
 			break;
 
 		case EObstacleType::Box:
-			DrawDebugBox(GetWorld(), Obstacle.Center, Obstacle.Extents, Obstacle.Rotation.Quaternion(),
-				Color, false, -1.0f, 0, 2.0f);
+			if (Buffer)
+			{
+				Buffer->AddBox(GetWorld(), Obstacle.Center, Obstacle.Extents, Obstacle.Rotation.Quaternion(),
+					Color, -1.0f, -1, TEXT("obstacle_mgr"));
+			}
 			break;
 
 		case EObstacleType::Cylinder:
-			// 近似用多条线绘制圆柱
 			{
 				int32 NumSegments = 16;
 				for (int32 i = 0; i < NumSegments; ++i)
@@ -728,9 +736,12 @@ void UObstacleManager::DrawDebugObstacles() const
 					FVector P2Bottom = Obstacle.Center + FVector(FMath::Cos(Angle2) * Obstacle.Extents.X,
 						FMath::Sin(Angle2) * Obstacle.Extents.X, -Obstacle.Extents.Z);
 
-					DrawDebugLine(GetWorld(), P1Top, P2Top, Color, false, -1.0f, 0, 2.0f);
-					DrawDebugLine(GetWorld(), P1Bottom, P2Bottom, Color, false, -1.0f, 0, 2.0f);
-					DrawDebugLine(GetWorld(), P1Top, P1Bottom, Color, false, -1.0f, 0, 2.0f);
+					if (Buffer)
+					{
+						Buffer->AddLine(GetWorld(), P1Top, P2Top, Color, 2.0f, -1.0f, -1, TEXT("obstacle_mgr"));
+						Buffer->AddLine(GetWorld(), P1Bottom, P2Bottom, Color, 2.0f, -1.0f, -1, TEXT("obstacle_mgr"));
+						Buffer->AddLine(GetWorld(), P1Top, P1Bottom, Color, 2.0f, -1.0f, -1, TEXT("obstacle_mgr"));
+					}
 				}
 			}
 			break;

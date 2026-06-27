@@ -44,6 +44,9 @@ public:
 	/** 注入共享风场单例（由 GameMode 提供） */
 	void SetWindField(UWindField* InWindField);
 
+	/** 设置当前场景名称（由 GameMode 在装配场景时调用），写入 meta 行的 "scenario" 字段 */
+	void SetScenarioName(const FString& Name) { ScenarioName = Name; }
+
 	/**
 	 * 覆盖默认输出路径（默认 ProjectDir/Logs/telemetry.ndjson）。
 	 * 必须在文件句柄首次打开之前调用。供单元测试重定向输出，避免污染真实遥测文件。
@@ -109,6 +112,9 @@ private:
 	// 输出路径覆盖（默认空 -> ProjectDir/Logs/telemetry.ndjson；测试可注入临时路径）
 	FString OutputPathOverride;
 
+	// 当前场景名称（写入 meta 行的 "scenario" 字段；空串表示未设置）
+	FString ScenarioName;
+
 	// 帧采样累加器（仿真秒）
 	float FrameAccum = 0.0f;
 
@@ -117,6 +123,12 @@ private:
 
 	// 未来轨迹采样累加器（仿真秒）
 	float TrajectoryAccum = 0.0f;
+
+	// Debug 原语采样累加器（仿真秒），与 frame 同节拍 20Hz
+	float DebugAccum = 0.0f;
+
+	// 当前任务 ID（用于归档目录名）
+	FString CurrentTaskId;
 
 	// 静态数据是否已写
 	bool bStaticWritten = false;
@@ -145,4 +157,10 @@ private:
 	//   traj_nmpc —— NMPC 预测轨迹（含障碍代价 cost）
 	// 仅当对应数据有效时写该 agent 的行，停止后自然停写（消费端覆盖式快照）
 	void WriteFutureTrajectories(float SimTime);
+
+	// Debug 原语采样：从 UDebugDrawBuffer 拉取帧缓冲，序列化为 debug 行
+	void WriteDebugFrame(float SimTime);
+
+	// 任务归档：把当前 telemetry.ndjson + result.json 归档到 Logs/tasks/<id>/
+	void ArchiveCurrentTask();
 };

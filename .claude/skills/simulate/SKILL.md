@@ -92,11 +92,13 @@ Script\sim.bat <duration> <slomo>
 
 macOS/Linux 使用对应 `.sh`。
 
-启动仿真前，默认后台拉起日志可视化工具（边跑边看 3D 轨迹/障碍/航点/风场/指标，跑完可拖拽回放）：
+启动仿真前，默认后台拉起日志可视化工具（脚本就绪后自动打开浏览器）：
 
 ```bash
 Tools/vis/vis.sh          # macOS/Linux；Windows 用 Tools\vis\vis.bat
 ```
+
+若脚本输出 `已有服务运行,复用`，浏览器已打开过则不必重复。设置 `VIS_NO_BROWSER=1` 可跳过（CI/headless 环境自动跳过）。
 
 可视化是只读辅助工具：解析 UE 专用遥测数据流 `Logs/telemetry.ndjson`（UAV `TelemetryRecorder` 按帧追加写的结构化数据），不依赖运行时日志正则解析，不阻塞修复主循环。启动失败（端口占用/Python 缺失）只告警不中断。
 

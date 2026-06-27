@@ -34,6 +34,11 @@ URL="http://127.0.0.1:${PORT}"
 if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
     echo "[VIS] 端口 ${PORT} 已有服务运行,复用: ${URL}"
     echo "[VIS] 访问地址: ${URL}"
+    if [[ -n "$DISPLAY" || "$(uname)" == "Darwin" ]] && [[ -z "$VIS_NO_BROWSER" ]]; then
+        if command -v open >/dev/null 2>&1; then open "$URL"
+        elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL"
+        fi
+    fi
     exit 0
 fi
 
@@ -60,6 +65,13 @@ done
 if curl -s -m 1 -o /dev/null "$URL/api/data" 2>/dev/null; then
     echo "[VIS] 可视化已启动: ${URL}"
     echo "[VIS] 服务日志: Logs/vis_server.log  (停止: kill \$(cat Logs/vis_server.pid))"
+    if [[ -n "$DISPLAY" || "$(uname)" == "Darwin" ]] && [[ -z "$VIS_NO_BROWSER" ]]; then
+        if command -v open >/dev/null 2>&1; then
+            open "$URL"
+        elif command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "$URL"
+        fi
+    fi
 else
     echo "[VIS] 警告: 服务可能未就绪,详见 Logs/vis_server.log"
 fi

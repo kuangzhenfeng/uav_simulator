@@ -333,8 +333,16 @@ void UBTService_UAVPathPlanning::ProcessPresetWaypoints(AUAVPawn* UAVPawn)
 
 	if (Waypoints.Num() < 2)
 	{
-		UE_LOG(LogUAVPlanning, Warning, TEXT("Preset waypoints insufficient: %d (need 2+)"), Waypoints.Num());
-		return;
+		if (Waypoints.Num() == 1)
+		{
+			Waypoints.Insert(UAVPawn->GetActorLocation(), 0);
+			UE_LOG(LogUAVPlanning, Log, TEXT("[PresetWP] Single target waypoint, prepended current location for planning"));
+		}
+		else
+		{
+			UE_LOG(LogUAVPlanning, Warning, TEXT("Preset waypoints insufficient: %d (need 1+)"), Waypoints.Num());
+			return;
+		}
 	}
 
 	// 保存原始航点（用于 Global Replan）

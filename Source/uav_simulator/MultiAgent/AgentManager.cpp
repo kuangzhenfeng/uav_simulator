@@ -134,6 +134,10 @@ void AMultiAgentGameMode::AssembleScenario(UScenario* ScenarioToLoad, bool bIsRe
 	}
 
 	ActiveScenario = ScenarioToLoad;
+	if (TelemetryRecorder)
+	{
+		TelemetryRecorder->SetScenarioName(ScenarioToLoad->Name);
+	}
 	UScenarioLoader* Loader = NewObject<UScenarioLoader>(this);
 	ScenarioLoaderInstance = Loader;
 

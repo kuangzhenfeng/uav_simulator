@@ -25,6 +25,7 @@
 #include "../Scenario/ScenarioDto.h"
 #include "../Scenario/ScenarioFactory.h"
 #include "../Core/UAVPawn.h"
+#include "../Mission/MissionComponent.h"
 #include "../Environment/WindField.h"
 #include "../Environment/EnvironmentTypes.h"
 #include "../Planning/NMPCAvoidance.h"
@@ -289,7 +290,7 @@ bool UHttpControlComponent::HandleRequest(const FHttpServerRequest& Request, con
 	// CORS preflight（前端若直连可跨域；经 Python 反代则不需要）
 	if (Request.Verb == EHttpServerRequestVerbs::VERB_OPTIONS)
 	{
-		TUniquePtr<FHttpServerResponse> Resp = FHttpServerResponse::Create(TEXT(""), TEXT("text/plain"));
+		TUniquePtr<FHttpServerResponse> Resp = FHttpServerResponse::Create(FString(TEXT("")), FString(TEXT("text/plain")));
 		Resp->Headers.Add(TEXT("Access-Control-Allow-Origin"), {TEXT("*")});
 		Resp->Headers.Add(TEXT("Access-Control-Allow-Methods"), {TEXT("POST, OPTIONS")});
 		Resp->Headers.Add(TEXT("Access-Control-Allow-Headers"), {TEXT("Content-Type")});
@@ -300,7 +301,7 @@ bool UHttpControlComponent::HandleRequest(const FHttpServerRequest& Request, con
 
 	if (Request.Verb != EHttpServerRequestVerbs::VERB_POST)
 	{
-		TUniquePtr<FHttpServerResponse> Resp = FHttpServerResponse::Create(TEXT("{\"error\":\"method not allowed\"}"), TEXT("application/json"));
+		TUniquePtr<FHttpServerResponse> Resp = FHttpServerResponse::Create(FString(TEXT("{\"error\":\"method not allowed\"}")), FString(TEXT("application/json")));
 		Resp->Code = EHttpServerResponseCodes::BadRequest;
 		Resp->Headers.Add(TEXT("Access-Control-Allow-Origin"), {TEXT("*")});
 		OnComplete(MoveTemp(Resp));
@@ -372,6 +373,14 @@ TSharedPtr<FJsonObject> UHttpControlComponent::DispatchCommand(const FString& Pa
 	if (Path.EndsWith(TEXT("exit")))
 	{
 		return HandleExit(Body);
+	}
+	if (Path.EndsWith(TEXT("stop")))
+	{
+		return HandleStop(Body);
+	}
+	if (Path.EndsWith(TEXT("pause")))
+	{
+		return HandlePause(Body);
 	}
 
 	TSharedPtr<FJsonObject> Err = MakeShareable(new FJsonObject);
@@ -591,5 +600,69 @@ TSharedPtr<FJsonObject> UHttpControlComponent::HandleExit(const TSharedPtr<FJson
 		GLog->Flush();
 		FGenericPlatformMisc::RequestExit(false);
 	});
+	return Resp;
+}
+
+TSharedPtr<FJsonObject> UHttpControlComponent::HandleStop(const TSharedPtr<FJsonObject>& Body)
+{
+	TSharedPtr<FJsonObject> Resp = MakeShareable(new FJsonObject);
+	AMultiAgentGameMode* GM = GetOwningGameMode();
+	if (!GM)
+	{
+		Resp->SetBoolField(TEXT("ok"), false);
+		Resp->SetStringField(TEXT("error"), TEXT("no game mode"));
+		return Resp;
+	}
+
+	int32 Stopped = 0;
+	for (AUAVPawn* Pawn : GM->GetScenarioFleet())
+	{
+		if (!Pawn) continue;
+		UMissionComponent* MC = Pawn->GetMissionComponent();
+		if (!MC) continue;
+		MC->StopMission();
+		++Stopped;
+	}
+
+	Resp->SetBoolField(TEXT("ok"), true);
+	Resp->SetStringField(TEXT("status"), TEXT("stopped"));
+	Resp->SetNumberField(TEXT("stopped"), Stopped);
+	return Resp;
+}
+
+TSharedPtr<FJsonObject> UHttpControlComponent::HandlePause(const TSharedPtr<FJsonObject>& Body)
+{
+	TSharedPtr<FJsonObject> Resp = MakeShareable(new FJsonObject);
+	AMultiAgentGameMode* GM = GetOwningGameMode();
+	if (!GM)
+	{
+		Resp->SetBoolField(TEXT("ok"), false);
+		Resp->SetStringField(TEXT("error"), TEXT("no game mode"));
+		return Resp;
+	}
+
+	int32 Affected = 0;
+	bool bAnyPaused = false;
+	for (AUAVPawn* Pawn : GM->GetScenarioFleet())
+	{
+		if (!Pawn) continue;
+		UMissionComponent* MC = Pawn->GetMissionComponent();
+		if (!MC) continue;
+		if (MC->IsMissionRunning())
+		{
+			MC->PauseMission();
+			bAnyPaused = true;
+			++Affected;
+		}
+		else if (MC->IsMissionPaused())
+		{
+			MC->ResumeMission();
+			++Affected;
+		}
+	}
+
+	Resp->SetBoolField(TEXT("ok"), true);
+	Resp->SetStringField(TEXT("status"), bAnyPaused ? TEXT("paused") : TEXT("resumed"));
+	Resp->SetNumberField(TEXT("affected"), Affected);
 	return Resp;
 }

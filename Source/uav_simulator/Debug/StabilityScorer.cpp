@@ -4,6 +4,7 @@
 #include "../Planning/ObstacleManager.h"
 #include "DrawDebugHelpers.h"
 #include "UAVLogConfig.h"
+#include "DebugDrawBuffer.h"
 
 UStabilityScorer::UStabilityScorer()
 {
@@ -100,7 +101,10 @@ void UStabilityScorer::DrawScoreHUD(const FVector& WorldLocation) const
 
 	auto Draw = [&](const FString& Text, float S, int32 Line)
 	{
-		DrawDebugString(World, Base + FVector(0.f, 0.f, Line * Step), Text, nullptr, ToColor(S), 0.f, true, 1.1f);
+		if (UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this))
+		{
+			Buffer->AddText(World, Base + FVector(0.f, 0.f, Line * Step), Text, ToColor(S), 0.f, -1, TEXT("hud_stability"));
+		}
 	};
 
 	Draw(FString::Printf(TEXT("■ 综合: %.1f"), Score.CompositeScore), Score.CompositeScore, 0);

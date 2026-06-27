@@ -70,6 +70,8 @@ private:
 	TSharedPtr<FJsonObject> HandleParams(const TSharedPtr<FJsonObject>& Body);
 	TSharedPtr<FJsonObject> HandleStatus() const;
 	TSharedPtr<FJsonObject> HandleExit(const TSharedPtr<FJsonObject>& Body);
+	TSharedPtr<FJsonObject> HandleStop(const TSharedPtr<FJsonObject>& Body);
+	TSharedPtr<FJsonObject> HandlePause(const TSharedPtr<FJsonObject>& Body);
 
 	// 取所属 GameMode
 	AMultiAgentGameMode* GetOwningGameMode() const;

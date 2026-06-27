@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DebugVisualizer.h"
+#include "DebugDrawBuffer.h"
 #include "../uav_simulator.h"
 #include "DrawDebugHelpers.h"
 
@@ -32,21 +33,23 @@ void UDebugVisualizer::DrawUAVState(const FUAVState& State, const FVector& Actor
 	if (!bShowDebugInfo || !GetWorld())
 		return;
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+
 	// 绘制坐标轴（机体坐标系）
 	FQuat Orientation = State.Rotation.Quaternion();
 	FVector XAxis = Orientation.RotateVector(FVector(100.0f, 0.0f, 0.0f));
 	FVector YAxis = Orientation.RotateVector(FVector(0.0f, 100.0f, 0.0f));
 	FVector ZAxis = Orientation.RotateVector(FVector(0.0f, 0.0f, 100.0f));
 
-	DrawDebugLine(GetWorld(), ActorLocation, ActorLocation + XAxis, FColor::Red, false, -1.0f, 0, 3.0f);
-	DrawDebugLine(GetWorld(), ActorLocation, ActorLocation + YAxis, FColor::Green, false, -1.0f, 0, 3.0f);
-	DrawDebugLine(GetWorld(), ActorLocation, ActorLocation + ZAxis, FColor::Blue, false, -1.0f, 0, 3.0f);
+	Buffer->AddLine(GetWorld(), ActorLocation, ActorLocation + XAxis, FColor::Red, 3.0f, -1.0f, -1, TEXT("body_axes"));
+	Buffer->AddLine(GetWorld(), ActorLocation, ActorLocation + YAxis, FColor::Green, 3.0f, -1.0f, -1, TEXT("body_axes"));
+	Buffer->AddLine(GetWorld(), ActorLocation, ActorLocation + ZAxis, FColor::Blue, 3.0f, -1.0f, -1, TEXT("body_axes"));
 
 	// 绘制速度矢量
 	if (!State.Velocity.IsNearlyZero())
 	{
 		FVector VelocityEnd = ActorLocation + State.Velocity * 0.5f;
-		DrawDebugDirectionalArrow(GetWorld(), ActorLocation, VelocityEnd, 50.0f, FColor::Yellow, false, -1.0f, 0, 2.0f);
+		Buffer->AddArrow(GetWorld(), ActorLocation, VelocityEnd, 50.0f, FColor::Yellow, 2.0f, -1.0f, -1, TEXT("velocity"));
 	}
 }
 
@@ -54,6 +57,8 @@ void UDebugVisualizer::DrawTrajectoryHistory(const FVector& CurrentPosition)
 {
 	if (!bShowTrajectory || !GetWorld())
 		return;
+
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
 
 	// 添加当前位置到历史
 	TrajectoryHistory.Add(CurrentPosition);
@@ -67,8 +72,8 @@ void UDebugVisualizer::DrawTrajectoryHistory(const FVector& CurrentPosition)
 	// 绘制轨迹线
 	for (int32 i = 1; i < TrajectoryHistory.Num(); i++)
 	{
-		DrawDebugLine(GetWorld(), TrajectoryHistory[i - 1], TrajectoryHistory[i],
-			FColor::Cyan, false, -1.0f, 0, TrajectoryThickness);
+		Buffer->AddLine(GetWorld(), TrajectoryHistory[i - 1], TrajectoryHistory[i],
+			FColor::Cyan, TrajectoryThickness, -1.0f, -1, TEXT("history_trail"));
 	}
 }
 
@@ -82,16 +87,18 @@ void UDebugVisualizer::DrawPlannedPath(const TArray<FVector>& Path, FColor Color
 	if (!bShowPlannedPath || !GetWorld() || Path.Num() < 2)
 		return;
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+
 	// 绘制路径线段
 	for (int32 i = 1; i < Path.Num(); ++i)
 	{
-		DrawDebugLine(GetWorld(), Path[i - 1], Path[i], Color, false, Duration, 0, 3.0f);
-		DrawDebugPoint(GetWorld(), Path[i], 10.0f, Color, false, Duration);
+		Buffer->AddLine(GetWorld(), Path[i - 1], Path[i], Color, 3.0f, Duration, -1, TEXT("planner_path"));
+		Buffer->AddPoint(GetWorld(), Path[i], 10.0f, Color, Duration, -1, TEXT("planner_path"));
 	}
 
 	// 绘制起点和终点
-	DrawDebugSphere(GetWorld(), Path[0], 25.0f, 8, FColor::Green, false, Duration, 0, 2.0f);
-	DrawDebugSphere(GetWorld(), Path.Last(), 25.0f, 8, FColor::Red, false, Duration, 0, 2.0f);
+	Buffer->AddSphere(GetWorld(), Path[0], 25.0f, FColor::Green, Duration, -1, TEXT("planner_path"));
+	Buffer->AddSphere(GetWorld(), Path.Last(), 25.0f, FColor::Red, Duration, -1, TEXT("planner_path"));
 }
 
 void UDebugVisualizer::DrawOptimizedTrajectory(const FTrajectory& Trajectory, FColor Color, float Duration)
@@ -99,11 +106,13 @@ void UDebugVisualizer::DrawOptimizedTrajectory(const FTrajectory& Trajectory, FC
 	if (!bShowPlannedPath || !GetWorld() || !Trajectory.bIsValid || Trajectory.Points.Num() < 2)
 		return;
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+
 	// 绘制轨迹曲线
 	for (int32 i = 1; i < Trajectory.Points.Num(); ++i)
 	{
-		DrawDebugLine(GetWorld(), Trajectory.Points[i - 1].Position, Trajectory.Points[i].Position,
-			Color, false, Duration, 0, TrajectoryThickness);
+		Buffer->AddLine(GetWorld(), Trajectory.Points[i - 1].Position, Trajectory.Points[i].Position,
+			Color, TrajectoryThickness, Duration, -1, TEXT("trajectory"));
 	}
 
 	// 每隔一定数量的点绘制速度向量
@@ -114,14 +123,14 @@ void UDebugVisualizer::DrawOptimizedTrajectory(const FTrajectory& Trajectory, FC
 		if (!Point.Velocity.IsNearlyZero())
 		{
 			FVector VelocityEnd = Point.Position + Point.Velocity * 0.15f;
-			DrawDebugDirectionalArrow(GetWorld(), Point.Position, VelocityEnd, 20.0f,
-				FColor::Yellow, false, Duration, 0, 1.5f);
+			Buffer->AddArrow(GetWorld(), Point.Position, VelocityEnd, 20.0f,
+				FColor::Yellow, 1.5f, Duration, -1, TEXT("trajectory"));
 		}
 	}
 
 	// 绘制起点和终点
-	DrawDebugSphere(GetWorld(), Trajectory.Points[0].Position, 20.0f, 8, FColor::Green, false, Duration, 0, 2.0f);
-	DrawDebugSphere(GetWorld(), Trajectory.Points.Last().Position, 20.0f, 8, FColor::Red, false, Duration, 0, 2.0f);
+	Buffer->AddSphere(GetWorld(), Trajectory.Points[0].Position, 20.0f, FColor::Green, Duration, -1, TEXT("trajectory"));
+	Buffer->AddSphere(GetWorld(), Trajectory.Points.Last().Position, 20.0f, FColor::Red, Duration, -1, TEXT("trajectory"));
 }
 
 void UDebugVisualizer::DrawTrackingState(const FTrajectoryPoint& DesiredState, const FVector& CurrentPosition)
@@ -129,18 +138,20 @@ void UDebugVisualizer::DrawTrackingState(const FTrajectoryPoint& DesiredState, c
 	if (!bShowTrackingState || !GetWorld())
 		return;
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+
 	// 绘制期望位置
-	DrawDebugSphere(GetWorld(), DesiredState.Position, 15.0f, 8, FColor::Yellow, false, -1.0f, 0, 2.0f);
+	Buffer->AddSphere(GetWorld(), DesiredState.Position, 15.0f, FColor::Yellow, -1.0f, -1, TEXT("tracking"));
 
 	// 绘制从当前位置到期望位置的线
-	DrawDebugLine(GetWorld(), CurrentPosition, DesiredState.Position, FColor::Orange, false, -1.0f, 0, 1.5f);
+	Buffer->AddLine(GetWorld(), CurrentPosition, DesiredState.Position, FColor::Orange, 1.5f, -1.0f, -1, TEXT("tracking"));
 
 	// 绘制期望速度方向
 	if (!DesiredState.Velocity.IsNearlyZero())
 	{
 		FVector VelocityEnd = DesiredState.Position + DesiredState.Velocity.GetSafeNormal() * 50.0f;
-		DrawDebugDirectionalArrow(GetWorld(), DesiredState.Position, VelocityEnd, 15.0f,
-			FColor::Cyan, false, -1.0f, 0, 2.0f);
+		Buffer->AddArrow(GetWorld(), DesiredState.Position, VelocityEnd, 15.0f,
+			FColor::Cyan, 2.0f, -1.0f, -1, TEXT("tracking"));
 	}
 
 	// 显示跟踪误差（降低文字绘制频率）
@@ -151,8 +162,8 @@ void UDebugVisualizer::DrawTrackingState(const FTrajectoryPoint& DesiredState, c
 		TrackingTextTimer = 0.f;
 		float TrackingError = FVector::Dist(CurrentPosition, DesiredState.Position);
 		FString ErrorText = FString::Printf(TEXT("Error: %.1f cm"), TrackingError);
-		DrawDebugString(GetWorld(), DesiredState.Position + FVector(0, 0, 30), ErrorText, nullptr,
-			TrackingError > 50.0f ? FColor::Red : FColor::Green, TextDrawInterval, true);
+		Buffer->AddText(GetWorld(), DesiredState.Position + FVector(0, 0, 30), ErrorText,
+			TrackingError > 50.0f ? FColor::Red : FColor::Green, TextDrawInterval, -1, TEXT("label"));
 	}
 }
 
@@ -161,6 +172,8 @@ void UDebugVisualizer::DrawObstacles(const TArray<FObstacleInfo>& Obstacles, FCo
 	if (!GetWorld())
 		return;
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+
 	for (const FObstacleInfo& Obstacle : Obstacles)
 	{
 		FColor ObstacleColor = Obstacle.bIsDynamic ? FColor::Orange : Color;
@@ -168,12 +181,12 @@ void UDebugVisualizer::DrawObstacles(const TArray<FObstacleInfo>& Obstacles, FCo
 		switch (Obstacle.Type)
 		{
 		case EObstacleType::Sphere:
-			DrawDebugSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.X, 16, ObstacleColor, false, Duration, 0, 2.0f);
+			Buffer->AddSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.X, ObstacleColor, Duration, -1, TEXT("obstacle"));
 			break;
 
 		case EObstacleType::Box:
-			DrawDebugBox(GetWorld(), Obstacle.Center, Obstacle.Extents, Obstacle.Rotation.Quaternion(),
-				ObstacleColor, false, Duration, 0, 2.0f);
+			Buffer->AddBox(GetWorld(), Obstacle.Center, Obstacle.Extents, Obstacle.Rotation.Quaternion(),
+				ObstacleColor, Duration, -1, TEXT("obstacle"));
 			break;
 
 		case EObstacleType::Cylinder:
@@ -191,14 +204,14 @@ void UDebugVisualizer::DrawObstacles(const TArray<FObstacleInfo>& Obstacles, FCo
 					FVector P1Bottom = Obstacle.Center + FVector(FMath::Cos(Angle1) * Obstacle.Extents.X,
 						FMath::Sin(Angle1) * Obstacle.Extents.X, -Obstacle.Extents.Z);
 
-					DrawDebugLine(GetWorld(), P1Top, P2Top, ObstacleColor, false, Duration, 0, 2.0f);
-					DrawDebugLine(GetWorld(), P1Top, P1Bottom, ObstacleColor, false, Duration, 0, 2.0f);
+					Buffer->AddLine(GetWorld(), P1Top, P2Top, ObstacleColor, 2.0f, Duration, -1, TEXT("obstacle"));
+					Buffer->AddLine(GetWorld(), P1Top, P1Bottom, ObstacleColor, 2.0f, Duration, -1, TEXT("obstacle"));
 				}
 			}
 			break;
 
 		default:
-			DrawDebugSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.GetMax(), 16, ObstacleColor, false, Duration, 0, 2.0f);
+			Buffer->AddSphere(GetWorld(), Obstacle.Center, Obstacle.Extents.GetMax(), ObstacleColor, Duration, -1, TEXT("obstacle"));
 			break;
 		}
 	}
@@ -209,18 +222,20 @@ void UDebugVisualizer::DrawWaypoints(const TArray<FVector>& Waypoints, float Rad
 	if (!GetWorld())
 		return;
 
+	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
+
 	for (int32 i = 0; i < Waypoints.Num(); ++i)
 	{
-		DrawDebugSphere(GetWorld(), Waypoints[i], Radius, 12, Color, false, Duration, 0, 2.0f);
+		Buffer->AddSphere(GetWorld(), Waypoints[i], Radius, Color, Duration, -1, TEXT("waypoint"));
 
 		// 绘制航点编号
 		FString Label = FString::Printf(TEXT("%d"), i);
-		DrawDebugString(GetWorld(), Waypoints[i] + FVector(0, 0, Radius + 10.0f), Label, nullptr, Color, Duration);
+		Buffer->AddText(GetWorld(), Waypoints[i] + FVector(0, 0, Radius + 10.0f), Label, Color, Duration, -1, TEXT("waypoint"));
 
 		// 绘制连接线
 		if (i > 0)
 		{
-			DrawDebugLine(GetWorld(), Waypoints[i - 1], Waypoints[i], Color, false, Duration, 0, 1.5f);
+			Buffer->AddLine(GetWorld(), Waypoints[i - 1], Waypoints[i], Color, 1.5f, Duration, -1, TEXT("waypoint"));
 		}
 	}
 }

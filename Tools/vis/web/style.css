@@ -114,6 +114,11 @@ body {
 .chart-card { padding: 8px 8px 4px; }
 .chart { width: 100%; height: 110px; display: block; background: var(--bg); border-radius: 4px; }
 
+/* uPlot chart overrides */
+.chart-card .u-wrap { width: 100% !important; }
+.chart-card .u-legend { display: none; }
+.chart-card .u-over { background: transparent; }
+
 .events { font-size: 11px; max-height: 90px; overflow-y: auto; line-height: 1.6; }
 .events .ev { padding: 2px 0; border-bottom: 1px dashed var(--border); }
 .events .ev .ev-t { color: var(--accent); margin-right: 6px; }
@@ -242,4 +247,129 @@ body {
   transition: opacity 0.2s, transform 0.2s; pointer-events: none; z-index: 100;
 }
 .cp-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ---- 顶栏仿真状态徽章 ---- */
+.topbar-sim-badge { font-size: 11px; padding: 3px 10px; border-radius: 10px; font-weight: 600; }
+.topbar-sim-badge.running { background: rgba(81,207,102,0.18); color: var(--ok); }
+.topbar-sim-badge.stopped { background: rgba(139,149,184,0.15); color: var(--muted); }
+
+/* ---- 仿真控制面板 ---- */
+#sim-panel { padding: 10px; border-bottom: 1px solid var(--border); }
+.sim-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.sim-title { font-weight: 700; font-size: 13px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 10px; }
+.sim-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.sim-badge { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 10px; }
+.sim-badge.running { background: rgba(81,207,102,0.18); color: var(--ok); }
+.sim-badge.stopped { background: rgba(139,149,184,0.15); color: var(--muted); }
+.sim-elapsed { font-size: 11px; }
+.sim-param-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.sim-input { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.sim-input input { background: var(--card2); border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 6px; font-size: 13px; }
+.sim-label { font-size: 10px; color: var(--muted); }
+.sim-btn-row { display: flex; gap: 8px; }
+.sim-btn { flex: 1; border: none; border-radius: 6px; padding: 10px; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
+.sim-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.sim-btn-start { background: var(--ok); color: #fff; }
+.sim-btn-start:hover:not(:disabled) { opacity: 0.85; }
+.sim-btn-stop { background: var(--bad); color: #fff; }
+.sim-btn-stop:hover:not(:disabled) { opacity: 0.85; }
+
+.layer-panel {
+  position: absolute;
+  top: 8px; left: 8px;
+  background: rgba(16, 19, 32, 0.88);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  max-height: 70vh;
+  overflow-y: auto;
+  z-index: 10;
+  font-size: 12px;
+  min-width: 130px;
+}
+.layer-master { display: flex; align-items: center; gap: 5px; padding-bottom: 4px; }
+.layer-sep { height: 1px; background: var(--border); margin: 4px 0; }
+.layer-item { display: flex; align-items: center; gap: 5px; padding: 2px 0; cursor: pointer; }
+.layer-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex-shrink: 0; }
+
+.task-select {
+  width: 100%;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 6px;
+  font-size: 12px;
+}
+
+.sim-panel { display: flex; flex-direction: column; gap: 8px; }
+.sim-section { display: flex; flex-direction: column; gap: 3px; }
+.sim-label { font-size: 10px; color: var(--muted); }
+.sim-input {
+  background: var(--card2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 4px; padding: 6px; font-size: 13px;
+}
+.sim-row3 { display: flex; gap: 4px; }
+.sim-input-sm {
+  flex: 1; background: var(--card2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 4px; padding: 6px 4px; font-size: 12px; min-width: 0;
+}
+.sim-actions { display: flex; gap: 6px; margin-top: 4px; }
+.sim-btn { flex: 1; border: none; border-radius: 6px; padding: 9px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.sim-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.sim-btn-start { background: var(--ok); color: #fff; }
+.sim-btn-start:hover:not(:disabled) { opacity: 0.85; }
+.sim-btn-stop { background: var(--bad); color: #fff; }
+.sim-btn-stop:hover { opacity: 0.85; }
+.sim-badge { font-size: 11px; margin-top: 2px; }
+.sim-badge.online { color: var(--ok); }
+.sim-badge.offline { color: var(--muted); }
+
+/* ---- 视角跟随面板 ---- */
+.camera-panel {
+  position: absolute;
+  bottom: 12px; left: 8px;
+  background: rgba(16, 19, 32, 0.88);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px 8px;
+  z-index: 10;
+  font-size: 12px;
+  min-width: 130px;
+  pointer-events: auto;
+}
+.camera-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 5px;
+}
+.camera-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.camera-btn {
+  background: var(--card2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  font-variant-numeric: tabular-nums;
+}
+.camera-btn:hover {
+  background: var(--border);
+}
+.camera-btn.active {
+  background: rgba(79, 140, 255, 0.2);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
 

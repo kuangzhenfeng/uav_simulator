@@ -41,6 +41,7 @@ netstat -ano | findstr ":%PORT% " | findstr "LISTENING" >nul 2>&1
 if not errorlevel 1 (
     echo [VIS] 端口 %PORT% 已有服务运行,复用: %URL%
     echo [VIS] 访问地址: %URL%
+    start "" "%URL%"
     exit /b 0
 )
 
@@ -71,4 +72,5 @@ exit /b 0
 :ready
 echo [VIS] 可视化已启动: %URL%
 echo [VIS] 服务日志: Logs\vis_server.log
+start "" "%URL%"
 exit /b 0
