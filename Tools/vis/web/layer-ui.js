@@ -2,13 +2,14 @@ import { App } from './app.js';
 import { log } from './logger.js';
 
 const KNOWN_LAYERS = [
-  'path', 'trajectory', 'tracking', 'obstacle', 'search_bounds', 'waypoint', 'nmpc',
+  'path', 'trajectory', 'tracking', 'obstacle', 'perceived', 'search_bounds', 'waypoint', 'nmpc',
   'body_axes', 'velocity', 'history_trail', 'tracking_alt', 'label', 'obstacle_mgr',
   'planner_path', 'sensor_traces', 'sensor_points', 'sensor_detected', 'hud_stability',
 ];
 
 const LAYER_LABELS = {
   path: '规划路径', trajectory: '优化轨迹', tracking: '跟踪点', obstacle: '障碍',
+  perceived: '感知障碍',
   search_bounds: '搜索边界', waypoint: '航点', nmpc: 'NMPC预测',
   body_axes: '机体坐标', velocity: '速度向量', history_trail: '历史轨迹',
   tracking_alt: '跟踪期望', label: '文本标注', obstacle_mgr: '障碍管理器',
@@ -80,6 +81,7 @@ export function initLayerUI() {
 function layerColor(layer) {
   const colors = {
     path: '#00ff00', trajectory: '#4f8cff', tracking: '#ffff00', obstacle: '#ff0000',
+    perceived: '#ff8800',
     search_bounds: '#ffffff', waypoint: '#ff00ff', nmpc: '#ff922b',
     body_axes: '#ff6b6b', velocity: '#ffff00', history_trail: '#22b8cf',
     tracking_alt: '#ffff00', label: '#ffffff', obstacle_mgr: '#ff4444',

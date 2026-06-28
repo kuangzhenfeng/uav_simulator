@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "ScenarioTypes.h"
 #include "ScenarioDto.generated.h"
 
 class UScenario;
@@ -151,41 +152,6 @@ struct FScenarioDtoAgent
 	FString Mode = TEXT("Once"); // Once/Loop/PingPong
 };
 
-// ---- 障碍 ----
-
-USTRUCT(BlueprintType)
-struct FScenarioDtoObstacle
-{
-	GENERATED_BODY()
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto|Obstacle")
-	FString Type = TEXT("Box"); // Sphere/Box/Cylinder
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto|Obstacle")
-	FVector Center = FVector::ZeroVector;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto|Obstacle")
-	FVector Extents = FVector(100.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto|Obstacle")
-	float SafetyMargin = 50.0f;
-
-	/** Static/LinearVelocity/PatrolLoop/PatrolPingPong */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto|Obstacle")
-	FString Movement = TEXT("Static");
-
-	/** LinearVelocity 模式的匀速速度（cm/s） */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto|Obstacle")
-	FVector Velocity = FVector::ZeroVector;
-
-	/** 巡逻航点（cm，世界系） */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto|Obstacle")
-	TArray<FVector> PatrolPoints;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto|Obstacle")
-	float PatrolSpeed = 300.0f;
-};
-
 // ---- 顶层 DTO ----
 
 USTRUCT(BlueprintType)
@@ -195,9 +161,6 @@ struct FScenarioDto
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto")
 	FString Name = TEXT("WebScenario");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto")
-	int32 RandomSeed = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto")
 	FScenarioDtoSim Sim;
@@ -212,5 +175,5 @@ struct FScenarioDto
 	TArray<FScenarioDtoAgent> Fleet;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dto")
-	TArray<FScenarioDtoObstacle> Obstacles;
+	TArray<FScenarioObstacleEntry> Obstacles;
 };

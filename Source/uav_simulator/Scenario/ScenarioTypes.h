@@ -41,9 +41,8 @@ struct FScenarioObstacleEntry
 {
 	GENERATED_BODY()
 
-	/** 障碍物几何类型 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Obstacle")
-	EObstacleType Type = EObstacleType::Sphere;
+	EObstacleType Type = EObstacleType::Box;
 
 	/** 中心位置（世界坐标系，cm） */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Obstacle")
@@ -248,7 +247,7 @@ struct FScenarioAlgorithmOverride
 
 /**
  * 场景资产外壳：组合引用式 DataAsset，声明一次完整仿真。
- * 引用五个可复用子资产 + 一个 RandomSeed + 可选算法覆盖。
+ * 引用五个可复用子资产 + 可选算法覆盖。
  * 运行时由 UScenarioLoader 装配。
  */
 UCLASS(BlueprintType)
@@ -264,10 +263,6 @@ public:
 	/** 场景描述 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario", meta = (MultiLine = true))
 	FString Description;
-
-	/** 随机种子（同 seed 同结果） */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario")
-	int32 RandomSeed = 0;
 
 	/** 障碍布局 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario")

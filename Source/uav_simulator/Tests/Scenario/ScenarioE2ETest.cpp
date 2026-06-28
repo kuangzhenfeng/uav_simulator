@@ -29,7 +29,6 @@ namespace
 	{
 		UScenario* Scenario = NewObject<UScenario>(Outer);
 		Scenario->Name = TEXT("StraightThroughObstacles");
-		Scenario->RandomSeed = 42;
 
 		// 障碍布局：路径上两个静态球障碍
 		UObstacleLayout* Layout = NewObject<UObstacleLayout>(Scenario);
@@ -177,7 +176,7 @@ bool FScenarioE2EVerdictPipelineTest::RunTest(const FString& Parameters)
 
 	// 写 JSON 到临时路径，验证可读回
 	const FString TempPath = FPaths::CreateTempFilename(*FPaths::ProjectIntermediateDir(), TEXT("E2EVerdict"), TEXT(".json"));
-	TestTrue(TEXT("JSON 写入成功"), UScenarioEvaluator::WriteResultJson(Scenario->Name, Scenario->RandomSeed, Verdict, TempPath));
+	TestTrue(TEXT("JSON 写入成功"), UScenarioEvaluator::WriteResultJson(Scenario->Name, Verdict, TempPath));
 
 	FString Content;
 	TestTrue(TEXT("JSON 可读回"), FFileHelper::LoadFileToString(Content, *TempPath));

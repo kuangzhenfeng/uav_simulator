@@ -252,8 +252,6 @@ body {
 .cp-history { font-size: 11px; max-height: 160px; overflow-y: auto; }
 .cp-hist-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; border-bottom: 1px dashed var(--border); }
 .cp-hist-t { color: var(--accent); min-width: 56px; }
-.cp-preset-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); font-size: 12px; }
-.cp-preset-row span { flex: 1; }
 .cp-toast {
   position: fixed; bottom: 64px; left: 50%; transform: translateX(-50%) translateY(20px);
   background: var(--card); color: var(--text); border: 1px solid var(--accent);

@@ -11,23 +11,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogScenarioFactory, Log, All);
 // 大小写敏感比对；空串与不匹配返回默认值。
 // Web 契约侧枚举名固定（见 ScenarioDto.h 注释），故用 CaseSensitive 避免误匹配。
 
-EObstacleType UScenarioFactory::ParseObstacleType(const FString& InName)
-{
-	if (InName.Equals(TEXT("Sphere"), ESearchCase::CaseSensitive)) return EObstacleType::Sphere;
-	if (InName.Equals(TEXT("Cylinder"), ESearchCase::CaseSensitive)) return EObstacleType::Cylinder;
-	// Custom 仅供资产层，Web 契约不暴露；不匹配回退 Box（最常见的工业级障碍几何）。
-	return EObstacleType::Box;
-}
-
-EObstacleMovementType UScenarioFactory::ParseObstacleMovementType(const FString& InName)
-{
-	if (InName.Equals(TEXT("Static"), ESearchCase::CaseSensitive)) return EObstacleMovementType::Static;
-	if (InName.Equals(TEXT("LinearVelocity"), ESearchCase::CaseSensitive)) return EObstacleMovementType::LinearVelocity;
-	if (InName.Equals(TEXT("PatrolLoop"), ESearchCase::CaseSensitive)) return EObstacleMovementType::PatrolLoop;
-	if (InName.Equals(TEXT("PatrolPingPong"), ESearchCase::CaseSensitive)) return EObstacleMovementType::PatrolPingPong;
-	return EObstacleMovementType::Static;
-}
-
 EWindFieldType UScenarioFactory::ParseWindFieldType(const FString& InName)
 {
 	if (InName.Equals(TEXT("None"), ESearchCase::CaseSensitive)) return EWindFieldType::None;
@@ -83,25 +66,10 @@ UScenario* UScenarioFactory::BuildFromDto(const FScenarioDto& Dto, UObject* Oute
 
 	Scenario->Name = Dto.Name;
 	// Description 不在 DTO 中（DTO 极简），留空。
-	Scenario->RandomSeed = Dto.RandomSeed;
 
 	// ---- 障碍布局 ----
 	UObstacleLayout* ObstacleLayout = NewObject<UObstacleLayout>(Scenario);
-	ObstacleLayout->Obstacles.Reserve(Dto.Obstacles.Num());
-	for (const FScenarioDtoObstacle& DtoObs : Dto.Obstacles)
-	{
-		FScenarioObstacleEntry& Entry = ObstacleLayout->Obstacles.AddDefaulted_GetRef();
-		Entry.Type = ParseObstacleType(DtoObs.Type);
-		Entry.Center = DtoObs.Center;
-		Entry.Extents = DtoObs.Extents;
-		Entry.Rotation = FRotator::ZeroRotator; // DTO 无旋转字段
-		Entry.SafetyMargin = DtoObs.SafetyMargin;
-		Entry.MovementType = ParseObstacleMovementType(DtoObs.Movement);
-		Entry.Velocity = DtoObs.Velocity;
-		Entry.PatrolPoints = DtoObs.PatrolPoints;
-		Entry.PatrolSpeed = DtoObs.PatrolSpeed;
-	}
-	// TSoftObjectPtr 从硬指针隐式构造（TSoftObjectPtr(UObject*) 构造存强引用）。
+	ObstacleLayout->Obstacles = Dto.Obstacles; // Direct copy — already typed
 	Scenario->ObstacleLayout = ObstacleLayout;
 
 	// ---- 风场档案 ----

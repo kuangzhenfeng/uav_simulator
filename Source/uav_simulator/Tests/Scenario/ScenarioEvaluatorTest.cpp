@@ -193,14 +193,13 @@ bool FScenarioWriteResultJsonTest::RunTest(const FString& Parameters)
 	Verdict.Metrics.EnergyBudgetUsed = 0.62f;
 	Verdict.Metrics.bCollided = false;
 
-	const bool bWritten = UScenarioEvaluator::WriteResultJson(TEXT("StraightThrough"), 42, Verdict, TempPath);
+	const bool bWritten = UScenarioEvaluator::WriteResultJson(TEXT("StraightThrough"), Verdict, TempPath);
 	TestTrue(TEXT("JSON 写入成功"), bWritten);
 
 	FString Content;
 	TestTrue(TEXT("JSON 可读回"), FFileHelper::LoadFileToString(Content, *TempPath));
 	TestTrue(TEXT("含 verdict PASS"), Content.Contains(TEXT("\"verdict\": \"PASS\"")));
 	TestTrue(TEXT("含场景名"), Content.Contains(TEXT("\"scenario\": \"StraightThrough\"")));
-	TestTrue(TEXT("含 seed"), Content.Contains(TEXT("\"seed\": 42")));
 
 	// 清理临时文件
 	IPlatformFile& PF = FPlatformFileManager::Get().GetPlatformFile();
@@ -224,7 +223,7 @@ bool FScenarioWriteResultJsonFailTest::RunTest(const FString& Parameters)
 	Verdict.Failures.Add(TEXT("Collision"));
 	Verdict.Failures.Add(TEXT("Timeout(55.0>30.0)"));
 
-	const bool bWritten = UScenarioEvaluator::WriteResultJson(TEXT("FailingScenario"), 7, Verdict, TempPath);
+	const bool bWritten = UScenarioEvaluator::WriteResultJson(TEXT("FailingScenario"), Verdict, TempPath);
 	TestTrue(TEXT("JSON 写入成功"), bWritten);
 
 	FString Content;

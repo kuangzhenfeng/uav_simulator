@@ -9,6 +9,7 @@ import argparse
 import json
 import logging
 import os
+import random
 import sys
 import time
 import threading
@@ -18,7 +19,6 @@ from urllib.parse import urlparse
 
 from coords import dir_to_web, to_web
 from control_proxy import forward_to_control, resolve_control_port
-import presets as preset_store
 from sim_manager import SimManager
 from state import NdjsonState, State, delete_task, list_tasks, load_task_ndjson, read_scenario_result, resolve_target
 from validation import (
@@ -51,7 +51,38 @@ validate_scenario_dto = validate_scenario_dto
 
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
-PRESET_DIR = preset_store.PRESET_DIR
+
+
+def _default_random_obstacles(count=10, seed=42):
+    rng = random.Random(seed)
+    obstacle_types = ["Box", "Sphere", "Cylinder"]
+    obstacles = []
+    used_centers = set()
+    while len(obstacles) < count:
+        x = rng.randrange(8, 45, 4)
+        y = rng.randrange(-12, 13, 3)
+        z = rng.choice([5, 5.5, 6])
+        center_key = (x, y, z)
+        if center_key in used_centers:
+            continue
+        used_centers.add(center_key)
+        obstacle_type = rng.choice(obstacle_types)
+        if obstacle_type == "Sphere":
+            radius = rng.choice([1.5, 2, 2.5])
+            extents = [radius, radius, radius]
+        elif obstacle_type == "Cylinder":
+            radius = rng.choice([1, 1.5, 2])
+            extents = [radius, radius, rng.choice([4, 5, 6])]
+        else:
+            extents = [rng.choice([1.5, 2, 2.5]), rng.choice([1.5, 2, 2.5]), rng.choice([1.5, 2, 2.5])]
+        obstacles.append({
+            "type": obstacle_type,
+            "center": [x, y, z],
+            "extents": extents,
+            "movement": "Static",
+            "safetyMargin": 0.5,
+        })
+    return obstacles
 
 
 # ---------------------------------------------------------------------------
@@ -81,16 +112,7 @@ SCHEMA = {
             "yaw": 0, "isLeader": True, "mode": "Once",
             "waypoints": [{"pos": [50, 0, 5]}],
         }],
-        "obstacles": [
-            {"type": "Box", "center": [8, -4, 5], "extents": [2, 2, 2], "movement": "Static", "safetyMargin": 0.5},
-            {"type": "Box", "center": [8, 4, 5], "extents": [2, 2, 2], "movement": "Static", "safetyMargin": 0.5},
-            {"type": "Box", "center": [16, 0, 5], "extents": [3, 3, 3], "movement": "Static", "safetyMargin": 0.5},
-            {"type": "Sphere", "center": [24, -3, 6], "extents": [1.5, 1.5, 1.5], "movement": "Static", "safetyMargin": 0.5},
-            {"type": "Sphere", "center": [24, 3, 4], "extents": [1.5, 1.5, 1.5], "movement": "Static", "safetyMargin": 0.5},
-            {"type": "Box", "center": [20, 0, 5], "extents": [1.5, 1.5, 1.5], "movement": "LinearVelocity", "velocity": [0, 3, 0], "safetyMargin": 0.5},
-            {"type": "Cylinder", "center": [32, 0, 0], "extents": [1, 1, 5], "movement": "Static", "safetyMargin": 0.5},
-            {"type": "Box", "center": [40, -2, 5], "extents": [2, 2, 2], "movement": "Static", "safetyMargin": 0.5},
-        ],
+        "obstacles": _default_random_obstacles(),
         "wind": {"type": "Constant", "steady": [3, 0, 0], "enabled": True,
                  "gustAmplitude": 2, "turbulenceIntensity": 1},
         "acceptance": {"requireAllWaypoints": True, "waypointRadiusCm": 300,
@@ -99,35 +121,6 @@ SCHEMA = {
         "sim": {"slomo": 8, "durationSec": 60, "controlMode": "", "mpcType": ""},
     },
 }
-
-
-def _sync_preset_dir():
-    preset_store.PRESET_DIR = PRESET_DIR
-
-
-def _preset_path(name):
-    _sync_preset_dir()
-    return preset_store.preset_path(name)
-
-
-def list_presets():
-    _sync_preset_dir()
-    return preset_store.list_presets()
-
-
-def read_preset(name):
-    _sync_preset_dir()
-    return preset_store.read_preset(name)
-
-
-def write_preset(name, dto):
-    _sync_preset_dir()
-    return preset_store.write_preset(name, dto)
-
-
-def delete_preset(name):
-    _sync_preset_dir()
-    return preset_store.delete_preset(name)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -174,16 +167,6 @@ class Handler(BaseHTTPRequestHandler):
             schema = dict(SCHEMA)
             schema["controlAvailable"] = self.state_holder.is_control_available()
             self._send(200, "application/json", json.dumps(schema).encode())
-        elif path == "/api/presets":
-            self._send(200, "application/json",
-                       json.dumps({"presets": list_presets()}).encode())
-        elif path.startswith("/api/presets/"):
-            name = path[len("/api/presets/"):]
-            data = read_preset(name)
-            if data is None:
-                self._send(404, "application/json", b'{"ok":false,"error":"not found"}')
-            else:
-                self._send(200, "application/json", json.dumps(data).encode())
         elif path == "/api/control/status":
             ok, result = forward_to_control(self.state_holder, "/status", None)
             result["controlAvailable"] = self.state_holder.is_control_available()
@@ -281,27 +264,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "application/json", json.dumps(result).encode())
             return
 
-        # 预设库：保存/覆盖
-        if path.startswith("/api/presets/"):
-            name = path[len("/api/presets/"):]
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            raw = self.rfile.read(length) if length > 0 else b"{}"
-            try:
-                dto = json.loads(raw.decode("utf-8")) if raw else {}
-            except ValueError:
-                self._send(400, "application/json", b'{"ok":false,"error":"invalid json"}')
-                return
-            ok_msg, err = validate_scenario_dto(dto)
-            if not ok_msg:
-                self._send(400, "application/json",
-                           json.dumps({"ok": False, "error": err}).encode())
-                return
-            ok, werr = write_preset(name, dto)
-            code = 200 if ok else 400
-            payload = {"ok": ok} if ok else {"ok": False, "error": werr}
-            self._send(code, "application/json", json.dumps(payload).encode())
-            return
-
         # 统一校验：仅接受已知控制路由
         valid = ("/api/control/reload", "/api/control/slomo",
                  "/api/control/wind", "/api/control/params",
@@ -340,13 +302,6 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         parsed = urlparse(self.path)
         path = parsed.path
-        if path.startswith("/api/presets/"):
-            name = path[len("/api/presets/"):]
-            ok, err = delete_preset(name)
-            code = 200 if ok else 404
-            payload = {"ok": True} if ok else {"ok": False, "error": err}
-            self._send(code, "application/json", json.dumps(payload).encode())
-            return
         if path.startswith("/api/task/"):
             task_id = path[len("/api/task/"):]
             ok = delete_task(self.state_holder.logs_dir, task_id)

@@ -22,7 +22,6 @@ namespace
 	{
 		FScenarioDto Dto;
 		Dto.Name = TEXT("FactoryRoundTrip");
-		Dto.RandomSeed = 12345;
 
 		// 仿真控制
 		Dto.Sim.ControlMode = TEXT("Position");
@@ -82,31 +81,31 @@ namespace
 
 		// 障碍：覆盖三种几何 + 两种运动模型
 		{
-			FScenarioDtoObstacle& Obs = Dto.Obstacles.AddDefaulted_GetRef();
-			Obs.Type = TEXT("Sphere");
-			Obs.Center = FVector(3000.0f, 0.0f, 200.0f);
-			Obs.Extents = FVector(150.0f);
-			Obs.SafetyMargin = 30.0f;
-			Obs.Movement = TEXT("Static");
+			FScenarioObstacleEntry& Entry = Dto.Obstacles.AddDefaulted_GetRef();
+			Entry.Type = EObstacleType::Sphere;
+			Entry.Center = FVector(3000.0f, 0.0f, 200.0f);
+			Entry.Extents = FVector(150.0f);
+			Entry.SafetyMargin = 30.0f;
+			Entry.MovementType = EObstacleMovementType::Static;
 		}
 		{
-			FScenarioDtoObstacle& Obs = Dto.Obstacles.AddDefaulted_GetRef();
-			Obs.Type = TEXT("Box");
-			Obs.Center = FVector(4000.0f, 0.0f, 200.0f);
-			Obs.Extents = FVector(200.0f, 100.0f, 50.0f);
-			Obs.SafetyMargin = 40.0f;
-			Obs.Movement = TEXT("LinearVelocity");
-			Obs.Velocity = FVector(100.0f, 0.0f, 0.0f);
+			FScenarioObstacleEntry& Entry = Dto.Obstacles.AddDefaulted_GetRef();
+			Entry.Type = EObstacleType::Box;
+			Entry.Center = FVector(4000.0f, 0.0f, 200.0f);
+			Entry.Extents = FVector(200.0f, 100.0f, 50.0f);
+			Entry.SafetyMargin = 40.0f;
+			Entry.MovementType = EObstacleMovementType::LinearVelocity;
+			Entry.Velocity = FVector(100.0f, 0.0f, 0.0f);
 		}
 		{
-			FScenarioDtoObstacle& Obs = Dto.Obstacles.AddDefaulted_GetRef();
-			Obs.Type = TEXT("Cylinder");
-			Obs.Center = FVector(4500.0f, 1000.0f, 200.0f);
-			Obs.Extents = FVector(120.0f, 120.0f, 300.0f);
-			Obs.SafetyMargin = 50.0f;
-			Obs.Movement = TEXT("PatrolLoop");
-			Obs.PatrolPoints = { FVector(4500.0f, 1000.0f, 200.0f), FVector(4500.0f, 2000.0f, 200.0f) };
-			Obs.PatrolSpeed = 250.0f;
+			FScenarioObstacleEntry& Entry = Dto.Obstacles.AddDefaulted_GetRef();
+			Entry.Type = EObstacleType::Cylinder;
+			Entry.Center = FVector(4500.0f, 1000.0f, 200.0f);
+			Entry.Extents = FVector(120.0f, 120.0f, 300.0f);
+			Entry.SafetyMargin = 50.0f;
+			Entry.MovementType = EObstacleMovementType::PatrolLoop;
+			Entry.PatrolPoints = { FVector(4500.0f, 1000.0f, 200.0f), FVector(4500.0f, 2000.0f, 200.0f) };
+			Entry.PatrolSpeed = 250.0f;
 		}
 
 		return Dto;
@@ -131,7 +130,6 @@ bool FScenarioFactoryRoundTripTest::RunTest(const FString& Parameters)
 
 	// 外壳字段
 	TestEqual(TEXT("Name 往返"), Scenario->Name, Dto.Name);
-	TestEqual(TEXT("RandomSeed 往返"), Scenario->RandomSeed, Dto.RandomSeed);
 
 	// ---- 机队 ----
 	const UObstacleLayout* Layout = Scenario->ObstacleLayout.Get();
@@ -235,9 +233,9 @@ bool FScenarioFactoryEnumFallbackTest::RunTest(const FString& Parameters)
 	FScenarioDtoWaypoint& WP = Agent.Waypoints.AddDefaulted_GetRef();
 	WP.Pos = FVector(1000.0f, 0.0f, 0.0f);
 
-	FScenarioDtoObstacle& Obs = Dto.Obstacles.AddDefaulted_GetRef();
-	Obs.Type = TEXT("Dodecahedron");
-	Obs.Movement = TEXT("Teleport");
+	FScenarioObstacleEntry& Obs = Dto.Obstacles.AddDefaulted_GetRef();
+	Obs.Type = EObstacleType::Box;
+	Obs.MovementType = EObstacleMovementType::Static;
 
 	// 不应崩溃，且应回退到合理默认值
 	UScenario* Scenario = UScenarioFactory::BuildFromDto(Dto, GetTransientPackage());

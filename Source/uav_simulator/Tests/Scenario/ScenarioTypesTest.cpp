@@ -22,7 +22,6 @@ bool FScenarioTypesSmokeTest::RunTest(const FString& Parameters)
 	// UScenario 默认状态：无名称、随机种子为 0、所有子资产引用为空、算法覆盖默认关闭
 	UScenario* Scenario = NewObject<UScenario>();
 	TestNotNull(TEXT("UScenario 可实例化"), Scenario);
-	TestEqual(TEXT("默认随机种子为 0"), Scenario->RandomSeed, 0);
 	TestTrue(TEXT("默认算法覆盖关闭(控制模式)"), !Scenario->AlgorithmOverride.bOverrideControlMode);
 	TestTrue(TEXT("默认算法覆盖关闭(MPC类型)"), !Scenario->AlgorithmOverride.bOverrideMPCType);
 	TestNull(TEXT("默认无障碍布局引用"), Scenario->ObstacleLayout.Get());

@@ -201,21 +201,29 @@ void UTelemetryRecorder::WriteStaticOnce(float SimTime)
 
 	if (SceneProxy)
 	{
-		// ---- obstacle（仅场景静态障碍） ----
+		// ---- obstacle（场景静态障碍 + 感知障碍分 type 输出） ----
 		if (UObstacleManager* ObsMgr = SceneProxy->GetObstacleManager())
 		{
-			for (const FObstacleInfo& O : ObsMgr->GetAllObstacles())
+			auto WriteObstacle = [this, SimTime](const FObstacleInfo& O, const TCHAR* TypeTag)
 			{
-				if (O.bIsPerceived) continue;
 				WriteLine(FString::Printf(
-					TEXT("{\"type\":\"obstacle\",\"t\":%.3f,\"id\":%d,\"oType\":%d,"
+					TEXT("{\"type\":\"%s\",\"t\":%.3f,\"id\":%d,\"oType\":%d,"
 						"\"center\":[%.2f,%.2f,%.2f],\"extents\":[%.2f,%.2f,%.2f],"
 						"\"actor\":\"%s\",\"dynamic\":%s}"),
+					TypeTag,
 					SimTime, O.ObstacleID, (int32)O.Type,
 					O.Center.X, O.Center.Y, O.Center.Z,
 					O.Extents.X, O.Extents.Y, O.Extents.Z,
 					*JsonEscape(O.LinkedActor.IsValid() ? O.LinkedActor->GetName() : TEXT("")),
 					O.bIsDynamic ? TEXT("true") : TEXT("false")));
+			};
+			for (const FObstacleInfo& O : ObsMgr->GetAllObstacles())
+			{
+				if (!O.bIsPerceived) WriteObstacle(O, TEXT("obstacle"));
+			}
+			for (const FObstacleInfo& O : ObsMgr->GetAllObstacles())
+			{
+				if (O.bIsPerceived) WriteObstacle(O, TEXT("perceivedObstacle"));
 			}
 		}
 

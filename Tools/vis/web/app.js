@@ -238,6 +238,7 @@ function onNewData() {
 
   if (!d.agents) d.agents = [];
   if (!d.obstacles) d.obstacles = [];
+  if (!d.perceivedObstacles) d.perceivedObstacles = [];
   if (!d.waypoints) d.waypoints = [];
 
   App.durationSec = Math.max((d.duration_ms || 0) / 1000, 0.001);
@@ -262,7 +263,7 @@ function onNewData() {
   // 消除每帧销毁重建 ground/agent/obstacle 的主线程卡顿。
   const structKey = [
     App.currentTaskId ?? '', d.reloadEpoch ?? '', d.agents.length,
-    (d.obstacles || []).length, (d.waypoints || []).length,
+    (d.obstacles || []).length, (d.perceivedObstacles || []).length, (d.waypoints || []).length,
     d.agents.map(a => `${a.id}:${a.model}:${(a.initPos || []).map(x => x.toFixed(1)).join(',')}`).join('|'),
   ].join('#');
 
@@ -365,9 +366,14 @@ function updateScrubUI() {
 
   // 实时模式下 durationSec 是"已用时"而非"总时长"，scrubber 无百分比可言；
   // 且 cursorT 被 onNewData 持续同步到 durationSec，渲染会永远顶到 100% 满格。
+  // durationSec 为 0(冷启动/无数据) 时 (cursorT/durationSec) = NaN, 浏览器会
+  // 把 range 回退到 min/max 中点(500), 表现为"进度条默认在中间"。此时显式置 0。
   if (scrub) {
     scrub.disabled = live;
-    if (!live) scrub.value = (App.cursorT / App.durationSec) * 1000;
+    if (!live) {
+      const ratio = App.durationSec > 0 ? (App.cursorT / App.durationSec) : 0;
+      scrub.value = String(ratio * 1000);
+    }
   }
   if (badge) badge.hidden = !live;
   if (label) {

@@ -166,7 +166,18 @@ def test_unknown_type_does_not_change_snapshot_schema():
     state.feed({"type": "unknown", "t": 1, "value": 123})
 
     snapshot = state.snapshot()
-    assert {"scenario", "duration_ms", "reloadEpoch", "agents", "obstacles", "dynamicActorCount", "waypoints", "wind", "verdict", "summary", "events", "series"}.issubset(snapshot)
+    assert {"scenario", "duration_ms", "reloadEpoch", "agents", "obstacles", "perceivedObstacles", "dynamicActorCount", "waypoints", "wind", "verdict", "summary", "events", "series"}.issubset(snapshot)
+
+
+def test_perceived_obstacle_stored_separately():
+    state = NdjsonState()
+
+    state.feed({"type": "perceivedObstacle", "id": 99, "oType": 1, "center": [100, 200, 300], "extents": [50, 50, 50], "actor": "test"})
+
+    assert len(state.perceived_obstacles) == 1
+    assert len(state.obstacles) == 0
+    snapshot = state.snapshot()
+    assert len(snapshot["perceivedObstacles"]) == 1
 
 
 if __name__ == "__main__":

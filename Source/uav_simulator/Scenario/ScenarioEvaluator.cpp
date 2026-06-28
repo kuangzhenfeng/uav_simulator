@@ -84,7 +84,7 @@ FScenarioVerdict UScenarioEvaluator::Evaluate(const FScenarioMetrics& Metrics, c
 	return Verdict;
 }
 
-bool UScenarioEvaluator::WriteResultJson(const FString& ScenarioName, int32 Seed,
+bool UScenarioEvaluator::WriteResultJson(const FString& ScenarioName,
 	const FScenarioVerdict& Verdict, const FString& FilePath)
 {	const FString Path = FilePath.IsEmpty()
 		? FPaths::Combine(FPaths::ProjectDir(), TEXT("Logs/scenario_result.json"))
@@ -104,7 +104,6 @@ bool UScenarioEvaluator::WriteResultJson(const FString& ScenarioName, int32 Seed
 	const FString Json = FString::Printf(TEXT(
 		"{\n"
 		"  \"scenario\": \"%s\",\n"
-		"  \"seed\": %d,\n"
 		"  \"verdict\": \"%s\",\n"
 		"  \"metrics\": {\n"
 		"    \"waypointsReached\": %d,\n"
@@ -118,7 +117,6 @@ bool UScenarioEvaluator::WriteResultJson(const FString& ScenarioName, int32 Seed
 		"  \"failures\": [\n%s\n  ]\n"
 		"}\n"),
 		*ScenarioName.ReplaceQuotesWithEscapedQuotes(),
-		Seed,
 		*VerdictStr,
 		Verdict.Metrics.WaypointsReached,
 		Verdict.Metrics.WaypointsTotal,
@@ -334,7 +332,7 @@ void UScenarioEvaluatorComponent::SetTelemetryRecorder(UTelemetryRecorder* InRec
 void UScenarioEvaluatorComponent::EvaluateAndRecord(const FScenarioVerdict& Verdict, bool bFinal)
 {
 	// 写 scenario_result.json（权威判决，sim.sh 退出码协议依赖它）
-	UScenarioEvaluator::WriteResultJson(Scenario->Name, Scenario->RandomSeed, Verdict);
+	UScenarioEvaluator::WriteResultJson(Scenario->Name, Verdict);
 
 	// 同步推 telemetry.ndjson（可视化专用数据源），与 JSON 判决同一份口径
 	if (TelemetryRecorder.IsValid())

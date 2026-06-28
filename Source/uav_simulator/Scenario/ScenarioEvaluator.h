@@ -105,13 +105,12 @@ public:
 	/**
 	 * 把判决序列化为 scenario_result.json 并写入磁盘。
 	 * @param ScenarioName 场景名（写入 JSON 的 scenario 字段）
-	 * @param Seed         随机种子
 	 * @param Verdict      判决
 	 * @param FilePath     输出路径（默认 Logs/scenario_result.json）
 	 * @return 是否写入成功
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Scenario")
-	static bool WriteResultJson(const FString& ScenarioName, int32 Seed,
+	static bool WriteResultJson(const FString& ScenarioName,
 		const FScenarioVerdict& Verdict, const FString& FilePath = TEXT(""));
 };
 

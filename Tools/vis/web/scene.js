@@ -186,6 +186,7 @@ export function rebuildScene(d) {
   App.agentObjects.clear();
 
   rebuildObstacles(d.obstacles || []);
+  rebuildPerceivedObstacles(d.perceivedObstacles || []);
 
   for (const [, group] of App.debugGroups) {
     App.scene.remove(group);
@@ -228,6 +229,25 @@ function rebuildObstacles(obstacles) {
     if (mesh) App.obstacleGroup.add(mesh);
   }
   App.scene.add(App.obstacleGroup);
+}
+
+function rebuildPerceivedObstacles(obstacles) {
+  if (App.perceivedObstacleGroup) {
+    App.scene.remove(App.perceivedObstacleGroup);
+    App.perceivedObstacleGroup.traverse(c => {
+      c.geometry?.dispose?.();
+      c.material?.map?.dispose?.();
+      c.material?.dispose?.();
+    });
+  }
+  App.perceivedObstacleGroup = new THREE.Group();
+  App.perceivedObstacleGroup.visible = App.layerVisible.perceived !== false;
+  const perceivedColor = 0xff8800;
+  for (const o of obstacles) {
+    const mesh = makeObstacleMesh(o, perceivedColor);
+    if (mesh) App.perceivedObstacleGroup.add(mesh);
+  }
+  App.scene.add(App.perceivedObstacleGroup);
 }
 
 function makeObstacleMesh(o, color) {

@@ -10,6 +10,12 @@ const LEGACY_DEFAULT_ALTITUDE_M = 1;
 const DEFAULT_WAYPOINT = [50, 0, DEFAULT_ALTITUDE_M];
 const DEFAULT_OBSTACLE_CENTER = [25, 0, DEFAULT_ALTITUDE_M];
 
+function waypointPosition(waypoint) {
+  if (Array.isArray(waypoint)) return waypoint;
+  if (Array.isArray(waypoint?.pos)) return waypoint.pos;
+  return DEFAULT_WAYPOINT;
+}
+
 let schema = null;
 let dto = null;
 let controlStatusTimer = null;
@@ -41,7 +47,8 @@ function restoreConfig() {
     if (saved.fleet?.[0]) Object.assign(dto.fleet[0], saved.fleet[0]);
     if (saved.wind) Object.assign(dto.wind, saved.wind);
     if (saved.sim) Object.assign(dto.sim, saved.sim);
-    if (saved.obstacles) dto.obstacles = saved.obstacles;
+    // 空数组不覆盖 SCHEMA 默认值（JS 中 [] 是 truthy，旧代码会静默清空 10 个默认障碍）
+    if (saved.obstacles?.length) dto.obstacles = saved.obstacles;
     if (saved.name) dto.name = saved.name;
     log.debug('sim', '配置已从 localStorage 恢复', saved);
   } catch (e) {
@@ -52,7 +59,7 @@ function restoreConfig() {
 function saveConfig() {
   try {
     const fleet = dto.fleet[0] || {};
-    const wp = fleet.waypoints?.[0] || DEFAULT_WAYPOINT;
+    const wp = waypointPosition(fleet.waypoints?.[0]);
     dto.name = document.getElementById('sim-scenario')?.value || dto.name;
     dto.sim.durationSec = parseInt(document.getElementById('sim-duration')?.value) || dto.sim.durationSec;
     dto.sim.slomo = parseFloat(document.getElementById('sim-slomo')?.value) || dto.sim.slomo;
@@ -160,7 +167,7 @@ function renderForm() {
   const s = dto.sim;
   const w = dto.wind;
   const fleet = dto.fleet[0] || {};
-  const wp = fleet.waypoints?.[0] || DEFAULT_WAYPOINT;
+  const wp = waypointPosition(fleet.waypoints?.[0]);
 
   panel.innerHTML = `
     <div class="sim-section">

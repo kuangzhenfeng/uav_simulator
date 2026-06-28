@@ -72,7 +72,6 @@ def read_scenario_result(logs_dir):
             "elapsedS": round(m.get("elapsedSec", 0), 2),
             "collided": bool(m.get("collided", False)),
             "failures": data.get("failures", []),
-            "seed": data.get("seed"),
         }
     except (json.JSONDecodeError, OSError) as e:
         log.warning("read_scenario_result failed: %s", e)
@@ -113,6 +112,7 @@ class NdjsonState:
         # id -> {"opt":[[x,y,z],...], "plan":[[x,y,z],...], "nmpc":[[x,y,z,cost],...]}
         self.future = {}
         self.obstacles = {}        # id -> entry
+        self.perceived_obstacles = {}  # id -> entry (perceived obstacles)
         self.dynamic_count = 0
         self.waypoints = {}        # idx -> [x,y,z]
         self.wind_config = None
@@ -169,6 +169,7 @@ class NdjsonState:
             "wind_config": self._feed_wind_config,
             "spawn": self._feed_spawn,
             "obstacle": self._feed_obstacle,
+            "perceivedObstacle": self._feed_perceived_obstacle,
             "waypoint": self._feed_waypoint,
             "frame": self._feed_frame,
             "metrics": self._feed_metrics,
@@ -228,6 +229,21 @@ class NdjsonState:
             self.obstacles[oid] = entry
         else:
             self.obstacles[oid] = entry
+
+    def _feed_perceived_obstacle(self, obj, _t):
+        oid = obj.get("id")
+        center = obj.get("center") or [0, 0, 0]
+        extents = obj.get("extents") or [0, 0, 0]
+        entry = {
+            "id": oid,
+            "type": obstacle_type(obj.get("oType")),
+            "center": to_web(center[0], center[1], center[2]),
+            "extents": size_web(extents[0], extents[1], extents[2]),
+            "actor": obj.get("actor", ""),
+        }
+        if obj.get("dynamic"):
+            entry["_dyn"] = True
+        self.perceived_obstacles[oid] = entry
 
     def _feed_waypoint(self, obj, _t):
         idx = obj.get("idx")
@@ -387,7 +403,7 @@ class NdjsonState:
             return {"type": "arrow", "a": a, "b": b, "size": prim.get("sz", 10) / 100.0, "color": color_hex}
         if pt == "box":
             p = to_web(prim["p"][0], prim["p"][1], prim["p"][2])
-            return {"type": "box", "pos": p, "extents": [prim["e"][0]/100, prim["e"][1]/100, prim["e"][2]/100],
+            return {"type": "box", "pos": p, "extents": size_web(prim["e"][0], prim["e"][1], prim["e"][2]),
                     "quat": prim.get("q", [0, 0, 0, 1]), "color": color_hex}
         if pt == "point":
             p = to_web(prim["p"][0], prim["p"][1], prim["p"][2])
@@ -474,6 +490,7 @@ class NdjsonState:
             "reloadEpoch": self.reload_epoch,
             "agents": agents,
             "obstacles": [v for v in self.obstacles.values() if not v.get("_dyn")],
+            "perceivedObstacles": list(self.perceived_obstacles.values()),
             "dynamicActorCount": self.dynamic_count,
             "waypoints": waypoints,
             "wind": {"config": self.wind_config, "samples": self.wind_samples[-300:]},
@@ -735,7 +752,6 @@ def list_tasks(logs_dir):
                     r = json.load(f)
                 info["scenario"] = r.get("scenario", name)
                 info["verdict"] = r.get("verdict", "UNKNOWN")
-                info["seed"] = r.get("seed")
                 m = r.get("metrics", {})
                 info["elapsedS"] = round(m.get("elapsedSec", 0), 2)
                 info["collided"] = bool(m.get("collided", False))
@@ -785,7 +801,6 @@ def load_task_ndjson(logs_dir, task_id):
                 "elapsedS": round(m.get("elapsedSec", 0), 2),
                 "collided": bool(m.get("collided", False)),
                 "failures": rd.get("failures", []),
-                "seed": rd.get("seed"),
             }
         except (json.JSONDecodeError, OSError):
             pass

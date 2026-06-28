@@ -85,13 +85,31 @@ static TSharedPtr<FJsonObject> WebObj(const TSharedPtr<FJsonObject>& O, const TC
 	return (O.IsValid() && O->HasTypedField<EJson::Object>(K)) ? O->GetObjectField(K) : nullptr;
 }
 
+// 大小写敏感比对；空串与不匹配返回默认值。
+// Web 契约侧枚举名固定（见 ScenarioDto.h 注释），故用 CaseSensitive 避免误匹配。
+static EObstacleType ParseObstacleType(const FString& InName)
+{
+	if (InName.Equals(TEXT("Sphere"), ESearchCase::CaseSensitive)) return EObstacleType::Sphere;
+	if (InName.Equals(TEXT("Cylinder"), ESearchCase::CaseSensitive)) return EObstacleType::Cylinder;
+	// Custom 仅供资产层，Web 契约不暴露；不匹配回退 Box（最常见的工业级障碍几何）。
+	return EObstacleType::Box;
+}
+
+static EObstacleMovementType ParseObstacleMovementType(const FString& InName)
+{
+	if (InName.Equals(TEXT("Static"), ESearchCase::CaseSensitive)) return EObstacleMovementType::Static;
+	if (InName.Equals(TEXT("LinearVelocity"), ESearchCase::CaseSensitive)) return EObstacleMovementType::LinearVelocity;
+	if (InName.Equals(TEXT("PatrolLoop"), ESearchCase::CaseSensitive)) return EObstacleMovementType::PatrolLoop;
+	if (InName.Equals(TEXT("PatrolPingPong"), ESearchCase::CaseSensitive)) return EObstacleMovementType::PatrolPingPong;
+	return EObstacleMovementType::Static;
+}
+
 // 把 Web 契约 JSON 解析成 FScenarioDto（缺失字段保留默认值）。空 JSON 返回 false。
 static bool BuildDtoFromWebJson(const TSharedPtr<FJsonObject>& Json, FScenarioDto& Out)
 {
 	if (!Json.IsValid()) return false;
 
 	Out.Name = WebStr(Json, TEXT("name"), Out.Name);
-	Out.RandomSeed = WebNum(Json, TEXT("randomSeed"), Out.RandomSeed);
 
 	// ---- sim ----
 	if (TSharedPtr<FJsonObject> Sim = WebObj(Json, TEXT("sim")))
@@ -163,24 +181,23 @@ static bool BuildDtoFromWebJson(const TSharedPtr<FJsonObject>& Json, FScenarioDt
 		{
 			TSharedPtr<FJsonObject> O = Item->AsObject();
 			if (!O.IsValid()) continue;
-			FScenarioDtoObstacle& Obs = Out.Obstacles.AddDefaulted_GetRef();
-			Obs.Type = WebStr(O, TEXT("type"), Obs.Type);
-			Obs.Center = ParseWebVec(O, TEXT("center"), Obs.Center);
-			Obs.Extents = ParseWebVec(O, TEXT("extents"), Obs.Extents);
-			Obs.SafetyMargin = WebNum(O, TEXT("safetyMargin"), Obs.SafetyMargin);
-			Obs.Movement = WebStr(O, TEXT("movement"), Obs.Movement);
-			Obs.Velocity = ParseWebVec(O, TEXT("velocity"), Obs.Velocity);
-			Obs.PatrolSpeed = WebNum(O, TEXT("patrolSpeed"), Obs.PatrolSpeed);
+			FScenarioObstacleEntry& Entry = Out.Obstacles.AddDefaulted_GetRef();
+			Entry.Type = ParseObstacleType(WebStr(O, TEXT("type"), TEXT("Box")));
+			Entry.Center = ParseWebVec(O, TEXT("center"), FVector::ZeroVector);
+			Entry.Extents = ParseWebVec(O, TEXT("extents"), FVector(100.0f));
+			Entry.Rotation = FRotator::ZeroRotator; // DTO has no rotation
+			Entry.SafetyMargin = WebNum(O, TEXT("safetyMargin"), 50.0f);
+			Entry.MovementType = ParseObstacleMovementType(WebStr(O, TEXT("movement"), TEXT("Static")));
+			Entry.Velocity = ParseWebVec(O, TEXT("velocity"), FVector::ZeroVector);
+			Entry.PatrolSpeed = WebNum(O, TEXT("patrolSpeed"), 300.0f);
 			if (O->HasTypedField<EJson::Array>(TEXT("patrolPoints")))
 			{
 				for (const TSharedPtr<FJsonValue>& P : O->GetArrayField(TEXT("patrolPoints")))
 				{
-					// 每个巡逻点：数组 [x,y,z]（Web 主契约）。FJsonValue::GetType() 在 5.7 受保护，
-					// 这里只接受数组形式（契约要求），非数组点跳过。
 					const TArray<TSharedPtr<FJsonValue>>* PA = nullptr;
 					if (P.IsValid() && P->TryGetArray(PA) && PA && PA->Num() >= 3)
 					{
-						Obs.PatrolPoints.Emplace((*PA)[0]->AsNumber(), (*PA)[1]->AsNumber(), (*PA)[2]->AsNumber());
+						Entry.PatrolPoints.Emplace((*PA)[0]->AsNumber(), (*PA)[1]->AsNumber(), (*PA)[2]->AsNumber());
 					}
 				}
 			}

@@ -19,11 +19,7 @@ NdjsonState = vis_server.NdjsonState
 to_web = vis_server.to_web
 validate_scenario_dto = vis_server.validate_scenario_dto
 SCHEMA = vis_server.SCHEMA
-list_presets = vis_server.list_presets
-read_preset = vis_server.read_preset
-write_preset = vis_server.write_preset
-delete_preset = vis_server.delete_preset
-
+_default_random_obstacles = vis_server._default_random_obstacles
 
 def _feed_lines(state, lines):
     """逐行喂 JSON 对象给 state.feed()"""
@@ -163,54 +159,30 @@ def test_schema_enums_consistent():
     assert ok, f"defaults 未通过校验: {err}"
 
 
-def _preset_dto(name="ut"):
-    return {
-        "name": name,
-        "fleet": [{"model": "Agri_AG20", "initPos": [0, 0, 100], "mode": "Once",
-                   "waypoints": [{"pos": [5000, 0, 1000]}]}],
-        "obstacles": [],
-    }
+def test_schema_default_scenario_contract():
+    defaults = SCHEMA["defaults"]
+    lead = defaults["fleet"][0]
+
+    assert lead["initPos"][2] >= 5, "默认无人机起飞高度必须不低于 5m"
+    for index, waypoint in enumerate(lead.get("waypoints", [])):
+        assert waypoint["pos"][2] >= 5, f"默认航点 {index} 高度必须不低于 5m"
+
+    obstacles = defaults.get("obstacles", [])
+    assert len(obstacles) >= 10, "默认场景必须包含不少于 10 个随机障碍物"
+    centers = [tuple(obstacle["center"]) for obstacle in obstacles]
+    assert len(set(centers)) == len(centers), "默认随机障碍物中心点不能重复"
 
 
-def test_preset_roundtrip(tmp_path, monkeypatch):
-    """保存 -> 列举 -> 读取 -> 删除 全链路"""
-    monkeypatch.setattr(vis_server, "PRESET_DIR", str(tmp_path))
-    dto = _preset_dto("rt")
-    ok, err = write_preset("roundtrip", dto)
-    assert ok, err
-    assert "roundtrip" in list_presets()
-    loaded = read_preset("roundtrip")
-    assert loaded is not None
-    assert loaded["fleet"][0]["initPos"] == [0, 0, 100]
-    ok2, _ = delete_preset("roundtrip")
-    assert ok2
-    assert read_preset("roundtrip") is None
-    assert "roundtrip" not in list_presets()
+def test_default_random_obstacles_deterministic():
+    a = _default_random_obstacles(seed=42)
+    b = _default_random_obstacles(seed=42)
+    assert a == b, "相同 seed 必须产生相同障碍布局"
 
 
-def test_preset_invalid_name_rejected(tmp_path, monkeypatch):
-    """非法预设名（含路径分隔/点/空格）应被拒绝，禁止越权写文件"""
-    monkeypatch.setattr(vis_server, "PRESET_DIR", str(tmp_path))
-    ok, err = write_preset("../escape", _preset_dto())
-    assert not ok
-    ok2, _ = write_preset("has space", _preset_dto())
-    assert not ok2
-    ok3, _ = write_preset("dot.json", _preset_dto())
-    assert not ok3
-    assert list_presets() == []
-
-
-def test_preset_invalid_dto_rejected(tmp_path, monkeypatch):
-    """非法 DTO（空 fleet）不应被保存（write_preset 自身不做语义校验，
-    语义校验在 Handler.do_POST；这里直接测 write_preset 的文件约束 +
-    validate_scenario_dto 拒绝非法）"""
-    monkeypatch.setattr(vis_server, "PRESET_DIR", str(tmp_path))
-    ok, err = validate_scenario_dto({"fleet": []})
-    assert not ok
-    # write_preset 仍允许写入合法路径的任意内容（薄工具层），但 Handler 层会先用
-    # validate_scenario_dto 拦截；这里验证工具层与校验层解耦且各自正确
-    ok2, err2 = write_preset("valid-name", _preset_dto())
-    assert ok2
+def test_default_random_obstacles_different_seed_differs():
+    a = _default_random_obstacles(seed=1)
+    b = _default_random_obstacles(seed=2)
+    assert a != b, "不同 seed 应产生不同障碍布局"
 
 
 def test_serve_file_handles_client_disconnect():
@@ -233,17 +205,7 @@ def test_serve_file_handles_client_disconnect():
 
 
 if __name__ == "__main__":
-    # 简单自跑（无 pytest 也能执行）。pytest fixture(tmp_path/monkeypatch)在此回退。
-    import tempfile, shutil
-
-    class _MonkeyPatch:
-        def setattr(self, mod, name, value):
-            self._orig = getattr(mod, name)
-            setattr(mod, name, value)
-            setattr(self, "_mod", mod)
-            setattr(self, "_name", name)
-        def undo(self):
-            setattr(self._mod, self._name, self._orig)
+    # 简单自跑（无 pytest 也能执行）。
 
     # schema 一致性（不依赖 fixture）
     try:
@@ -254,31 +216,13 @@ if __name__ == "__main__":
         print(f"  FAIL  test_schema_enums_consistent: {e}")
         passed_schema = False
 
-    tmp_path = PathLikeTempDir = tempfile.mkdtemp(prefix="uav_vis_test_")
-    mp = _MonkeyPatch()
-    fixture_tests = [
-        ("test_preset_roundtrip", test_preset_roundtrip),
-        ("test_preset_invalid_name_rejected", test_preset_invalid_name_rejected),
-        ("test_preset_invalid_dto_rejected", test_preset_invalid_dto_rejected),
-    ]
     passed = 1 if passed_schema else 0
     total = 1
-    for name, fn in fixture_tests:
-        total += 1
-        mp.setattr(vis_server, "PRESET_DIR", tmp_path)
-        try:
-            fn(tmp_path, mp)
-            print(f"  PASS  {name}")
-            passed += 1
-        except Exception as e:
-            print(f"  FAIL  {name}: {e}")
-    shutil.rmtree(tmp_path, ignore_errors=True)
 
     # 其余无 fixture 测试
     simple_tests = [v for k, v in sorted(globals().items())
                     if k.startswith("test_") and callable(v)
-                    and k not in ("test_preset_roundtrip", "test_preset_invalid_name_rejected",
-                                  "test_preset_invalid_dto_rejected", "test_schema_enums_consistent")]
+                    and k not in ("test_schema_enums_consistent",)]
     for t in simple_tests:
         total += 1
         try:

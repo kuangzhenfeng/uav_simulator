@@ -54,7 +54,7 @@ def test_feed_debug_box_and_point_and_text():
     ]})
     debug = state.snapshot()["debug"]
     assert debug["obstacle"][0]["prim"]["type"] == "box"
-    assert debug["obstacle"][0]["prim"]["extents"] == [0.5, 0.5, 1.0]
+    assert debug["obstacle"][0]["prim"]["extents"] == [0.5, 1.0, 0.5]
     assert debug["waypoint"][0]["prim"]["type"] == "point"
     assert debug["label"][0]["prim"]["text"] == "Error: 42.1"
 
@@ -140,7 +140,7 @@ def test_list_tasks_with_dirs():
         tasks_dir = os.path.join(td, "tasks")
         os.makedirs(os.path.join(tasks_dir, "20260628_120000_Demo"))
         with open(os.path.join(tasks_dir, "20260628_120000_Demo", "result.json"), "w") as f:
-            json.dump({"scenario": "Demo", "verdict": "PASS", "seed": 42, "metrics": {"elapsedSec": 10.0}}, f)
+            json.dump({"scenario": "Demo", "verdict": "PASS", "metrics": {"elapsedSec": 10.0}}, f)
         with open(os.path.join(tasks_dir, "20260628_120000_Demo", "telemetry.ndjson"), "w") as f:
             f.write('{"type":"meta","t":0,"version":2,"scenario":"Demo"}\n')
         result = vis_server.list_tasks(td)

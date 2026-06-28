@@ -36,8 +36,6 @@ public:
 private:
 	// ---- 字符串 -> 枚举 helper（大小写敏感，不匹配返回合理默认值）----
 
-	static EObstacleType ParseObstacleType(const FString& InName);
-	static EObstacleMovementType ParseObstacleMovementType(const FString& InName);
 	static EWindFieldType ParseWindFieldType(const FString& InName);
 	static EUAVModelID ParseUAVModelID(const FString& InName);
 	static EMissionMode ParseMissionMode(const FString& InName);
