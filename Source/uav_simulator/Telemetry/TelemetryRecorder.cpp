@@ -269,21 +269,26 @@ void UTelemetryRecorder::WriteFrame(float SimTime)
 	{
 		AUAVPawn* P = Agents[i];
 		const FUAVState S = P->GetUAVState();
-		float Clearance = -1.0f; // -1 表示未算
+		// FLT_MAX/非有限值表示无最近障碍(ObstacleManager 无障碍时返回 FLT_MAX),
+		// 输出 JSON null 让下游(Python state.py)正常过滤为缺失值,避免污染数据流。
+		FString ClearanceStr = TEXT("null");
 		if (UObstacleManager* ObsMgr = P->GetObstacleManager())
 		{
 			FObstacleInfo Dummy;
 			const float D = ObsMgr->GetDistanceToNearestObstacle(S.Position, Dummy);
-			if (D >= 0.0f) Clearance = D;
+			if (FMath::IsFinite(D) && D >= 0.0f && D < 1.0e30f)
+			{
+				ClearanceStr = FString::Printf(TEXT("%.2f"), D);
+			}
 		}
 		if (i > 0) AgentsArray += TEXT(",");
 		AgentsArray += FString::Printf(
 			TEXT("{\"id\":%d,\"pos\":[%.2f,%.2f,%.2f],\"vel\":[%.2f,%.2f,%.2f],"
-				"\"speedRatio\":%.3f,\"clearance\":%.2f,\"ctrl\":%d,\"crashed\":%s}"),
+				"\"speedRatio\":%.3f,\"clearance\":%s,\"ctrl\":%d,\"crashed\":%s}"),
 			P->GetAgentID(),
 			S.Position.X, S.Position.Y, S.Position.Z,
 			S.Velocity.X, S.Velocity.Y, S.Velocity.Z,
-			P->GetSpeedRatio(), Clearance, (int32)P->GetControlMode(),
+			P->GetSpeedRatio(), *ClearanceStr, (int32)P->GetControlMode(),
 			P->IsCrashed() ? TEXT("true") : TEXT("false"));
 	}
 
@@ -476,13 +481,18 @@ void UTelemetryRecorder::WriteVerdict(float SimTime, bool bFinal, int32 Reached,
 		FailArray += FString::Printf(TEXT("\"%s\""), *JsonEscape(Failures[i]));
 	}
 
+	// ScenarioEvaluator 无障碍 encounter 时 MinClearanceCm 保持默认 FLT_MAX,
+	// 输出 null 与 WriteFrame 的 clearance 处理保持一致。
+	const FString ClearanceCmStr = (FMath::IsFinite(ClearanceCm) && ClearanceCm < 1.0e30f)
+		? FString::Printf(TEXT("%.0f"), ClearanceCm) : TEXT("null");
+
 	WriteLine(FString::Printf(
 		TEXT("{\"type\":\"verdict\",\"t\":%.3f,\"final\":%s,\"reached\":%d,\"total\":%d,"
-			"\"clearanceCm\":%.0f,\"lateralDevCm\":%.0f,\"elapsedSec\":%.2f,"
+			"\"clearanceCm\":%s,\"lateralDevCm\":%.0f,\"elapsedSec\":%.2f,"
 			"\"collided\":%s,\"passed\":%s,\"failures\":[%s]}"),
 		SimTime, bFinal ? TEXT("true") : TEXT("false"),
 		Reached, Total,
-		ClearanceCm, LateralDevCm, ElapsedSec,
+		*ClearanceCmStr, LateralDevCm, ElapsedSec,
 		bCollided ? TEXT("true") : TEXT("false"),
 		(Failures.Num() == 0) ? TEXT("true") : TEXT("false"),
 		*FailArray));

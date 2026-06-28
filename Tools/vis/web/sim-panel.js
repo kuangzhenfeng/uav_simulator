@@ -1,12 +1,19 @@
-import { App, setStatus } from './app.js';
-import { refreshData } from './app.js';
+import { App, connectSSE, refreshData, setStatus } from './app.js';
 import { log } from './logger.js';
 import { vecToUE } from './coord.js';
 
 const STORAGE_KEY = 'vis_sim_config';
+const CONFIG_VERSION_KEY = 'vis_sim_config_v';
+const CONFIG_VERSION = 1;
+const DEFAULT_ALTITUDE_M = 5;
+const LEGACY_DEFAULT_ALTITUDE_M = 1;
+const DEFAULT_WAYPOINT = [50, 0, DEFAULT_ALTITUDE_M];
+const DEFAULT_OBSTACLE_CENTER = [25, 0, DEFAULT_ALTITUDE_M];
 
 let schema = null;
 let dto = null;
+let controlStatusTimer = null;
+let startToken = 0;
 
 export async function initSimPanel() {
   const panel = document.getElementById('sim-panel');
@@ -26,6 +33,11 @@ function restoreConfig() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
     if (!saved) return;
+    const savedVersion = parseInt(localStorage.getItem(CONFIG_VERSION_KEY) || '0', 10);
+    if (savedVersion < CONFIG_VERSION) {
+      migrateLegacyAltitude(saved);
+      localStorage.setItem(CONFIG_VERSION_KEY, String(CONFIG_VERSION));
+    }
     if (saved.fleet?.[0]) Object.assign(dto.fleet[0], saved.fleet[0]);
     if (saved.wind) Object.assign(dto.wind, saved.wind);
     if (saved.sim) Object.assign(dto.sim, saved.sim);
@@ -40,19 +52,22 @@ function restoreConfig() {
 function saveConfig() {
   try {
     const fleet = dto.fleet[0] || {};
-    const wp = fleet.waypoints?.[0] || [50, 0, 1];
+    const wp = fleet.waypoints?.[0] || DEFAULT_WAYPOINT;
+    dto.name = document.getElementById('sim-scenario')?.value || dto.name;
+    dto.sim.durationSec = parseInt(document.getElementById('sim-duration')?.value) || dto.sim.durationSec;
+    dto.sim.slomo = parseFloat(document.getElementById('sim-slomo')?.value) || dto.sim.slomo;
     const data = {
       name: dto.name,
       sim: {
-        durationSec: parseInt(document.getElementById('sim-duration')?.value) || dto.sim.durationSec,
-        slomo: parseFloat(document.getElementById('sim-slomo')?.value) || dto.sim.slomo,
+        durationSec: dto.sim.durationSec,
+        slomo: dto.sim.slomo,
       },
       fleet: [{
         model: document.getElementById('sim-model')?.value || fleet.model,
         initPos: [
           parseFloat(document.getElementById('sim-init-x')?.value) ?? fleet.initPos?.[0] ?? 0,
           parseFloat(document.getElementById('sim-init-y')?.value) ?? fleet.initPos?.[1] ?? 0,
-          parseFloat(document.getElementById('sim-init-z')?.value) ?? fleet.initPos?.[2] ?? 1,
+          parseFloat(document.getElementById('sim-init-z')?.value) ?? fleet.initPos?.[2] ?? DEFAULT_ALTITUDE_M,
         ],
         waypoints: [[
           parseFloat(document.getElementById('sim-wp-x')?.value) ?? wp[0],
@@ -76,6 +91,20 @@ function saveConfig() {
   }
 }
 
+function migrateLegacyAltitude(saved) {
+  const fleet = saved.fleet?.[0];
+  if (isLegacyVec(fleet?.initPos, 0, 0)) fleet.initPos[2] = DEFAULT_ALTITUDE_M;
+  const waypoint = fleet?.waypoints?.[0];
+  if (isLegacyVec(waypoint, 50, 0)) waypoint[2] = DEFAULT_ALTITUDE_M;
+  for (const obstacle of saved.obstacles || []) {
+    if (isLegacyVec(obstacle.center, 25, 0)) obstacle.center[2] = DEFAULT_ALTITUDE_M;
+  }
+}
+
+function isLegacyVec(vec, x, y) {
+  return Array.isArray(vec) && vec[0] === x && vec[1] === y && vec[2] === LEGACY_DEFAULT_ALTITUDE_M;
+}
+
 async function loadSchema() {
   try {
     const r = await fetch('/api/schema');
@@ -87,6 +116,17 @@ async function loadSchema() {
   }
 }
 
+function updateSimButtons(state) {
+  const startBtn = document.getElementById('sim-start-btn');
+  const stopBtn = document.getElementById('sim-stop-btn');
+  if (startBtn && !startBtn.dataset.starting) {
+    startBtn.disabled = state === 'running' || state === 'stopping';
+  }
+  if (stopBtn) {
+    stopBtn.disabled = state === 'idle' || state === 'stopping';
+  }
+}
+
 async function pollControlStatus() {
   const check = async () => {
     try {
@@ -94,10 +134,7 @@ async function pollControlStatus() {
       const d = await r.json();
       const available = d.controlAvailable;
       const simRunning = d.simStatus?.running;
-      const btn = document.getElementById('sim-start-btn');
-      if (btn && !btn.dataset.starting) {
-        btn.disabled = simRunning;
-      }
+      updateSimButtons(simRunning ? 'running' : 'idle');
       const badge = document.getElementById('sim-status-badge');
       if (badge) {
         if (simRunning) {
@@ -114,15 +151,16 @@ async function pollControlStatus() {
     } catch {}
   };
   check();
-  setInterval(check, 2000);
+  if (controlStatusTimer) clearInterval(controlStatusTimer);
+  controlStatusTimer = setInterval(check, 2000);
 }
 
 function renderForm() {
   const panel = document.getElementById('sim-panel');
-  const s = schema.defaults.sim;
-  const w = schema.defaults.wind;
+  const s = dto.sim;
+  const w = dto.wind;
   const fleet = dto.fleet[0] || {};
-  const wp = fleet.waypoints?.[0] || [50, 0, 1];
+  const wp = fleet.waypoints?.[0] || DEFAULT_WAYPOINT;
 
   panel.innerHTML = `
     <div class="sim-section">
@@ -135,7 +173,7 @@ function renderForm() {
     </div>
     <div class="sim-section">
       <label class="sim-label">场景名</label>
-      <input type="text" id="sim-scenario" class="sim-input" value="${schema.defaults.name}" />
+      <input type="text" id="sim-scenario" class="sim-input" value="${dto.name}" />
     </div>
     <div class="sim-section">
       <label class="sim-label">无人机型号</label>
@@ -148,7 +186,7 @@ function renderForm() {
       <div class="sim-row3">
         <input type="number" id="sim-init-x" class="sim-input-sm" value="${fleet.initPos?.[0] ?? 0}" step="0.5" />
         <input type="number" id="sim-init-y" class="sim-input-sm" value="${fleet.initPos?.[1] ?? 0}" step="0.5" />
-        <input type="number" id="sim-init-z" class="sim-input-sm" value="${fleet.initPos?.[2] ?? 1}" step="0.5" />
+        <input type="number" id="sim-init-z" class="sim-input-sm" value="${fleet.initPos?.[2] ?? DEFAULT_ALTITUDE_M}" step="0.5" />
       </div>
     </div>
     <div class="sim-section">
@@ -191,7 +229,7 @@ function renderForm() {
   document.getElementById('sim-stop-btn').addEventListener('click', stopSim);
   document.getElementById('sim-add-obstacle').addEventListener('click', () => {
     dto.obstacles = dto.obstacles || [];
-    dto.obstacles.push({ type: 'Box', center: [25, 0, 1], extents: [2, 2, 2], movement: 'Static', safetyMargin: 0.5 });
+    dto.obstacles.push(defaultObstacle());
     renderObstacles();
     saveConfig();
   });
@@ -204,7 +242,7 @@ function renderForm() {
 }
 
 function defaultObstacle() {
-  return { type: 'Box', center: [25, 0, 1], extents: [2, 2, 2], movement: 'Static', safetyMargin: 0.5 };
+  return { type: 'Box', center: [...DEFAULT_OBSTACLE_CENTER], extents: [2, 2, 2], movement: 'Static', safetyMargin: 0.5 };
 }
 
 function renderObstacles() {
@@ -212,7 +250,7 @@ function renderObstacles() {
   if (!wrap) return;
   const obs = dto.obstacles || [];
   wrap.innerHTML = obs.map((o, i) => {
-    const c = o.center || [25, 0, 1];
+    const c = o.center || DEFAULT_OBSTACLE_CENTER;
     const e = o.extents || [2, 2, 2];
     return `
       <div class="sim-obstacle-row" data-i="${i}" style="border:1px solid var(--border);border-radius:4px;padding:6px;margin-bottom:4px;background:var(--card2)">
@@ -256,7 +294,7 @@ function renderObstacles() {
 }
 
 function updateCenter(obs, axis, val) {
-  obs.center = obs.center || [25, 0, 1];
+  obs.center = obs.center || [...DEFAULT_OBSTACLE_CENTER];
   obs.center[axis] = val;
   saveConfig();
 }
@@ -268,6 +306,7 @@ function updateExtents(obs, axis, val) {
 }
 
 async function startSim() {
+  const token = ++startToken;
   saveConfig();
   const duration = parseInt(document.getElementById('sim-duration').value) || 60;
   const slomo = parseFloat(document.getElementById('sim-slomo').value) || 8;
@@ -276,12 +315,12 @@ async function startSim() {
   const initPos = [
     parseFloat(document.getElementById('sim-init-x').value) || 0,
     parseFloat(document.getElementById('sim-init-y').value) || 0,
-    parseFloat(document.getElementById('sim-init-z').value) || 1,
+    parseFloat(document.getElementById('sim-init-z').value) || DEFAULT_ALTITUDE_M,
   ];
   const wp = [
     parseFloat(document.getElementById('sim-wp-x').value) || 50,
     parseFloat(document.getElementById('sim-wp-y').value) || 0,
-    parseFloat(document.getElementById('sim-wp-z').value) || 1,
+    parseFloat(document.getElementById('sim-wp-z').value) || DEFAULT_ALTITUDE_M,
   ];
   const windSteady = [
     parseFloat(document.getElementById('sim-wind-x').value) || 0,
@@ -306,13 +345,22 @@ async function startSim() {
       gustAmplitude: 2,
       turbulenceIntensity: 1,
     },
-    obstacles: (dto.obstacles || []).map(o => ({
-      type: o.type || 'Box',
-      center: vecToUE(o.center || [25, 0, 1]),
-      extents: (o.extents || [2, 2, 2]).map(v => Math.max(0.1, v) * 100),
-      safetyMargin: Math.max(0, o.safetyMargin || 0) * 100,
-      movement: o.movement || 'Static',
-    })),
+    obstacles: (dto.obstacles || []).map(o => {
+      const out = {
+        type: o.type || 'Box',
+        center: vecToUE(o.center || DEFAULT_OBSTACLE_CENTER),
+        extents: (o.extents || [2, 2, 2]).map(v => Math.max(0.1, v) * 100),
+        safetyMargin: Math.max(0, o.safetyMargin || 0) * 100,
+        movement: o.movement || 'Static',
+      };
+      if (o.movement === 'LinearVelocity' && o.velocity) {
+        out.velocity = vecToUE(o.velocity);
+      } else if ((o.movement === 'PatrolLoop' || o.movement === 'PatrolPingPong') && o.patrolPoints) {
+        out.patrolPoints = o.patrolPoints.map(p => vecToUE(p));
+        out.patrolSpeed = Math.max(0, o.patrolSpeed || 3) * 100;
+      }
+      return out;
+    }),
     sim: { slomo, durationSec: duration, controlMode: '', mpcType: '' },
     name: scenario,
   };
@@ -320,83 +368,74 @@ async function startSim() {
   const btn = document.getElementById('sim-start-btn');
   btn.disabled = true;
   btn.dataset.starting = '1';
-
-  const statusResponse = await fetch('/api/control/status');
-  const statusData = await statusResponse.json();
-  const controlOnline = statusData.controlAvailable;
+  updateSimButtons('running');
 
   try {
-    if (!controlOnline) {
-      btn.textContent = '冷启动 UE 进程…';
-      setStatus('冷启动 UE 进程(首次约 30-60s)…', false);
-      log.info('sim', '冷启动 /api/sim/start', { duration, slomo, scenario });
-      const r1 = await fetch('/api/sim/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ duration, slomo, scenario }),
-      });
-      const res1 = await r1.json();
-      if (!res1.ok) {
-        throw new Error(res1.error || '冷启动失败');
-      }
-      log.info('sim', 'UE 进程已拉起, 等待控制端上线', { pid: res1.pid });
+    btn.textContent = '启动中…';
+    setStatus('启动仿真(后端自动拉起UE+推送配置)…', false);
+    log.info('sim', 'POST /api/sim/start (统一启动)', { duration, slomo, scenario });
 
-      btn.textContent = '等待控制端上线…';
-      const online = await waitForControl(60000);
-      if (!online) {
-        throw new Error('控制端 60s 内未上线');
-      }
-      log.info('sim', '控制端已上线, 推送场景配置');
-    }
-
-    btn.textContent = '推送配置…';
-    setStatus('推送场景配置…', false);
-    const r2 = await fetch('/api/control/reload', {
+    const r = await fetch('/api/sim/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(configDto),
     });
-    const res2 = await r2.json();
-    if (!res2.ok) {
-      throw new Error(res2.error || '配置推送失败');
+    const res = await r.json();
+    if (!r.ok || !res.ok) {
+      throw new Error(res.error || `启动失败 (HTTP ${r.status})`);
     }
 
-    log.info('sim', '仿真已启动并配置完成', res2);
+    log.info('sim', '仿真已启动并配置完成', res);
+    App.currentTaskId = null;
+    const taskSel = document.getElementById('task-select');
+    if (taskSel) taskSel.value = '';
     App.cursorT = 0;
     App.playing = true;
     App.finished = false;
     App._lastReloadEpoch = undefined;
+    connectSSE();
     setStatus('仿真运行中', true);
     setTimeout(() => refreshData(), 1000);
   } catch (e) {
-    log.error('sim', '启动失败', { error: e.message });
-    setStatus('启动失败: ' + e.message, false);
+    if (token === startToken) {
+      log.error('sim', '启动失败', { error: e.message });
+      setStatus('启动失败: ' + e.message, false);
+    } else {
+      log.info('sim', '启动已取消');
+    }
   } finally {
-    delete btn.dataset.starting;
-    btn.textContent = '启动仿真';
-    pollControlStatus();
+    if (token === startToken) {
+      delete btn.dataset.starting;
+      btn.textContent = '启动仿真';
+      pollControlStatus();
+    } else {
+      updateSimButtons('idle');
+    }
   }
-}
-
-async function waitForControl(timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const r = await fetch('/api/control/status');
-      const d = await r.json();
-      if (d.controlAvailable) return true;
-    } catch {}
-    await new Promise(resolve => setTimeout(resolve, 1500));
-  }
-  return false;
 }
 
 async function stopSim() {
+  startToken++;
+  const stopBtn = document.getElementById('sim-stop-btn');
+  if (stopBtn) stopBtn.disabled = true;
   try {
-    await fetch('/api/control/stop', { method: 'POST' });
-    log.info('sim', '停止请求已发送');
+    const statusResponse = await fetch('/api/control/status');
+    const statusData = await statusResponse.json();
+    if (statusData.controlAvailable) {
+      await fetch('/api/control/stop', { method: 'POST' });
+    }
+    const simStopResponse = await fetch('/api/sim/stop', { method: 'POST' });
+    const simStop = await simStopResponse.json();
+    log.info('sim', '停止请求已发送', simStop);
     setStatus('已停止', false);
   } catch (e) {
     log.error('sim', '停止异常', { error: e.message });
+  } finally {
+    const btn = document.getElementById('sim-start-btn');
+    if (btn) {
+      delete btn.dataset.starting;
+      btn.textContent = '启动仿真';
+    }
+    updateSimButtons('idle');
   }
 }

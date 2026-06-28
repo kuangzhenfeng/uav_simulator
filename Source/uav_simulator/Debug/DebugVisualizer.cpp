@@ -3,6 +3,7 @@
 #include "DebugVisualizer.h"
 #include "DebugDrawBuffer.h"
 #include "../uav_simulator.h"
+#include "../Core/UAVPawn.h"
 #include "DrawDebugHelpers.h"
 
 UDebugVisualizer::UDebugVisualizer()
@@ -35,21 +36,25 @@ void UDebugVisualizer::DrawUAVState(const FUAVState& State, const FVector& Actor
 
 	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
 
+	// body_axes / velocity 都派生自飞机当前位置, 携带 AgentID 让前端绑到 agent.group
+	const AUAVPawn* OwnerPawn = Cast<AUAVPawn>(GetOwner());
+	const int32 AgentID = OwnerPawn ? OwnerPawn->GetAgentID() : -1;
+
 	// 绘制坐标轴（机体坐标系）
 	FQuat Orientation = State.Rotation.Quaternion();
 	FVector XAxis = Orientation.RotateVector(FVector(100.0f, 0.0f, 0.0f));
 	FVector YAxis = Orientation.RotateVector(FVector(0.0f, 100.0f, 0.0f));
 	FVector ZAxis = Orientation.RotateVector(FVector(0.0f, 0.0f, 100.0f));
 
-	Buffer->AddLine(GetWorld(), ActorLocation, ActorLocation + XAxis, FColor::Red, 3.0f, -1.0f, -1, TEXT("body_axes"));
-	Buffer->AddLine(GetWorld(), ActorLocation, ActorLocation + YAxis, FColor::Green, 3.0f, -1.0f, -1, TEXT("body_axes"));
-	Buffer->AddLine(GetWorld(), ActorLocation, ActorLocation + ZAxis, FColor::Blue, 3.0f, -1.0f, -1, TEXT("body_axes"));
+	Buffer->AddLine(GetWorld(), ActorLocation, ActorLocation + XAxis, FColor::Red, 3.0f, -1.0f, AgentID, TEXT("body_axes"));
+	Buffer->AddLine(GetWorld(), ActorLocation, ActorLocation + YAxis, FColor::Green, 3.0f, -1.0f, AgentID, TEXT("body_axes"));
+	Buffer->AddLine(GetWorld(), ActorLocation, ActorLocation + ZAxis, FColor::Blue, 3.0f, -1.0f, AgentID, TEXT("body_axes"));
 
 	// 绘制速度矢量
 	if (!State.Velocity.IsNearlyZero())
 	{
 		FVector VelocityEnd = ActorLocation + State.Velocity * 0.5f;
-		Buffer->AddArrow(GetWorld(), ActorLocation, VelocityEnd, 50.0f, FColor::Yellow, 2.0f, -1.0f, -1, TEXT("velocity"));
+		Buffer->AddArrow(GetWorld(), ActorLocation, VelocityEnd, 50.0f, FColor::Yellow, 2.0f, -1.0f, AgentID, TEXT("velocity"));
 	}
 }
 
@@ -162,8 +167,16 @@ void UDebugVisualizer::DrawTrackingState(const FTrajectoryPoint& DesiredState, c
 		TrackingTextTimer = 0.f;
 		float TrackingError = FVector::Dist(CurrentPosition, DesiredState.Position);
 		FString ErrorText = FString::Printf(TEXT("Error: %.1f cm"), TrackingError);
+		// 携带 AgentID 让可视化前端把文本绑定到对应飞机 (sprite 作为子节点跟随)
+		const int32 AgentID = [this]() -> int32 {
+			if (const AUAVPawn* Pawn = Cast<AUAVPawn>(GetOwner()))
+			{
+				return Pawn->GetAgentID();
+			}
+			return -1;
+		}();
 		Buffer->AddText(GetWorld(), DesiredState.Position + FVector(0, 0, 30), ErrorText,
-			TrackingError > 50.0f ? FColor::Red : FColor::Green, TextDrawInterval, -1, TEXT("label"));
+			TrackingError > 50.0f ? FColor::Red : FColor::Green, TextDrawInterval, AgentID, TEXT("label"));
 	}
 }
 

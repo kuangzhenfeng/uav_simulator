@@ -21,17 +21,40 @@ const charts = {};      // { speed: { uplot, container, agentCount } }
 
 function seriesToUPlot(seriesArray) {
   if (!seriesArray?.length) return null;
-  const first = seriesArray[0];
-  if (!first?.points?.length) return null;
-  const x = first.points.map(p => p[0]);
-  return [x, ...seriesArray.map(s => s.points.map(p => p[1]))];
+  const cleaned = seriesArray
+    .map(s => ({ ...s, points: sortUniquePoints(s.points) }))
+    .filter(s => s.points.length);
+  if (!cleaned.length) return null;
+  const x = sortUniquePoints(cleaned.flatMap(s => s.points)).map(p => p[0]);
+  return [x, ...cleaned.map(s => {
+    const values = new Map(s.points.map(p => [p[0], p[1]]));
+    return x.map(t => values.get(t) ?? null);
+  })];
 }
 
 function windToUPlot(wind) {
-  if (!wind?.samples?.length) return null;
-  const xs = wind.samples.map(s => s.t);
-  const ys = wind.samples.map(s => s.speedMs);
+  const points = sortUniquePoints(wind?.samples?.map(s => [s.t, s.speedMs]));
+  if (!points.length) return null;
+  const xs = points.map(p => p[0]);
+  const ys = points.map(p => p[1]);
   return [xs, ys];
+}
+
+function sortUniquePoints(points) {
+  if (!points?.length) return [];
+  const sorted = [...points]
+    .filter(p => Number.isFinite(p?.[0]) && Number.isFinite(p?.[1]))
+    .sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const point of sorted) {
+    const prev = out[out.length - 1];
+    if (!prev || point[0] > prev[0]) {
+      out.push(point);
+    } else {
+      out[out.length - 1] = point;
+    }
+  }
+  return out;
 }
 
 // -- uPlot axis config (shared across all 4 charts) --
@@ -102,7 +125,7 @@ function createChart(def, agentCount, seriesColors) {
     }
   }
 
-  // Minimal initial data so uPlot doesn't error
+  // Minimal initial data so uPlot doesn't error.
   const seriesCount = def.key === 'wind' ? 1 : agentCount;
   const initData = [[0], ...Array.from({ length: seriesCount }, () => [0])];
 
@@ -153,7 +176,10 @@ function updateCharts(data) {
     const uData = seriesToUPlot(seriesArr);
     if (uData) {
       const cur = charts[def.key];
-      if (cur?.uplot) cur.uplot.setData(uData, false);
+      // resetScales=true:让 uPlot 按新数据自动 fit 坐标轴范围。
+      // 初始用空数组创建,scale 未确定;后续帧 x/y 范围也会随仿真推进变化,
+      // 必须重置否则新数据落在旧 scale 外不可见。
+      if (cur?.uplot) cur.uplot.setData(uData, true);
     }
   }
 
@@ -163,7 +189,7 @@ function updateCharts(data) {
     const chartState = charts.wind;
     if (def && chartState?.uplot) {
       const uData = windToUPlot(data.wind);
-      if (uData) chartState.uplot.setData(uData, false);
+      if (uData) chartState.uplot.setData(uData, true);
     }
   }
 }

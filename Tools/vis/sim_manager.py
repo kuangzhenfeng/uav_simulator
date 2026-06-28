@@ -23,41 +23,50 @@ class SimManager:
     def start(self, duration=60, slomo=8, scenario=None):
         with self._lock:
             self._stop_unlocked()
+            return self._start_unlocked(duration, slomo, scenario)
 
-            if sys.platform == "win32":
-                script = os.path.join(self.project_root, "Script", "sim.bat")
-                cmd = ["cmd.exe", "/c", script, str(duration), str(slomo)]
-            else:
-                script = os.path.join(self.project_root, "Script", "sim.sh")
-                cmd = ["bash", script, str(duration), str(slomo)]
+    def ensure_running(self, duration=60, slomo=8, scenario=None):
+        """幂等启动：进程已在跑则复用，否则拉起。返回 started 标记区分两种情况。"""
+        with self._lock:
+            if self._process and self._process.poll() is None:
+                return {"ok": True, "already_running": True, "pid": self._process.pid}
+            return self._start_unlocked(duration, slomo, scenario)
 
-            if scenario:
-                cmd.append(scenario)
+    def _start_unlocked(self, duration=60, slomo=8, scenario=None):
+        if sys.platform == "win32":
+            script = os.path.join(self.project_root, "Script", "sim.bat")
+            cmd = ["cmd.exe", "/c", script, str(duration), str(slomo)]
+        else:
+            script = os.path.join(self.project_root, "Script", "sim.sh")
+            cmd = ["bash", script, str(duration), str(slomo)]
 
-            if not os.path.isfile(script):
-                return {"ok": False, "error": f"simulation script not found: {script}"}
+        if scenario:
+            cmd.append(scenario)
 
-            os.makedirs(self.logs_dir, exist_ok=True)
-            log_path = os.path.join(self.logs_dir, "sim_output.log")
-            log.info("sim_start: cmd=%s log=%s", cmd, log_path)
-            try:
-                with open(log_path, "ab") as stream:
-                    self._process = subprocess.Popen(
-                        cmd,
-                        cwd=self.project_root,
-                        stdout=stream,
-                        stderr=subprocess.STDOUT,
-                        start_new_session=(sys.platform != "win32"),
-                    )
-            except OSError as exc:
-                log.error("sim_start_failed: %s", exc)
-                return {"ok": False, "error": str(exc)}
+        if not os.path.isfile(script):
+            return {"ok": False, "error": f"simulation script not found: {script}"}
 
-            self._start_time = time.time()
-            self._duration = duration
-            self._slomo = slomo
-            log.info("sim_started: pid=%s duration=%d slomo=%s", self._process.pid, duration, slomo)
-            return {"ok": True, "pid": self._process.pid, "duration": duration, "slomo": slomo}
+        os.makedirs(self.logs_dir, exist_ok=True)
+        log_path = os.path.join(self.logs_dir, "sim_output.log")
+        log.info("sim_start: cmd=%s log=%s", cmd, log_path)
+        try:
+            with open(log_path, "ab") as stream:
+                self._process = subprocess.Popen(
+                    cmd,
+                    cwd=self.project_root,
+                    stdout=stream,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=(sys.platform != "win32"),
+                )
+        except OSError as exc:
+            log.error("sim_start_failed: %s", exc)
+            return {"ok": False, "error": str(exc)}
+
+        self._start_time = time.time()
+        self._duration = duration
+        self._slomo = slomo
+        log.info("sim_started: pid=%s duration=%d slomo=%s", self._process.pid, duration, slomo)
+        return {"ok": True, "started": True, "pid": self._process.pid, "duration": duration, "slomo": slomo}
 
     def stop(self):
         with self._lock:

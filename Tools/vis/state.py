@@ -3,13 +3,11 @@ import json
 import logging
 import math
 import os
-import subprocess
-import sys
 import threading
 import time
 
 from coords import dir_to_web, obstacle_type, size_web, to_web
-from control_proxy import _coerce_positive_number, resolve_control_port
+from control_proxy import resolve_control_port
 
 log = logging.getLogger("vis_server")
 
@@ -18,13 +16,39 @@ AGENT_COLORS = [
     "#cc5de8", "#22b8cf", "#ff922b", "#20c997",
 ]
 
+CLEARANCE_SENTINEL_MAX_CM = 1_000_000.0
 
-def _series_pack(src, agents):
+MAX_TRACE_POINTS = 400
+MAX_SERIES_POINTS = 300
+MAX_HUD_POINTS = 150
+
+
+def _downsample(seq, max_n):
+    n = len(seq)
+    if max_n <= 0 or n <= max_n:
+        return seq
+    step = (n - 1) / (max_n - 1)
+    return [seq[0]] + [seq[int(round(i * step))] for i in range(1, max_n - 1)] + [seq[-1]]
+
+
+def _clearance_m(clearance_cm):
+    if clearance_cm is None:
+        return None
+    try:
+        value = float(clearance_cm)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value < 0 or value > CLEARANCE_SENTINEL_MAX_CM:
+        return None
+    return round(value / 100.0, 2)
+
+
+def _series_pack(src, agents, max_points=0):
     out = []
     for a in agents:
         pts = src.get(a["id"], [])
         if pts:
-            out.append({"agent": a["id"], "color": a["color"], "points": pts})
+            out.append({"agent": a["id"], "color": a["color"], "points": _downsample(pts, max_points)})
     return out
 
 
@@ -43,7 +67,7 @@ def read_scenario_result(logs_dir):
         return {
             "final": data.get("verdict", "UNKNOWN"),
             "reached": f"{m.get('waypointsReached', 0)}/{m.get('waypointsTotal', 0)}",
-            "clearanceM": round(m.get("minClearanceCm", 0) / 100.0, 2) if m.get("minClearanceCm") is not None else None,
+            "clearanceM": _clearance_m(m.get("minClearanceCm")),
             "lateralDevM": round(m.get("maxLateralDevCm", 0) / 100.0, 2),
             "elapsedS": round(m.get("elapsedSec", 0), 2),
             "collided": bool(m.get("collided", False)),
@@ -101,11 +125,19 @@ class NdjsonState:
         self.first_t = None
         self.last_t = None
         self.has_final = False
+        # 单调时间轴保护: {(agent_id, epoch) -> last_t}。
+        # reload epoch 推进时旧 key 自然失效(新 epoch 的 first frame 总是通过)。
+        # 防止竞态/文件轮换误喂的回退帧污染 series -> uPlot 拒绝渲染。
+        self._last_frame_t = {}
         # debug 原语: layer -> list of {t, prim(已 to_web 变换), expires_at}
         self.debug_prims = {}
         # 瞬时原语（d<=0 的 HUD 类文本，每帧覆盖）: layer -> (t, [entries])
         # UE 端 Duration=0 表示"本帧瞬时"，新帧到达时旧批整体替换。
         self.debug_transient = {}
+        # 稳定性 HUD 历史快照: agent -> {t(float) -> {"lines":[str,str,str], "score":float}}
+        # 每帧记录一次(已对多物理子步去重), 供前端回放时按 cursorT 采样,
+        # 避免回放期间 HUD 文本停留在最后一帧(transient 只留最新一帧的缺陷)。
+        self.hud_history = {}
         # 任务切割: 当前任务的元信息
         self.task_scenario = None
         self.task_started_at = None
@@ -212,6 +244,12 @@ class NdjsonState:
     def _feed_frame_agent(self, agent, t):
         aid = agent.get("id")
         self._ensure_agent(aid)
+        if t is not None:
+            frame_key = (aid, self.reload_epoch)
+            last_t = self._last_frame_t.get(frame_key)
+            if last_t is not None and t <= last_t:
+                return
+            self._last_frame_t[frame_key] = t
         pos_ue = agent.get("pos") or [0, 0, 0]
         vel_ue = agent.get("vel") or [0, 0, 0]
         pos = to_web(pos_ue[0], pos_ue[1], pos_ue[2])
@@ -219,9 +257,9 @@ class NdjsonState:
         self.traces.setdefault(aid, []).append({"t": t, "pos": pos, "speed": speed_ms, "ctrl": agent.get("ctrl", 0)})
         self.speed_series.setdefault(aid, []).append([t, speed_ms])
         self.alt_series.setdefault(aid, []).append([t, pos[1]])
-        clearance = agent.get("clearance")
-        if clearance is not None and clearance >= 0:
-            self._append_clearance(aid, t, round(clearance / 100.0, 2))
+        clearance = _clearance_m(agent.get("clearance"))
+        if clearance is not None:
+            self._append_clearance(aid, t, clearance)
 
     def _append_clearance(self, aid, t, near_m):
         series = self.clearance_series.setdefault(aid, [])
@@ -262,7 +300,7 @@ class NdjsonState:
             "passed": bool(obj.get("passed")),
             "reached": obj.get("reached", 0),
             "total": obj.get("total", 0),
-            "clearanceM": round(clearance_cm / 100.0, 2) if clearance_cm is not None else None,
+            "clearanceM": _clearance_m(clearance_cm),
             "lateralDevM": round(lateral_cm / 100.0, 2) if lateral_cm is not None else None,
             "elapsedS": round(obj.get("elapsedSec", 0), 2),
             "final": bool(obj.get("final")),
@@ -275,12 +313,22 @@ class NdjsonState:
 
     def _feed_debug(self, obj, t):
         agent = obj.get("agent", -1)
+        hud_lines = {}  # line_id -> {"text":..., "score":...}  (本帧多子步去重,取最后子步)
+        hud_has_data = False
         for prim in obj.get("prims", []):
             converted = self._convert_debug_prim(prim)
             if converted is None:
                 continue
             layer = prim.get("layer", "default")
             d = prim.get("d", -1)
+            if layer == "hud_stability" and converted.get("type") == "text":
+                line_id = self._hud_line_id(converted.get("text", ""))
+                if line_id is not None:
+                    hud_has_data = True
+                    hud_lines[line_id] = {
+                        "text": converted["text"],
+                        "score": self._hud_score(converted["text"]),
+                    }
             entry = {
                 "t": t,
                 "agent": agent,
@@ -296,6 +344,31 @@ class NdjsonState:
                 bucket["entries"].append(entry)
             else:
                 self.debug_prims.setdefault(layer, []).append(entry)
+
+        if hud_has_data and agent is not None and agent >= 0 and t is not None:
+            lines = [
+                hud_lines.get(0, {"text": ""})["text"],
+                hud_lines.get(1, {"text": ""})["text"],
+                hud_lines.get(2, {"text": ""})["text"],
+            ]
+            score = hud_lines.get(0, {}).get("score")
+            self.hud_history.setdefault(agent, {})[t] = {"lines": lines, "score": score}
+
+    @staticmethod
+    def _hud_line_id(text):
+        if "综合" in text:
+            return 0
+        if "飞行" in text:
+            return 1
+        if "避障" in text:
+            return 2
+        return None
+
+    @staticmethod
+    def _hud_score(text):
+        import re as _re
+        m = _re.search(r"[-+]?\d+(?:\.\d+)?", text.replace("■", ""))
+        return float(m.group()) if m else None
 
     def _convert_debug_prim(self, prim):
         pt = prim.get("t")
@@ -373,13 +446,20 @@ class NdjsonState:
         for aid in sorted(self.agent_meta.keys()):
             m = self.agent_meta[aid]
             fut = self.future.get(aid, {})
+            hud = self.hud_history.get(aid, {})
+            hud_items = sorted(hud.items())
+            hud_series = [
+                {"t": kt, "lines": vd["lines"], "score": vd.get("score")}
+                for kt, vd in _downsample(hud_items, MAX_HUD_POINTS)
+            ]
             agents.append({
                 "id": aid, "model": m["model"], "color": m["color"],
                 "maxVelMs": m["maxVelMs"], "collisionRadiusM": m["collisionRadiusM"],
-                "initPos": m["initPos"], "trace": self.traces.get(aid, []),
+                "initPos": m["initPos"], "trace": _downsample(self.traces.get(aid, []), MAX_TRACE_POINTS),
                 "futureOpt": fut.get("opt", []),
                 "futurePlan": fut.get("plan", []),
                 "futureNmpc": fut.get("nmpc", []),
+                "hudHistory": hud_series,
             })
         verdict = self._build_verdict()
         duration_ms = 0
@@ -401,9 +481,9 @@ class NdjsonState:
             "summary": [self.summary[k] for k in sorted(self.summary)],
             "events": self.events,
             "series": {
-                "speedMs": _series_pack(self.speed_series, agents),
-                "altM": _series_pack(self.alt_series, agents),
-                "clearanceM": _series_pack(self.clearance_series, agents),
+                "speedMs": _series_pack(self.speed_series, agents, MAX_SERIES_POINTS),
+                "altM": _series_pack(self.alt_series, agents, MAX_SERIES_POINTS),
+                "clearanceM": _series_pack(self.clearance_series, agents, MAX_SERIES_POINTS),
             },
             "debug": debug_snapshot,
         }
@@ -452,11 +532,15 @@ class State:
         self.finished = False
         self.last_change_time = time.monotonic()
         self._pending_tail = ""
+        # 上次已观测到的 reload epoch, 用于检测新场景热重载(同文件、不轮换)。
+        # reload epoch 推进表示 UE 端 ScenarioLoader 装配了新场景, 旧的 final
+        # verdict 不再代表当前状态 -> 必须 reset finished, 否则第二次仿真 SSE
+        # 一连接就会立即收到 done 事件并断流。
+        self.last_reload_epoch = 0
         # UE HTTP 控制端端口（None 表示控制端不可用，面板置灰）
         self.control_port = resolve_control_port(args.project)
         self.control_available = False
         self.last_control_refresh = 0.0
-        self.control_process = None
         self._initial_load()
 
     def refresh_control_port(self):
@@ -483,56 +567,6 @@ class State:
     def is_control_available(self):
         return self.control_available
 
-    def start_control_process(self, dto):
-        if self.control_process and self.control_process.poll() is None:
-            log.info("terminating_tracked_control_process: pid=%s", self.control_process.pid)
-            self.control_process.terminate()
-            try:
-                self.control_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                log.warning("killing_tracked_control_process: pid=%s", self.control_process.pid)
-                self.control_process.kill()
-
-        sim = dto.get("sim", {}) if isinstance(dto, dict) else {}
-        duration = int(_coerce_positive_number(sim.get("durationSec"), 60))
-        slomo = _coerce_positive_number(sim.get("slomo"), 8)
-        if sys.platform == "win32":
-            script = os.path.join(self.args.project, "Script", "sim.bat")
-            cmd = ["cmd.exe", "/c", script, str(duration), str(slomo)]
-        else:
-            script = os.path.join(self.args.project, "Script", "sim.sh")
-            cmd = ["bash", script, str(duration), str(slomo)]
-        if not os.path.isfile(script):
-            return {"ok": False, "error": f"simulation script not found: {script}"}
-
-        log_path = os.path.join(self.logs_dir, "control_start.log")
-        os.makedirs(self.logs_dir, exist_ok=True)
-        log.info("starting_control_process: cmd=%s log=%s", cmd, log_path)
-        try:
-            with open(log_path, "ab") as stream:
-                self.control_process = subprocess.Popen(
-                    cmd,
-                    cwd=self.args.project,
-                    stdout=stream,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=(sys.platform != "win32"),
-                )
-        except OSError as e:
-            log.error("starting_control_process_failed: %s", e)
-            return {"ok": False, "error": str(e)}
-
-        self.control_available = False
-        self.control_port = None
-        self.last_control_refresh = 0.0
-        return {
-            "ok": True,
-            "started": True,
-            "pendingReload": True,
-            "pid": self.control_process.pid,
-            "durationSec": duration,
-            "slomo": slomo,
-        }
-
     def _feed_text(self, text):
         # Buffer incomplete trailing fragment (no trailing newline) so the next
         # poll reassembles the full line instead of parsing a truncated JSON.
@@ -554,20 +588,47 @@ class State:
                 log.warning("ndjson parse error: %s | line: %.80s", e, line)
                 continue
 
+    def _read_tail_lines(self, start_offset):
+        """从 start_offset(字节偏移)读取文件, 返回 (text, new_offset)。
+
+        只返回到最后一个 '\\n' 的完整行, new_offset 指向该 '\\n' 之后(行边界)。
+        保证 last_size 始终停在行边界, 避免 text-mode seek 切断多字节 UTF-8
+        字符(中文 HUD 文本)导致该行 JSON 损坏丢帧。UTF-8 自同步性保证 '\\n'
+        (0x0A) 只出现在 ASCII 字节, 不会落进多字节字符的续字节里。
+        """
+        try:
+            with open(self.target, "rb") as f:
+                if start_offset > 0:
+                    f.seek(start_offset)
+                raw = f.read()
+        except OSError as e:
+            log.warning("_read_tail_lines read error at offset %d: %s", start_offset, e)
+            return "", start_offset
+        if not raw:
+            return "", start_offset
+        last_nl = raw.rfind(b"\n")
+        if last_nl == -1:
+            # 还没有完整行(UE 正在写一行尚未刷出换行), 不推进, 下次重读
+            return "", start_offset
+        complete = raw[:last_nl + 1]
+        return complete.decode("utf-8", errors="replace"), start_offset + last_nl + 1
+
     def _initial_load(self):
-        if os.path.isfile(self.target):
-            try:
-                with open(self.target, "r", encoding="utf-8", errors="replace") as f:
-                    text = f.read()
-                self.last_size = len(text.encode("utf-8", errors="replace"))
-                self.last_mtime = os.path.getmtime(self.target)
-                self.state = NdjsonState()
-                with self.lock:
-                    self._feed_text(text)
-                if self.state.has_final:
-                    self.finished = True
-            except OSError as e:
-                log.error("Failed to load initial ndjson file %s: %s", self.target, e)
+        if not os.path.isfile(self.target):
+            return
+        try:
+            text, consumed = self._read_tail_lines(0)
+            self.last_size = consumed
+            self.last_mtime = os.path.getmtime(self.target)
+            self.state = NdjsonState()
+            with self.lock:
+                self._feed_text(text)
+                # 同步初始 reload epoch, 避免首次 poll_once 误判"epoch 推进"
+                self.last_reload_epoch = self.state.reload_epoch
+            if self.state.has_final:
+                self.finished = True
+        except OSError as e:
+            log.error("Failed to load initial ndjson file %s: %s", self.target, e)
 
     def poll_once(self):
         try:
@@ -584,47 +645,48 @@ class State:
             return self._reload_all()
 
         if size > self.last_size and mtime != self.last_mtime:
-            try:
-                with open(self.target, "r", encoding="utf-8", errors="replace") as f:
-                    if self.last_size > 0:
-                        f.seek(self.last_size)
-                    tail = f.read()
-            except OSError as e:
-                log.warning("poll_once read error at %s: %s", self.target, e)
+            text, consumed = self._read_tail_lines(self.last_size)
+            if consumed <= self.last_size:
                 return False
-            if tail:
-                log.debug("ndjson tail read: +%d bytes (total %d)", len(tail), size)
-                with self.lock:
-                    self._feed_text(tail)
-                    self.last_size = size
-                    self.last_mtime = mtime
-                    self.last_change_time = time.monotonic()
-                if self.state.has_final:
-                    self.finished = True
-                return True
+            log.debug("ndjson tail read: +%d bytes (total %d)", consumed - self.last_size, size)
+            with self.lock:
+                self._feed_text(text)
+                self.last_size = consumed
+                self.last_mtime = mtime
+                self.last_change_time = time.monotonic()
+                self._maybe_reset_finished_on_epoch_advance()
+            if self.state.has_final:
+                self.finished = True
+            return True
         return False
 
+    def _maybe_reset_finished_on_epoch_advance(self):
+        """reload epoch 推进 = UE 端装配了新场景, 旧的 final verdict 失效。
+        必须同时复位 finished 与 NdjsonState.has_final, 否则后续 poll_once
+        的 `if self.state.has_final: self.finished = True` 会立刻把 finished
+        拉回 True, 使复位失效。"""
+        if self.state.reload_epoch > self.last_reload_epoch:
+            self.last_reload_epoch = self.state.reload_epoch
+            self.state.has_final = False
+            self.finished = False
+            log.info("reload_epoch advanced -> finished reset (epoch=%d)",
+                     self.state.reload_epoch)
+
     def _reload_all(self):
-        try:
-            with open(self.target, "r", encoding="utf-8", errors="replace") as f:
-                text = f.read()
-        except OSError as e:
-            log.warning("_reload_all read error: %s", e)
-            return False
+        text, consumed = self._read_tail_lines(0)
         with self.lock:
             self.state = NdjsonState()
             self._pending_tail = ""
+            # 文件被截断/重写 = 新仿真启动, 旧的 finished 状态必须失效
+            self.finished = False
             self._feed_text(text)
-            self.last_size = len(text.encode("utf-8", errors="replace"))
+            self.last_size = consumed
             try:
-                # Re-stat after read to close the TOCTOU window where UE writes
-                # between read() and last_size assignment; otherwise poll_once
-                # would seek past newly-written bytes and drop records.
-                self.last_size = os.path.getsize(self.target)
+                self.last_mtime = os.path.getmtime(self.target)
             except OSError:
-                pass
-            self.last_mtime = os.path.getmtime(self.target)
+                self.last_mtime = 0
             self.last_change_time = time.monotonic()
+            self.last_reload_epoch = self.state.reload_epoch
         log.info("ndjson reloaded: %d bytes", self.last_size)
         if self.state.has_final:
             self.finished = True
@@ -707,7 +769,27 @@ def load_task_ndjson(logs_dir, task_id):
     except OSError as e:
         log.warning("load_task_ndjson error: %s", e)
         return None
-    return state.snapshot()
+    data = state.snapshot()
+    # 归档的 result.json 是权威判决（覆盖 ndjson 逐帧推算，兜底 UE crash 未写 final verdict 的场景）
+    result_path = os.path.join(task_dir, "result.json")
+    if os.path.isfile(result_path):
+        try:
+            with open(result_path, "r", encoding="utf-8") as f:
+                rd = json.load(f)
+            m = rd.get("metrics", {})
+            data["verdictResult"] = {
+                "final": rd.get("verdict", "UNKNOWN"),
+                "reached": f"{m.get('waypointsReached', 0)}/{m.get('waypointsTotal', 0)}",
+                "clearanceM": _clearance_m(m.get("minClearanceCm")),
+                "lateralDevM": round(m.get("maxLateralDevCm", 0) / 100.0, 2),
+                "elapsedS": round(m.get("elapsedSec", 0), 2),
+                "collided": bool(m.get("collided", False)),
+                "failures": rd.get("failures", []),
+                "seed": rd.get("seed"),
+            }
+        except (json.JSONDecodeError, OSError):
+            pass
+    return data
 
 
 def delete_task(logs_dir, task_id):

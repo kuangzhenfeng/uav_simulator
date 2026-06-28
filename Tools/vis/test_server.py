@@ -213,6 +213,25 @@ def test_preset_invalid_dto_rejected(tmp_path, monkeypatch):
     assert ok2
 
 
+def test_serve_file_handles_client_disconnect():
+    """静态 JS 传输时客户端断开连接不应让 handler 线程抛出异常。"""
+    class BrokenPipeWriter:
+        def __init__(self, exc):
+            self.exc = exc
+
+        def write(self, _body):
+            raise self.exc("client disconnected")
+
+    for exc in (BrokenPipeError, ConnectionResetError):
+        handler = vis_server.Handler.__new__(vis_server.Handler)
+        handler.wfile = BrokenPipeWriter(exc)
+        handler.send_response = lambda _code: None
+        handler.send_header = lambda _name, _value: None
+        handler.end_headers = lambda: None
+
+        handler._serve_file("index.html", "text/html; charset=utf-8")
+
+
 if __name__ == "__main__":
     # 简单自跑（无 pytest 也能执行）。pytest fixture(tmp_path/monkeypatch)在此回退。
     import tempfile, shutil

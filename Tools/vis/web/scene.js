@@ -2,12 +2,18 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
 import { log } from './logger.js';
 import { App } from './app.js';
-import { rebuildDebug } from './debug-renderer.js';
+import { rebuildDebug, clearDebugCache } from './debug-renderer.js';
 
 // 视角跟随系统：追踪指定无人机的第三人称相机
 let followTarget = null;      // 被跟随的无人机 agent ID
 let followSmoothLerp = 0.12;   // 相机平滑系数（0-1）
 let savedControlsTarget = new THREE.Vector3(); // 退出跟随前保存的 controls target
+let savedCameraPosition = new THREE.Vector3();
+const followCameraOffset = new THREE.Vector3();
+const defaultFollowCameraOffset = new THREE.Vector3(4, 3, 5.5);
+const CAMERA_STORAGE_KEY = 'vis_camera_config';
+let cameraConfig = loadCameraConfig();
+let cameraSaveTimer = null;
 
 export function setFollowAgent(agentID) {
   if (!App.controls) return;
@@ -16,21 +22,66 @@ export function setFollowAgent(agentID) {
 
   if (agentID === null) {
     App.controls.target.copy(savedControlsTarget);
+    App.camera?.position.copy(savedCameraPosition);
     App.controls.enabled = true;
     log.debug('camera', '退出跟随模式');
   } else {
     if (followTarget === null) {
       savedControlsTarget.copy(App.controls.target);
+      App.camera && savedCameraPosition.copy(App.camera.position);
+      const agentObj = App.agentObjects.get(agentID);
+      if (agentObj && App.camera) {
+        const offset = cameraConfig.followOffset || defaultFollowCameraOffset.toArray();
+        App.controls.target.copy(agentObj.group.position);
+        App.camera.position.copy(agentObj.group.position).add(new THREE.Vector3().fromArray(offset));
+      }
     }
     App.controls.enabled = true;
     log.debug('camera', followTarget === null ? '进入跟随模式' : '切换跟随目标', { agentID });
   }
 
   followTarget = agentID;
+  scheduleCameraSave();
 }
 
 export function getFollowAgent() {
   return followTarget;
+}
+
+function loadCameraConfig() {
+  try {
+    return JSON.parse(localStorage.getItem(CAMERA_STORAGE_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+}
+
+function scheduleCameraSave() {
+  if (cameraSaveTimer) clearTimeout(cameraSaveTimer);
+  cameraSaveTimer = setTimeout(saveCameraConfig, 250);
+}
+
+function saveCameraConfig() {
+  if (!App.controls || !App.camera) return;
+  const next = { ...cameraConfig };
+  if (followTarget === null) {
+    next.global = {
+      position: App.camera.position.toArray(),
+      target: App.controls.target.toArray(),
+    };
+  } else {
+    next.followOffset = App.camera.position.clone().sub(App.controls.target).toArray();
+  }
+  cameraConfig = next;
+  try { localStorage.setItem(CAMERA_STORAGE_KEY, JSON.stringify(cameraConfig)); } catch {}
+}
+
+function restoreGlobalCamera() {
+  const global = cameraConfig.global;
+  if (!global || !Array.isArray(global.position) || !Array.isArray(global.target)) return;
+  if (global.position.length < 3 || global.target.length < 3) return;
+  App.camera.position.fromArray(global.position);
+  App.controls.target.fromArray(global.target);
 }
 
 export function updateFollowCamera() {
@@ -38,10 +89,15 @@ export function updateFollowCamera() {
   if (!App.controls || !App.camera) return;
 
   const agentObj = App.agentObjects.get(followTarget);
-  if (!agentObj) return;
+  if (!agentObj) {
+    followTarget = null;
+    return;
+  }
 
   const dronePos = agentObj.group.position;
+  followCameraOffset.copy(App.camera.position).sub(App.controls.target);
   App.controls.target.lerp(dronePos, followSmoothLerp);
+  App.camera.position.copy(App.controls.target).add(followCameraOffset);
 }
 
 export function initThree() {
@@ -56,11 +112,13 @@ export function initThree() {
   App.scene.fog = new THREE.Fog(0x0a0d18, 120, 400);
 
   App.camera = new THREE.PerspectiveCamera(55, wrap.clientWidth / wrap.clientHeight, 0.1, 2000);
-  App.camera.position.set(40, 50, 30);
+  App.camera.position.set(24, 22, 14);
 
   App.controls = new OrbitControls(App.camera, canvas);
   App.controls.enableDamping = true;
-  App.controls.target.set(0, 2, -40);
+  App.controls.target.set(10, 4, 0);
+  restoreGlobalCamera();
+  App.controls.addEventListener('change', scheduleCameraSave);
 
   const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x202840, 0.9);
   App.scene.add(hemi);
@@ -101,8 +159,10 @@ export function rebuildGround(bounds) {
 }
 
 export function rebuildScene(d) {
+  // ground 边界只用静态场景点, 不含 trace: trace 实时增长会触发每帧 ground 重算,
+  // 而 onNewData 轻量路径已跳过 rebuildScene; 场景范围由任务航点决定, 足够覆盖飞行区。
   const pts = [];
-  d.agents.forEach(a => { if (a.initPos) pts.push(a.initPos); a.trace.forEach(t => pts.push(t.pos)); });
+  d.agents.forEach(a => { if (a.initPos) pts.push(a.initPos); });
   d.obstacles.forEach(o => o.center && pts.push(o.center));
   d.waypoints.forEach(w => pts.push(w));
   if (pts.length) {
@@ -136,6 +196,7 @@ export function rebuildScene(d) {
     });
   }
   App.debugGroups.clear();
+  clearDebugCache();
 
   const agentColors = ['#4f8cff', '#ff6b6b', '#51cf66', '#fcc419', '#cc5de8', '#22b8cf', '#ff922b', '#20c997'];
   d.agents.forEach((a, i) => {

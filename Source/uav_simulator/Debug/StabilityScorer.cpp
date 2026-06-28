@@ -2,6 +2,7 @@
 
 #include "StabilityScorer.h"
 #include "../Planning/ObstacleManager.h"
+#include "../Core/UAVPawn.h"
 #include "DrawDebugHelpers.h"
 #include "UAVLogConfig.h"
 #include "DebugDrawBuffer.h"
@@ -96,6 +97,16 @@ void UStabilityScorer::DrawScoreHUD(const FVector& WorldLocation) const
 	UWorld* World = GetWorld();
 	if (!World) return;
 
+	// 让 HUD 文本携带所属 UAV 的 AgentID, 供可视化前端把文本绑定到对应飞机
+	// (sprite 作为飞机 group 的子节点, 父子级联自动跟随)
+	const int32 AgentID = [this]() -> int32 {
+		if (const AUAVPawn* Pawn = Cast<AUAVPawn>(GetOwner()))
+		{
+			return Pawn->GetAgentID();
+		}
+		return -1;
+	}();
+
 	const FVector Base = WorldLocation + FVector(0.f, 0.f, 260.f);
 	const float Step = 30.f;
 
@@ -103,7 +114,7 @@ void UStabilityScorer::DrawScoreHUD(const FVector& WorldLocation) const
 	{
 		if (UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this))
 		{
-			Buffer->AddText(World, Base + FVector(0.f, 0.f, Line * Step), Text, ToColor(S), 0.f, -1, TEXT("hud_stability"));
+			Buffer->AddText(World, Base + FVector(0.f, 0.f, Line * Step), Text, ToColor(S), 0.f, AgentID, TEXT("hud_stability"));
 		}
 	};
 

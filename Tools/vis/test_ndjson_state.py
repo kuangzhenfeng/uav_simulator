@@ -89,6 +89,14 @@ def test_feed_frame_appends_trace_and_series():
     assert snapshot["series"]["clearanceM"][0]["points"] == [[1.0, 1.5]]
 
 
+def test_feed_frame_ignores_clearance_sentinel():
+    state = NdjsonState()
+
+    state.feed({"type": "frame", "t": 1.0, "agents": [{"id": 0, "pos": [0, 0, 0], "vel": [0, 0, 0], "clearance": 3.4028234663852886e38}]})
+
+    assert state.snapshot()["series"]["clearanceM"] == []
+
+
 def test_feed_metrics_populates_summary():
     state = NdjsonState()
 
@@ -121,6 +129,14 @@ def test_feed_verdict_sets_final_and_timeline():
     assert verdict["reached"] == "3/3"
     assert verdict["clearanceM"] == 2.5
     assert state.has_final
+
+
+def test_feed_verdict_ignores_clearance_sentinel():
+    state = NdjsonState()
+
+    state.feed({"type": "verdict", "t": 10.0, "passed": True, "reached": 1, "total": 1, "clearanceCm": 3.4028234663852886e38, "lateralDevCm": 0, "elapsedSec": 1.0, "final": True})
+
+    assert state.snapshot()["verdict"]["clearanceM"] is None
 
 
 def test_feed_traj_types_populate_future_fields():

@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<link rel="icon" type="image/svg+xml" href="/web/favicon.svg" />
+<link rel="shortcut icon" type="image/x-icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+<link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
 <title>UAV 仿真可视化 · UE 镜像</title>
 <link rel="stylesheet" href="/web/style.css" />
 <link rel="stylesheet" href="/web/vendor/uPlot.min.css" />
@@ -76,6 +77,7 @@
   </main>
 
   <footer id="timeline">
+    <span id="live-badge" class="live-badge" hidden>● LIVE</span>
     <button id="play-btn">▶</button>
     <input type="range" id="scrub" min="0" max="1000" value="0" />
     <span id="time-label" class="time-label">0.0s</span>

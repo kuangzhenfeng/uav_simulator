@@ -17,7 +17,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
 from coords import dir_to_web, to_web
-from control_proxy import forward_to_control, replay_reload_when_control_ready, resolve_control_port
+from control_proxy import forward_to_control, resolve_control_port
 import presets as preset_store
 from sim_manager import SimManager
 from state import NdjsonState, State, delete_task, list_tasks, load_task_ndjson, read_scenario_result, resolve_target
@@ -38,7 +38,6 @@ State = State
 forward_to_control = forward_to_control
 read_scenario_result = read_scenario_result
 resolve_target = resolve_target
-replay_reload_when_control_ready = replay_reload_when_control_ready
 resolve_control_port = resolve_control_port
 validate_scenario_dto = validate_scenario_dto
 
@@ -78,10 +77,20 @@ SCHEMA = {
     "defaults": {
         "name": "WebScenario",
         "fleet": [{
-            "model": "Agri_AG20", "initPos": [0, 0, 1],
-            "yaw": 0, "isLeader": True, "mode": "Once", "waypoints": [],
+            "model": "Agri_AG20", "initPos": [0, 0, 5],
+            "yaw": 0, "isLeader": True, "mode": "Once",
+            "waypoints": [{"pos": [50, 0, 5]}],
         }],
-        "obstacles": [],
+        "obstacles": [
+            {"type": "Box", "center": [8, -4, 5], "extents": [2, 2, 2], "movement": "Static", "safetyMargin": 0.5},
+            {"type": "Box", "center": [8, 4, 5], "extents": [2, 2, 2], "movement": "Static", "safetyMargin": 0.5},
+            {"type": "Box", "center": [16, 0, 5], "extents": [3, 3, 3], "movement": "Static", "safetyMargin": 0.5},
+            {"type": "Sphere", "center": [24, -3, 6], "extents": [1.5, 1.5, 1.5], "movement": "Static", "safetyMargin": 0.5},
+            {"type": "Sphere", "center": [24, 3, 4], "extents": [1.5, 1.5, 1.5], "movement": "Static", "safetyMargin": 0.5},
+            {"type": "Box", "center": [20, 0, 5], "extents": [1.5, 1.5, 1.5], "movement": "LinearVelocity", "velocity": [0, 3, 0], "safetyMargin": 0.5},
+            {"type": "Cylinder", "center": [32, 0, 0], "extents": [1, 1, 5], "movement": "Static", "safetyMargin": 0.5},
+            {"type": "Box", "center": [40, -2, 5], "extents": [2, 2, 2], "movement": "Static", "safetyMargin": 0.5},
+        ],
         "wind": {"type": "Constant", "steady": [3, 0, 0], "enabled": True,
                  "gustAmplitude": 2, "turbulenceIntensity": 1},
         "acceptance": {"requireAllWaypoints": True, "waypointRadiusCm": 300,
@@ -142,6 +151,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/" or path == "/index.html":
             self._serve_file("index.html", "text/html; charset=utf-8")
+        elif path == "/favicon.ico":
+            self._serve_file("favicon.ico", "image/x-icon")
         elif path == "/api/data":
             data = self.state_holder.snapshot_with_result()
             data["controlAvailable"] = self.state_holder.is_control_available()
@@ -226,14 +237,43 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 self._send(400, "application/json", b'{"ok":false,"error":"invalid json"}')
                 return
-            duration = max(1, min(int(body.get("duration", 60)), 3600))
-            slomo = max(0.1, min(float(body.get("slomo", 8)), 100))
-            scenario = body.get("scenario")
-            if scenario and not isinstance(scenario, str):
-                scenario = None
-            result = self.sim_manager.start(duration=duration, slomo=slomo, scenario=scenario)
-            code = 200 if result.get("ok") else 400
-            self._send(code, "application/json", json.dumps(result).encode())
+
+            # 接收完整场景配置（与原 /api/control/reload 的 DTO 一致）
+            ok_msg, err = validate_scenario_dto(body)
+            if not ok_msg:
+                self._send(400, "application/json",
+                           json.dumps({"ok": False, "error": err}).encode())
+                return
+
+            sim_dto = body.get("sim", {}) or {}
+            duration = max(1, min(int(sim_dto.get("durationSec", 60)), 3600))
+            slomo = max(0.1, min(float(sim_dto.get("slomo", 8)), 100))
+
+            # 1. 确保进程在跑（已在跑就复用，否则拉起）
+            ensure_result = self.sim_manager.ensure_running(
+                duration=duration, slomo=slomo, scenario=None)
+            if not ensure_result.get("ok"):
+                self._send(400, "application/json",
+                           json.dumps(ensure_result).encode())
+                return
+
+            # 2. 若是新拉起的进程，等控制端 HTTP 上线
+            if ensure_result.get("started"):
+                deadline = time.monotonic() + 60
+                while time.monotonic() < deadline:
+                    ok, _ = forward_to_control(self.state_holder, "/status", None)
+                    if ok:
+                        break
+                    time.sleep(1.0)
+
+            # 3. 推送场景配置
+            ok, result = forward_to_control(self.state_holder, "/reload", body)
+            if ok:
+                result["pid"] = ensure_result.get("pid")
+                self._send(200, "application/json", json.dumps(result).encode())
+            else:
+                result["pid"] = ensure_result.get("pid")
+                self._send(502, "application/json", json.dumps(result).encode())
             return
 
         if path == "/api/sim/stop":
@@ -294,17 +334,6 @@ class Handler(BaseHTTPRequestHandler):
         sub_path = path[len("/api/control"):]  # -> /reload, /slomo, ...
         log.info("POST %s from=%s body_size=%d", path, self.client_address[0], length)
         ok, result = forward_to_control(self.state_holder, sub_path, body)
-        if not ok and sub_path == "/reload":
-            start_result = self.state_holder.start_control_process(body)
-            if start_result.get("ok"):
-                threading.Thread(
-                    target=replay_reload_when_control_ready,
-                    args=(self.state_holder, body, 45),
-                    daemon=True,
-                ).start()
-                self._send(200, "application/json", json.dumps(start_result).encode())
-                return
-            result = start_result
         code = 200 if ok else 502
         self._send(code, "application/json", json.dumps(result).encode())
 
@@ -334,7 +363,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         with open(fp, "rb") as f:
             body = f.read()
-        self._send(200, mime, body)
+        try:
+            self._send(200, mime, body)
+        except (BrokenPipeError, ConnectionResetError):
+            log.info("static client disconnected: %s", rel)
 
     def _handle_sse(self):
         log.info("New SSE client connected")
@@ -363,6 +395,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _sse_push(self, _evt):
         data = self.state_holder.snapshot_with_result()
+        # SSE 必须携带 simStatus, 前端 isLiveMode 以 "UE 进程在跑" 为唯一权威信号;
+        # 否则前端只能凭 data.finished 判断, vis 重启后旧 telemetry 会被误判为 LIVE。
+        data["simStatus"] = self.sim_manager.status() if self.sim_manager else {"running": False}
+        data["controlAvailable"] = self.state_holder.is_control_available()
         payload = "data: " + json.dumps(data) + "\n\n"
         log.debug("sse_push: payload=%d bytes agents=%d obstacles=%d",
                   len(payload), len(data.get("agents", [])), len(data.get("obstacles", [])))
@@ -381,6 +417,8 @@ def _guess_mime(path):
         return "application/json"
     if path.endswith(".svg"):
         return "image/svg+xml"
+    if path.endswith(".ico"):
+        return "image/x-icon"
     return "application/octet-stream"
 
 
@@ -393,7 +431,7 @@ def main():
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--watch", default=None, help="实时监听的 ndjson 文件(默认 Logs/telemetry.ndjson)")
     p.add_argument("--project", default=default_project_root, help="项目根目录(定位 Logs/)")
-    p.add_argument("--poll-interval", type=float, default=0.5, help="实时轮询间隔(秒)")
+    p.add_argument("--poll-interval", type=float, default=0.15, help="实时轮询间隔(秒), 越小越流畅")
     p.add_argument("--idle-timeout", type=float, default=5.0, help="文件无增长多久后判定仿真结束(秒)")
     args = p.parse_args()
 

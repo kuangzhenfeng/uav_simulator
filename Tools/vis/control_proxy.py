@@ -57,29 +57,16 @@ def forward_to_control(state, sub_path, body_obj=None):
         if sub_path == "/reload":
             latency_ms = round((time.monotonic() - started) * 1000.0)
             log.error("[py-reload-fwd] reload failed endpoint=%s latency_ms=%d error=%s", url, latency_ms, e)
-        log.error("forward_to_control(%s) failed: %s", sub_path, e)
-        state.mark_control_unavailable()
+        elif sub_path == "/status":
+            log.debug("forward_to_control(/status) unreachable: %s", e)
+        else:
+            log.error("forward_to_control(%s) failed: %s", sub_path, e)
+        # 区分瞬态失败与真实离线: 仅当 port.json 也读不到时才清空端口。
+        # 单次请求失败(UE GC 卡顿/连接拒绝)不应丢弃端口, 否则需要等 1s 节流
+        # 重读 port.json 才能恢复, 期间所有控制命令直接失败。
+        current_port = resolve_control_port(state.args.project)
+        if current_port is None:
+            state.mark_control_unavailable()
+        else:
+            state.control_available = False
         return False, {"ok": False, "error": str(e)}
-
-
-def _coerce_positive_number(value, default):
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    return number if number > 0 else default
-
-
-def replay_reload_when_control_ready(state, body_obj, timeout_sec):
-    deadline = time.monotonic() + timeout_sec
-    while time.monotonic() < deadline:
-        ok, _ = forward_to_control(state, "/status", None)
-        if ok:
-            reload_ok, result = forward_to_control(state, "/reload", body_obj)
-            if reload_ok and result.get("ok", True):
-                log.info("reload_after_control_start_ok: pid=%s", getattr(state.control_process, "pid", None))
-            else:
-                log.error("reload_after_control_start_failed: result=%s", result)
-            return
-        time.sleep(1.0)
-    log.error("reload_after_control_start_timeout: timeout_sec=%s", timeout_sec)
