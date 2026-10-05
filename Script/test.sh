@@ -27,6 +27,7 @@ set +e
     -nosplash \
     -NOSAVECONFIG \
     -NoLogTimes \
+    -culture=en \
     -stdout > "$TEMP_LOG" 2>&1
 EDITOR_EXIT_CODE=$?
 set -e
@@ -48,7 +49,7 @@ DISCOVERED=$(awk '/Found [0-9]+ automation tests/ {
     }
 } END { print found + 0 }' "$TEMP_LOG")
 COMPLETED=$(awk '/Test Completed/ { count++ } END { print count + 0 }' "$TEMP_LOG")
-PASSED=$(awk '/Test Completed/ && /Result={成功}/ { count++ } END { print count + 0 }' "$TEMP_LOG")
+PASSED=$(awk '/Test Completed/ && /Result=\{Success\}/ { count++ } END { print count + 0 }' "$TEMP_LOG")
 FAILED=$((COMPLETED - PASSED))
 INCOMPLETE=$((DISCOVERED - COMPLETED))
 
@@ -63,7 +64,7 @@ echo "  Editor exit code: $EDITOR_EXIT_CODE"
 if [ "$FAILED" -gt 0 ]; then
     echo ""
     echo "Failed Tests:"
-    grep "Test Completed" "$TEMP_LOG" | grep -v "成功" || true
+    grep "Test Completed" "$TEMP_LOG" | grep -v 'Result={Success}' || true
 fi
 
 # 检测崩溃
@@ -79,6 +80,7 @@ echo "Test execution completed."
 echo "========================================"
 
 if [ "$EDITOR_EXIT_CODE" -ne 0 ] \
+    || [ "$DISCOVERED" -le 0 ] \
     || [ "$FAILED" -gt 0 ] \
     || [ "$INCOMPLETE" -ne 0 ] \
     || ! grep -q "TEST COMPLETE. EXIT CODE: 0" "$TEMP_LOG"; then

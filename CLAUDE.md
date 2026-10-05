@@ -11,7 +11,7 @@
 - 永远不要主动提交代码，除非我明确要求你这么做。如需提交代码，提交纪录不要带有Co-Authored-By。
 - 新增或修改功能时，必须更新README.md中的功能特性描述，保持文档与代码的一致性。
 - 修改README.md文档时最小化修改，尽量保持简洁。
-- 如果有需要再UE的编辑器上才能添加或者修改的，可以调用soft-ue-cli进行修改。
+- 如果需要在 UE 编辑器中添加或修改内容，使用官方 Unreal MCP 工具。
 - 分析日志时需要注意：部分日志被降频了，所以可能不是每个时间点都有输出的。
 - 分析时可以适当添加必要日志，知道你有足够把握定位到根因。
 - 不考虑兼容问题，不考虑改动量，不要为了处理资产迁移风险而妥协，一切以最主流的工业级做法来实现。
@@ -41,7 +41,7 @@
 
 ## Agent规范
 
-- 如有需要，自行启动UE编辑器，使用soft-ue-cli进行控制，并在完成后关闭UE编辑器。
+- 如有需要，自行启动 UE 5.8 编辑器，使用官方 Unreal MCP 控制，并在完成后关闭自行启动的编辑器。
 - 若WebSearch返回结果为空，尝试换用Fetch进行网络搜索
 - 当调用grill-with-docs skill进行拷问时，请使用AskUserQuestion工具并给出推荐选项
 - 当调用improve-codebase-architecture skill生成可视化网页时用中文，并且调用使用python启动一个本地服务器，返回访问地址
@@ -52,10 +52,11 @@
 
 ## Unreal Engine 控制
 
-`soft-ue-cli` 通过 SoftUEBridge 插件(经 pipx 安装)控制本项目。运行 `soft-ue-cli --help` 查看所有可用命令。使用 UE 相关命令前,游戏或编辑器必须已启用 SoftUEBridge 运行。
+本项目通过官方 `ModelContextProtocol` 和 `AllToolsets` 插件提供 Unreal MCP，编辑器默认监听 `http://127.0.0.1:8000/mcp`。Codex 配置位于 `.codex/config.toml`，Claude Code 配置位于 `.mcp.json`。
 
-用户重新编译并启动 UE 后,用以下命令验证:
-  `soft-ue-cli check-setup`
+使用 UE 工具前先启动编辑器，通过 `list_toolsets`、`describe_toolset` 发现工具，再执行一次只读查询验证连接。工具调用必须串行执行。服务器未启动时可使用编辑器控制台命令 `ModelContextProtocol.StartServer`。
+
+headless 仿真使用 `Script/sim.bat` / `Script/sim.sh` 和项目自身 HTTP 控制端，不依赖编辑器 MCP。
 
 ## Agent skills
 

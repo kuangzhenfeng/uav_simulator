@@ -234,16 +234,22 @@ uav_simulator/
 ## 快速开始
 
 ### 环境要求
-- Unreal Engine 5.7+
-- Visual Studio 2022
+- Unreal Engine 5.8.3
+- Visual Studio 2022 17.14 或更高版本
 - Windows 10/11
 
 ### 环境配置
 编辑 `Script/env.bat`，将 `UE_ROOT` 修改为你的 UE 安装路径：
 ```bat
-set UE_ROOT=D:\mySoftware\Epic Games\UE_5.7
+set UE_ROOT=D:\mySoftware\Epic Games\UE_5.8
 ```
 项目路径会自动从脚本位置推导，无需手动设置。
+
+### 官方 Unreal MCP
+- 编辑器启用 `ModelContextProtocol` 和 `AllToolsets`，默认自动启动 `http://127.0.0.1:8000/mcp`。
+- Codex 使用项目内 `.codex/config.toml`；Claude Code 使用 `.mcp.json`。修改配置后重新加载客户端。
+- 先调用 `list_toolsets`，再检查当前选中 Actor 验证连接；引擎工具调用必须串行执行。
+- MCP 仅在编辑器目标启用；批量仿真继续使用 `Script/sim.bat` / `Script/sim.sh` 和项目 HTTP 控制端。
 
 ### 编译项目
 ```bash
@@ -365,6 +371,8 @@ FNMPCAvoidanceResult Result = NMPCAvoidance->ComputeAvoidance(
 
 ### 运行测试
 
+测试脚本固定使用英文结果输出，按发现数、完成数、成功数和进程退出码共同判定。
+
 ```bash
 # 使用测试脚本
 Script\test.bat
@@ -465,8 +473,6 @@ TrajectoryTracker → NMPC/LinearMPC (20Hz)
 - [clangd配置方法.md](Docs/clangd配置方法.md)
 - [PID调参指南](Docs/PID调参指南.md)
 - [C++ 历史遗留问题汇总](Docs/C++%20历史遗留问题汇总.md)
-- [Houdini Engine for Unreal教程](Docs/Houdini%20Engine%20for%20Unreal教程.md)
-- [UE5+Houdini生成山脉教程](Docs/UE5+Houdini生成山脉（带树林、电线杆与电线）完整教程.md)
 
 ## 许可证
 
