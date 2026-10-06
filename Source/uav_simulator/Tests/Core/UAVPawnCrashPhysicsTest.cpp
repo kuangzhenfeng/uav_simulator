@@ -5,6 +5,8 @@
 #include "../../Core/UAVPawn.h"
 #include "../../Core/UAVProductManager.h"
 #include "../../Core/UAVWreckActor.h"
+#include "../../Planning/TrajectoryTracker.h"
+#include "../../Mission/MissionComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Engine/Engine.h"
@@ -366,13 +368,13 @@ bool FUAVPawnStateFollowsWreckAfterPhysicsTickTest::RunTest(const FString& Param
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAVPawnHardLimitPrioritizesCrossTrackCorrectionTest,
-	"UAVSimulator.Core.UAVPawn.HardLimitPrioritizesCrossTrackCorrection",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAVPawnPreservesAvoidanceControlTest,
+	"UAVSimulator.Core.UAVPawn.PreservesAvoidanceControl",
 	UAV_TEST_FLAGS)
 
-bool FUAVPawnHardLimitPrioritizesCrossTrackCorrectionTest::RunTest(const FString& Parameters)
+bool FUAVPawnPreservesAvoidanceControlTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = CreateUAVCrashTestWorld(TEXT("UAVPawnHardLimitPrioritizesCrossTrackCorrection"));
+	UWorld* World = CreateUAVCrashTestWorld(TEXT("UAVPawnPreservesAvoidanceControl"));
 	TestNotNull(TEXT("World should be created"), World);
 	if (!World)
 	{
@@ -403,14 +405,40 @@ bool FUAVPawnHardLimitPrioritizesCrossTrackCorrectionTest::RunTest(const FString
 	Pawn->SetNearestObstacleDistanceForTest(MAX_FLT);
 
 	const FVector NominalAccel(450.0f, -300.0f, 0.0f);
-	const FVector CorrectedAccel = Pawn->ApplyHardLimitCorrectionForTest(NominalAccel, 1600.0f);
+	const FVector CorrectedAccel = Pawn->PrepareTrajectoryAccelerationForTest(NominalAccel);
 
-	// 严重横向偏差应大幅抑制前向加速度，但保留部分以维持最低前进速度
-	TestTrue(TEXT("Severe deviation should significantly suppress along-track acceleration"),
-		CorrectedAccel.X < 200.0f && CorrectedAccel.X > 50.0f);
-	TestTrue(TEXT("Severe deviation should command acceleration back toward the trajectory"),
-		CorrectedAccel.Y > 400.0f);
+	// 大偏差时也不能把安全避障方向覆盖为强制回轨迹。
+	UAV_TEST_VECTOR_EQUAL(CorrectedAccel, NominalAccel, 0.001f);
 
+	DestroyUAVCrashTestWorld(World);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAVPawnTrajectoryTerminalStateTest,
+	"UAVSimulator.Core.UAVPawn.TrajectoryTerminalState", UAV_TEST_FLAGS)
+bool FUAVPawnTrajectoryTerminalStateTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CreateUAVCrashTestWorld(TEXT("TrajectoryTerminalState"));
+	if (!World) return false;
+	AUAVPawn* Pawn = SpawnCrashTestPawn(World, FVector(0,0,1000));
+	if (!Pawn) {DestroyUAVCrashTestWorld(World); return false;}
+	const FVector Goal(5000,0,1000);
+	Pawn->GetMissionComponent()->SetWaypoints({Goal});
+	Pawn->GetMissionComponent()->StartMission();
+	Pawn->SetTrajectory(UAVTestHelpers::CreateLinearTrajectory(FVector(0,0,1000), Goal, 0.1f, 2));
+	Pawn->StartTrajectoryTracking();
+	UTrajectoryTracker* Tracker = Pawn->GetTrajectoryTracker();
+	Tracker->bEnableAdaptiveTimeScale = false;
+	for (int32 i=0; i<6; ++i) Tracker->TickComponent(0.02f, LEVELTICK_All, nullptr);
+	TArray<FVector> References;
+	Pawn->GetNMPCReferencePointsForTest(References);
+	for (const FVector& Point : References) UAV_TEST_VECTOR_EQUAL(Point, Goal, 0.001f);
+	for (int32 i=0; i<600; ++i) Tracker->TickComponent(0.02f, LEVELTICK_All, nullptr);
+	TestTrue(TEXT("Unreached trajectory times out"), Tracker->IsTimedOut());
+	TestTrue(TEXT("Timeout immediately fails mission"), Pawn->GetMissionComponent()->GetMissionState()==EMissionState::Failed);
+	TestTrue(TEXT("Failed trajectory switches to position hold"), Pawn->GetControlMode()==EUAVControlMode::Position);
+	Pawn->StartTrajectoryTracking();
+	TestFalse(TEXT("Failed mission cannot restart old trajectory"), Tracker->IsTracking());
 	DestroyUAVCrashTestWorld(World);
 	return true;
 }

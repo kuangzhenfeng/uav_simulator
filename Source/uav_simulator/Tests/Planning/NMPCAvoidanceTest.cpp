@@ -57,6 +57,10 @@ bool FNMPCAvoidanceTest_ForwardSimulation::RunTest(const FString& Parameters)
 	// 验证加速度使速度增大
 	FVector ExpectedVel = InitVel + ConstAccel * (Dt * NMPC->Config.Solver.PredictionSteps);
 	TestTrue("Velocity increases", OutVelocities.Last().X > InitVel.X);
+	const float Time = Dt * NMPC->Config.Solver.PredictionSteps;
+	const FVector ExpectedAcceleratedPosition = InitPos + InitVel * Time + ConstAccel * (0.5f * Time * Time);
+	UAV_TEST_VECTOR_EQUAL(OutPositions.Last(), ExpectedAcceleratedPosition, 0.001f);
+	UAV_TEST_VECTOR_EQUAL(OutVelocities.Last(), ExpectedVel, 0.001f);
 
 	return true;
 }
@@ -621,6 +625,108 @@ bool FNMPCAvoidanceTest_DistanceGradient_Cylinder::RunTest(const FString& Parame
 		}
 	}
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNMPCAvoidanceTest_AdjointGradient,
+	"UAVSimulator.Planning.NMPCAvoidance.AdjointGradient", UAV_TEST_FLAGS)
+bool FNMPCAvoidanceTest_AdjointGradient::RunTest(const FString& Parameters)
+{
+	UNMPCAvoidance* NMPC = NewObject<UNMPCAvoidance>();
+	NMPC->Config.Solver.PredictionSteps = 6;
+	NMPC->Config.Solver.PredictionHorizon = 1.2f;
+	NMPC->Config.Obstacle.ObstacleAlpha = 0.02f;
+	NMPC->Config.Obstacle.ObstacleSafeDistance = 150.0f;
+	NMPC->Config.Obstacle.SmoothHingeBeta = 0.02f;
+	const FVector InitialPosition(50, 100, 900);
+	TArray<FVector> Controls, References;
+	for (int32 k = 0; k < 6; ++k) Controls.Add(FVector(15 + k * 2, -12 + k, 8 - k));
+	for (int32 Case = 0; Case < 7; ++Case)
+	{
+		References.Reset();
+		for (int32 k = 0; k <= 6; ++k)
+		{
+			const FVector Offset = Case == 2 ? FVector::ZeroVector : FVector(130, -20, 40) * (k * 0.2f);
+			References.Add(InitialPosition + FVector(40, -30, 20) + Offset);
+		}
+		// 覆盖缺少终端参考点的 L2 兜底和完整终端代价。
+		if (Case == 3) References.SetNum(3);
+		const FVector InitialVelocity = Case == 1 ? FVector(-150, 40, -20) : FVector(150, -40, 20);
+		TArray<FObstacleInfo> Obstacles;
+		if (Case >= 4)
+		{
+			FObstacleInfo Obstacle;
+			Obstacle.Type = Case == 4 ? EObstacleType::Sphere : Case == 5 ? EObstacleType::Box : EObstacleType::Cylinder;
+			Obstacle.Center = FVector(350, 180, 950);
+			Obstacle.Extents = FVector(100, 100, 180);
+			Obstacle.Rotation = FRotator(0, 20, 0);
+			Obstacle.SafetyMargin = 20;
+			Obstacle.bIsDynamic = true;
+			Obstacle.Velocity = FVector(-30, 20, 10);
+			Obstacles.Add(Obstacle);
+		}
+		for (int32 Smooth = 0; Smooth < 2; ++Smooth)
+		{
+			NMPC->Config.Obstacle.bUseSmoothHinge = Smooth != 0;
+			TArray<FVector> Gradient;
+			NMPC->ComputeGradient(InitialPosition, InitialVelocity, Controls, References, Obstacles, Gradient);
+			for (int32 k = 0; k < Controls.Num(); ++k)
+			{
+				for (int32 Axis = 0; Axis < 3; ++Axis)
+				{
+					// 独立中心差分只用于校验，不参与生产求解。
+					const double Epsilon = 0.5;
+					TArray<FVector> Perturbed = Controls, Positions, Velocities;
+					Perturbed[k][Axis] += Epsilon;
+					NMPC->ForwardSimulate(InitialPosition, InitialVelocity, Perturbed, Positions, Velocities);
+					const double Plus = NMPC->ComputeCost(Positions, Velocities, Perturbed, References, Obstacles);
+					Perturbed[k][Axis] -= 2 * Epsilon;
+					NMPC->ForwardSimulate(InitialPosition, InitialVelocity, Perturbed, Positions, Velocities);
+					const double Minus = NMPC->ComputeCost(Positions, Velocities, Perturbed, References, Obstacles);
+					const double Numerical = (Plus - Minus) / (2 * Epsilon);
+					const double Tolerance = 0.1 + FMath::Abs(Numerical) * 0.02;
+					TestTrue(FString::Printf(TEXT("Adjoint case=%d smooth=%d step=%d axis=%d analytic=%.4f numerical=%.4f"),
+						Case, Smooth, k, Axis, Gradient[k][Axis], Numerical), FMath::Abs(Gradient[k][Axis] - Numerical) < Tolerance);
+				}
+			}
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNMPCAvoidanceTest_FeasibleRefinement,
+	"UAVSimulator.Planning.NMPCAvoidance.FeasibleRefinement", UAV_TEST_FLAGS)
+bool FNMPCAvoidanceTest_FeasibleRefinement::RunTest(const FString& Parameters)
+{
+	UNMPCAvoidance* NMPC = NewObject<UNMPCAvoidance>();
+	const FVector Position(0, 0, 1000), Velocity(120, 0, 0);
+	TArray<FVector> References;
+	for (int32 k = 0; k <= NMPC->Config.Solver.PredictionSteps; ++k) References.Add(FVector(100 * k, 0, 1000));
+	FObstacleInfo Obstacle = UAVTestHelpers::CreateSphereObstacle(1, FVector(550, 0, 1000), 120);
+	Obstacle.SafetyMargin = 50;
+	const TArray<FObstacleInfo> Obstacles = {Obstacle};
+	// 存在安全制动解；高跟踪权重不能把可行候选精修成穿过障碍的轨迹。
+	NMPC->Config.Cost.WeightLag = 5.0f;
+	NMPC->Config.Cost.WeightTerminal = 10.0f;
+	const FNMPCAvoidanceResult Result = NMPC->ComputeAvoidance(Position, Velocity, References, Obstacles);
+	TestTrue(TEXT("Refinement preserves feasible predicted clearance"),
+		Result.Diagnostics.MinPredictedClearance > NMPC->Config.Obstacle.ObstacleSafeDistance);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNMPCAvoidanceTest_ClearanceRecovery,
+	"UAVSimulator.Planning.NMPCAvoidance.ClearanceRecovery", UAV_TEST_FLAGS)
+bool FNMPCAvoidanceTest_ClearanceRecovery::RunTest(const FString& Parameters)
+{
+	UNMPCAvoidance* NMPC = NewObject<UNMPCAvoidance>();
+	const FVector Position(0,0,1000);
+	TArray<FVector> References;
+	for (int32 k = 0; k <= NMPC->Config.Solver.PredictionSteps; ++k) References.Add(FVector(5000,0,1000));
+	FObstacleInfo Obstacle = UAVTestHelpers::CreateSphereObstacle(1, FVector(450,0,1000),120);
+	Obstacle.SafetyMargin = 50;
+	// 初始净空 280cm 小于安全距离 300cm；停车不能恢复安全，必须主动远离。
+	const FNMPCAvoidanceResult Result = NMPC->ComputeAvoidance(Position, FVector::ZeroVector, References, {Obstacle});
+	TestTrue(TEXT("Unsafe initial clearance commands recovery instead of holding"), Result.OptimalAcceleration.X < -1.0f);
 	return true;
 }
 

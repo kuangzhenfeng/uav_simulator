@@ -8,6 +8,7 @@
 #include "../../Core/UAVTypes.h"
 #include "../../Planning/DynamicObstacleActor.h"
 #include "Components/StaticMeshComponent.h"
+#include "../../Planning/ObstacleGeometry.h"
 
 #include "Logging/LogMacros.h"
 
@@ -215,6 +216,41 @@ bool FScenarioDynamicGeometryRegressionTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("逻辑旋转未被世界 AABB 覆盖"), Snapshot.Rotation.Equals(Entry.Rotation, 0.01f));
 		TestEqual(TEXT("重复感知不新增障碍"), Manager->RegisterPerceivedObstacleFromActor(Actor), Snapshot.ObstacleID);
 		TestEqual(TEXT("仅一个逻辑障碍"), Manager->GetAllObstacles().Num(), 1);
+	}
+	DestroyScenarioTestWorld(World);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FScenarioPatrolPredictionTest,
+	"UAVSimulator.Scenario.LoadObstacles.PatrolPrediction", UAV_TEST_FLAGS)
+bool FScenarioPatrolPredictionTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CreateScenarioTestWorld(TEXT("PatrolPrediction"));
+	if (!World) return false;
+	ADynamicObstacleActor* Actor = World->SpawnActor<ADynamicObstacleActor>();
+	for (EObstacleMovementType Type : {EObstacleMovementType::PatrolLoop, EObstacleMovementType::PatrolPingPong})
+	{
+		FScenarioObstacleEntry Entry;
+		Entry.MovementType = Type;
+		Entry.PatrolSpeed = 100;
+		Entry.PatrolPoints = {FVector(0,0,1000), FVector(0,0,1000), FVector(200,0,1000), FVector(200,200,1000)};
+		for (float Time : {0.5f, 2.0f, 3.0f, 5.0f, 31.5f})
+		{
+			Actor->Configure(Entry);
+			UAV_TEST_VECTOR_EQUAL(Actor->GetVelocity(), FVector(100,0,0), 0.001f);
+			Actor->Tick(0.25f);
+			FObstacleInfo Initial = Actor->GetObstacleSnapshot();
+			Initial.Extents = FVector(123,234,345);
+			Initial.SafetyMargin = 87;
+			const FObstacleInfo Predicted = ObstacleGeometry::Predict(Initial, Time);
+			UAV_TEST_VECTOR_EQUAL(Actor->GetActorLocation(), Initial.Center, 0.001f);
+			// 小步实际推进独立验证预测的跨段、转向和多周期行为。
+			for (int32 i = 0; i < FMath::RoundToInt(Time * 100); ++i) Actor->Tick(0.01f);
+			UAV_TEST_VECTOR_EQUAL(Predicted.Center, Actor->GetActorLocation(), 0.1f);
+			UAV_TEST_VECTOR_EQUAL(Predicted.Velocity, Actor->GetVelocity(), 0.1f);
+			UAV_TEST_VECTOR_EQUAL(Predicted.Extents, Initial.Extents, 0.001f);
+			TestEqual(TEXT("Prediction preserves geometry margin"), Predicted.SafetyMargin, Initial.SafetyMargin);
+		}
 	}
 	DestroyScenarioTestWorld(World);
 	return true;

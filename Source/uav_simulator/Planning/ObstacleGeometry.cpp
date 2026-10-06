@@ -1,5 +1,23 @@
 #include "ObstacleGeometry.h"
 #include "LandscapeProxy.h"
+#include "DynamicObstacleActor.h"
+
+FObstacleInfo ObstacleGeometry::Predict(const FObstacleInfo& Obstacle, float SecondsAhead)
+{
+	FObstacleInfo Predicted = Obstacle;
+	if (!Obstacle.bIsDynamic || SecondsAhead <= 0.0f) return Predicted;
+	if (const ADynamicObstacleActor* Actor = Cast<ADynamicObstacleActor>(Obstacle.LinkedActor.Get()))
+	{
+		const FObstacleInfo Future = Actor->PredictObstacleSnapshot(SecondsAhead);
+		Predicted.Center = Future.Center;
+		Predicted.Velocity = Future.Velocity;
+	}
+	else
+	{
+		Predicted.Center += Obstacle.Velocity * SecondsAhead;
+	}
+	return Predicted;
+}
 
 static float CalculateCylinderDistance(const FVector& Point, const FObstacleInfo& Obstacle)
 {

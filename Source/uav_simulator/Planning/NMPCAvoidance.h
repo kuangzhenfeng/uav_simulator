@@ -44,10 +44,6 @@ struct FNMPCSolverConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
 	float ConvergenceTolerance = 0.1f;
 
-	// 有限差分步长 (cm/s²)，应按控制尺度设置
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
-	float FiniteDiffEpsilon = 20.0f;
-
 	// 梯度下降步长 (cm/s²)：归一化梯度方向上的步进量
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NMPC|Solver")
 	float InitialStepSize = 100.0f;
@@ -461,6 +457,7 @@ struct FInitCandidate
 	TArray<FVector> Controls;
 	float Cost = MAX_FLT;
 	float MinClearance = MAX_FLT;
+	float ClearanceViolation = MAX_FLT;
 	float PathProgress = 0.0f;
 };
 
@@ -525,6 +522,15 @@ public:
 		const TArray<FVector>& ReferencePoints,
 		const TArray<FObstacleInfo>& Obstacles) const;
 
+	/** 计算总代价对控制序列的解析伴随梯度。 */
+	void ComputeGradient(
+		const FVector& InitPos,
+		const FVector& InitVel,
+		const TArray<FVector>& Controls,
+		const TArray<FVector>& ReferencePoints,
+		const TArray<FObstacleInfo>& Obstacles,
+		TArray<FVector>& OutGradient) const;
+
 	/**
 	 * 计算单个障碍物的代价 (指数势垒)
 	 * @param Position 查询位置
@@ -585,6 +591,7 @@ public:
 		 * 生成多初值候选
 		 */
 		TArray<FInitCandidate> GenerateCandidates(
+			const FVector& CurrentPosition,
 			const TArray<FVector>& ReferencePoints,
 			const FVector& CurrentVelocity) const;
 
@@ -625,6 +632,7 @@ private:
 	float SmoothedMaxHorizonObs = 0.0f;
 	// 卡死逃逸模式：触发后持续多帧强制突破
 	int32 StuckEscapeCount = 0;
+	FVector RecoveryDirection = FVector::ZeroVector;
 
 	// 位置基准卡死检测
 	FVector StuckCheckPosition = FVector::ZeroVector;
@@ -658,20 +666,8 @@ private:
 		const FVector& Point,
 		const FObstacleInfo& Obstacle) const;
 
-	/**
-	 * 有限差分计算梯度
-	 * @param InitPos 初始位置
-	 * @param InitVel 初始速度
-	 * @param Controls 当前控制序列
-	 * @param ReferencePoints 参考点
-	 * @param Obstacles 障碍物
-	 * @param OutGradient 输出梯度 (N 个向量)
-	 */
-	void ComputeGradient(
-		const FVector& InitPos,
-		const FVector& InitVel,
-		const TArray<FVector>& Controls,
-		const TArray<FVector>& ReferencePoints,
-		const TArray<FObstacleInfo>& Obstacles,
-		TArray<FVector>& OutGradient) const;
+	/** 返回障碍势垒值及其对有符号距离的导数。 */
+	float EvaluateObstaclePenalty(float Distance, float& OutDerivative) const;
+	float MinimumPredictedClearance(const TArray<FVector>& Positions, const TArray<FObstacleInfo>& Obstacles) const;
+	float PredictedClearanceViolation(const TArray<FVector>& Positions, const TArray<FObstacleInfo>& Obstacles) const;
 };

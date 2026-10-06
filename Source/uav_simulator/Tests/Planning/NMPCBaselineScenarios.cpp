@@ -185,7 +185,8 @@ bool NMPCBaseline_RunScenario(
 			break;
 		}
 
-		// Euler 积分推进状态
+		// 分段恒定加速度推进，与预测模型保持一致。
+		Pos += Vel * dt + Result.OptimalAcceleration * (0.5f * dt * dt);
 		Vel = Vel + Result.OptimalAcceleration * dt;
 
 		// 速度限制
@@ -195,7 +196,6 @@ bool NMPCBaseline_RunScenario(
 			Vel = Vel * (NMPC->Config.Actuator.MaxVelocity / VelMag);
 		}
 
-		Pos = Pos + Vel * dt;
 
 		// 计算到障碍物最小距离
 		for (const FObstacleInfo& Obs : DynObstacles)
@@ -219,6 +219,9 @@ bool NMPCBaseline_RunScenario(
 	if (bHasNaN) bPassed = false;
 	if (OutMinClearance < Scenario.MinClearanceRequired) bPassed = false;
 	if (OutProgress < Scenario.MinProgressRequired) bPassed = false;
+
+	if (!bPassed)
+		UE_LOG(LogTemp, Warning, TEXT("[Baseline] Final state %s: Pos=%s Vel=%s"), *Scenario.Name, *Pos.ToString(), *Vel.ToString());
 
 	return bPassed;
 }

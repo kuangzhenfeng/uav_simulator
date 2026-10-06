@@ -226,6 +226,10 @@ struct FJointNMPCConfig
 {
 	GENERATED_BODY()
 
+	// 联合求解器仍使用有限差分；单机求解器使用解析伴随梯度。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "JointNMPC|Solver")
+	float FiniteDiffEpsilon = 20.0f;
+
 	// 基础 NMPC 配置 (复用单机参数)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "JointNMPC")
 	FNMPCConfig BaseConfig;

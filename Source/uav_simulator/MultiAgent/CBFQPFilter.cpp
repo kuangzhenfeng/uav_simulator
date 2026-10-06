@@ -14,6 +14,87 @@ float ComputeObstacleDistanceAndGradient(const FVector& Point, const FObstacleIn
     return ObstacleGeometry::SignedDistance(Point, Obs) - StaticSafetyDistance;
 }
 
+// 三维严格凸 QP 的最优点最多需要三个线性无关活跃面。
+// 主求解器未收敛时枚举活跃面，避免把初值投影失败误当成硬安全不可行。
+bool SolveHardControlQP(const FVector& Nominal, const TArray<float>& A, const TArray<float>& B,
+    float Tolerance, TArray<float>& OutZ, float& OutResidual, float& OutViolation)
+{
+    TArray<FVector> Normals;
+    TArray<double> Bounds;
+    for (int32 k = 0; k < B.Num(); ++k)
+    {
+        const FVector Normal(A[k*3], A[k*3+1], A[k*3+2]);
+        const double Scale = Normal.Size();
+        if (Scale < 1e-10)
+        {
+            if (B[k] < -Tolerance) return false;
+            continue;
+        }
+        Normals.Add(Normal / Scale);
+        Bounds.Add(B[k] / Scale);
+    }
+    bool Found = false;
+    double BestCost = TNumericLimits<double>::Max();
+    auto Evaluate = [&](int32 Count, int32 I, int32 J, int32 K)
+    {
+        const int32 Indices[] = {I,J,K};
+        double Matrix[3][4] = {};
+        for (int32 r=0; r<Count; ++r)
+        {
+            for (int32 c=0; c<Count; ++c)
+                Matrix[r][c] = FVector::DotProduct(Normals[Indices[r]], Normals[Indices[c]]);
+            Matrix[r][Count] = FVector::DotProduct(Normals[Indices[r]], Nominal) - Bounds[Indices[r]];
+        }
+        for (int32 c=0; c<Count; ++c)
+        {
+            int32 Pivot = c;
+            for (int32 r=c+1; r<Count; ++r)
+                if (FMath::Abs(Matrix[r][c]) > FMath::Abs(Matrix[Pivot][c])) Pivot=r;
+            if (FMath::Abs(Matrix[Pivot][c]) < 1e-10) return;
+            for (int32 j=c; j<=Count; ++j) Swap(Matrix[c][j], Matrix[Pivot][j]);
+            const double Denom = Matrix[c][c];
+            for (int32 j=c; j<=Count; ++j) Matrix[c][j] /= Denom;
+            for (int32 r=0; r<Count; ++r)
+                if (r!=c)
+                {
+                    const double Factor = Matrix[r][c];
+                    for (int32 j=c; j<=Count; ++j) Matrix[r][j] -= Factor*Matrix[c][j];
+                }
+        }
+        FVector Candidate = Nominal;
+        for (int32 r=0; r<Count; ++r)
+        {
+            if (Matrix[r][Count] < -1e-7) return;
+            Candidate -= Normals[Indices[r]] * Matrix[r][Count];
+        }
+        const double Cost = FVector::DistSquared(Candidate, Nominal);
+        if (Cost >= BestCost) return;
+        double MaxViolation = 0.0;
+        for (int32 r=0; r<Normals.Num(); ++r)
+            MaxViolation = FMath::Max(MaxViolation, FVector::DotProduct(Normals[r], Candidate)-Bounds[r]);
+        if (MaxViolation > FMath::Max(1e-6, (double)Tolerance)) return;
+        FVector Stationarity = Candidate-Nominal;
+        for (int32 r=0; r<Count; ++r) Stationarity += Normals[Indices[r]]*Matrix[r][Count];
+        OutZ = {(float)Candidate.X,(float)Candidate.Y,(float)Candidate.Z};
+        OutResidual = (float)Stationarity.Size();
+        OutViolation = (float)MaxViolation;
+        BestCost=Cost;
+        Found=true;
+    };
+    Evaluate(0,0,0,0);
+    if (Found) return true;
+    for (int32 i=0; i<Normals.Num(); ++i)
+    {
+        Evaluate(1,i,0,0);
+        for (int32 j=i+1; j<Normals.Num(); ++j)
+        {
+            Evaluate(2,i,j,0);
+            for (int32 k=j+1; k<Normals.Num(); ++k) Evaluate(3,i,j,k);
+        }
+    }
+    return Found;
+}
+
 FVector ComputeExecutableEscapeAcceleration(const FVector& EscapeDir, const FCBFQPConfig& Config)
 {
     FVector Direction = EscapeDir.GetSafeNormal();
@@ -292,7 +373,7 @@ void UCBFQPFilter::SolveActiveSetQP(
 
     auto ProjectControlHalfspacesForFeasibility = [&]()
     {
-        constexpr int32 ProjectionPasses = 16;
+        const int32 ProjectionPasses = N == 3 ? 128 : 16;
         for (int32 Pass = 0; Pass < ProjectionPasses; ++Pass)
         {
             bool bProjectedAny = false;
@@ -979,8 +1060,26 @@ FCBFQPResult UCBFQPFilter::Filter(
     float KKTRes, MaxViol;
     int32 Iters;
 
-    SolveActiveSetQP(N, M, HMat, GVec, AllAFlat, AllBounds, Config,
+    // 优先求解无松弛安全约束；只有不可行或求解未收敛时才启用软约束降级。
+    TArray<float> HardA, HardH, HardG;
+    HardA.Reserve(M * 3);
+    HardH.SetNumZeroed(9);
+    for (int32 j = 0; j < 3; ++j)
+    {
+        HardH[j * 3 + j] = HMat[j * N + j];
+        HardG.Add(GVec[j]);
+    }
+    for (int32 k = 0; k < M; ++k)
+        for (int32 j = 0; j < 3; ++j) HardA.Add(AllAFlat[k * N + j]);
+    SolveActiveSetQP(3, M, HardH, HardG, HardA, AllBounds, Config,
         Z, Status, KKTRes, MaxViol, Iters);
+    if (Status != ECBFQPStatus::Solved && SolveHardControlQP(EffectiveNominalAcceleration,
+        HardA, AllBounds, Config.QPKKTTolerance, Z, KKTRes, MaxViol))
+        Status = ECBFQPStatus::Solved;
+    if (Status != ECBFQPStatus::Solved)
+        SolveActiveSetQP(N, M, HMat, GVec, AllAFlat, AllBounds, Config,
+            Z, Status, KKTRes, MaxViol, Iters);
+
 
     // ---- 提取结果 ----
     if (Z.Num() >= 3)

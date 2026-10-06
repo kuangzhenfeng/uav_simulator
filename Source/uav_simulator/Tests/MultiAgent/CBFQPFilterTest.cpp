@@ -1128,4 +1128,22 @@ bool FCBFQPFilter_DegradedSafeAccelerationRespectsTiltCone::RunTest(const FStrin
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCBFQPFilter_HardSafetyPriority,
+	"UAVSimulator.MultiAgent.CBFQPFilter.HardSafetyPriority", UAV_TEST_FLAGS)
+bool FCBFQPFilter_HardSafetyPriority::RunTest(const FString& Parameters)
+{
+	UCBFQPFilter* Filter = NewObject<UCBFQPFilter>();
+	FCBFQPConfig Config;
+	// 即使软约束代价很低，可执行的硬安全约束也不能让位于跟踪目标。
+	Config.RhoStatic = 0.001f;
+	Config.QPMaxIterations = 1;
+	const FUAVState State = UAVTestHelpers::CreateUAVState(FVector::ZeroVector, FVector(200,0,0));
+	const TArray<FObstacleInfo> Obstacles = {UAVTestHelpers::CreateSphereObstacle(1, FVector(500,0,0), 100, 0)};
+	const FCBFQPResult Result = Filter->Filter(FVector(500,0,0), State, {}, Obstacles, Config);
+	TestTrue(TEXT("Feasible hard safety is solved without slack"), Result.SolveStatus == ECBFQPStatus::Solved);
+	TestEqual(TEXT("Static safety slack remains zero"), Result.StaticSlack, 0.0f);
+	TestTrue(TEXT("Acceleration satisfies closing obstacle constraint"), Result.SafeAcceleration.X <= -199.9f);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

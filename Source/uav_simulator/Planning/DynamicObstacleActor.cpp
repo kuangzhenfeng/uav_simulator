@@ -59,8 +59,9 @@ void ADynamicObstacleActor::Configure(const FScenarioObstacleEntry& Entry)
 	CurrentSegmentIndex = 0;
 	SegmentDistance = 0.0f;
 	bForward = true;
-	bSegmentValid = false;
-	RecomputeCurrentSegment();
+	FVector NormalizedPosition = InitialLocation, Velocity;
+	AdvancePatrolState(0.0f, CurrentSegmentIndex, SegmentDistance, bForward, NormalizedPosition, Velocity);
+	SetActorLocation(NormalizedPosition, false, nullptr, ETeleportType::ResetPhysics);
 
 	UE_LOG(LogUAVPlanning, Log, TEXT("[DynamicObstacle] Configured: MovementType=%d, InitialLoc=%s, PatrolPoints=%d, PatrolSpeed=%.1f"),
 		(int32)MovementType, *InitialLocation.ToString(), PatrolPoints.Num(), PatrolSpeed);
@@ -93,133 +94,80 @@ void ADynamicObstacleActor::Tick(float DeltaTime)
 	}
 }
 
-void ADynamicObstacleActor::RecomputeCurrentSegment()
+void ADynamicObstacleActor::AdvancePatrolState(float DeltaTime, int32& Index, float& Distance,
+	bool& Forward, FVector& Position, FVector& Velocity) const
 {
-	bSegmentValid = false;
 	const int32 Num = PatrolPoints.Num();
-	if (Num < 2)
+	Velocity = FVector::ZeroVector;
+	if (Num < 2 || PatrolSpeed <= KINDA_SMALL_NUMBER) return;
+	float CycleLength = 0.0f;
+	for (int32 i = 1; i < Num; ++i) CycleLength += FVector::Distance(PatrolPoints[i - 1], PatrolPoints[i]);
+	CycleLength = MovementType == EObstacleMovementType::PatrolLoop
+		? CycleLength + FVector::Distance(PatrolPoints.Last(), PatrolPoints[0]) : CycleLength * 2.0f;
+	if (CycleLength <= KINDA_SMALL_NUMBER) return;
+	// 完整周期不改变状态，保留跨段残差，避免大时间步丢失运动距离。
+	float Remaining = FMath::Fmod(PatrolSpeed * FMath::Max(DeltaTime, 0.0f), CycleLength);
+	for (int32 Guard = 0; Guard < Num * 2 + 4; ++Guard)
 	{
-		return;
+		if (MovementType == EObstacleMovementType::PatrolPingPong)
+		{
+			if (Index == Num - 1) Forward = false;
+			if (Index == 0) Forward = true;
+		}
+		const int32 Next = MovementType == EObstacleMovementType::PatrolLoop
+			? (Index + 1) % Num : Index + (Forward ? 1 : -1);
+		const FVector Delta = PatrolPoints[Next] - PatrolPoints[Index];
+		const float Length = Delta.Size();
+		if (Length > KINDA_SMALL_NUMBER && Remaining < Length - Distance)
+		{
+			Distance += Remaining;
+			Velocity = Delta / Length * PatrolSpeed;
+			Position = PatrolPoints[Index] + Delta / Length * Distance;
+			return;
+		}
+		Remaining = FMath::Max(0.0f, Remaining - FMath::Max(0.0f, Length - Distance));
+		Index = Next;
+		Distance = 0.0f;
 	}
-
-	int32 NextIndex;
-	if (MovementType == EObstacleMovementType::PatrolLoop)
-	{
-		NextIndex = (CurrentSegmentIndex + 1) % Num;
-	}
-	else // PatrolPingPong：方向由 bForward 决定，端点翻转在 Advance 到达端点时完成。
-	{
-		NextIndex = bForward ? (CurrentSegmentIndex + 1) : (CurrentSegmentIndex - 1);
-	}
-
-	if (NextIndex < 0 || NextIndex >= Num)
-	{
-		return;
-	}
-
-	const FVector& Start = PatrolPoints[CurrentSegmentIndex];
-	const FVector& End = PatrolPoints[NextIndex];
-	const FVector Dir = End - Start;
-	SegmentLength = Dir.Size();
-	if (SegmentLength < KINDA_SMALL_NUMBER)
-	{
-		// 退化为零长段：标记有效但方向置零，由 Advance 立刻跳到下一段。
-		SegmentDirection = FVector::ZeroVector;
-		bSegmentValid = true;
-		return;
-	}
-	SegmentDirection = Dir / SegmentLength;
-	bSegmentValid = true;
 }
 
 void ADynamicObstacleActor::AdvanceAlongPoints(float DeltaTime)
 {
-	const int32 Num = PatrolPoints.Num();
-	if (Num < 2 || PatrolSpeed <= KINDA_SMALL_NUMBER || DeltaTime <= KINDA_SMALL_NUMBER)
-	{
-		return;
-	}
-
-	if (!bSegmentValid)
-	{
-		RecomputeCurrentSegment();
-		if (!bSegmentValid)
-		{
-			return;
-		}
-	}
-
-	// 本帧推进距离（残差跨段累加）。
-	float Remaining = PatrolSpeed * DeltaTime;
-
-	// 多段推进：处理一帧跨过多段或连续零长段的极端情形。
-	int32 SafetyGuard = Num * 2 + 4;
-	while (Remaining > KINDA_SMALL_NUMBER && SafetyGuard-- > 0)
-	{
-		if (SegmentLength < KINDA_SMALL_NUMBER)
-		{
-			// 零长段：不消耗距离，直接切到下一段。
-		}
-		else
-		{
-			const float LeftOnSegment = SegmentLength - SegmentDistance;
-			if (Remaining < LeftOnSegment)
-			{
-				SegmentDistance += Remaining;
-				Remaining = 0.0f;
-				break;
-			}
-			// 走完当前段，消耗对应距离。
-			Remaining -= LeftOnSegment;
-			SegmentDistance = SegmentLength;
-		}
-
-		// 段切换：新起点 = 当前段终点索引。
-		if (MovementType == EObstacleMovementType::PatrolLoop)
-		{
-			CurrentSegmentIndex = (CurrentSegmentIndex + 1) % Num;
-		}
-		else // PatrolPingPong
-		{
-			// 先把起点推进到当前段终点。
-			CurrentSegmentIndex = bForward ? (CurrentSegmentIndex + 1) : (CurrentSegmentIndex - 1);
-			// 抵达端点（末位/首位）时翻转方向，使下一段沿相反方向返回。
-			if (bForward && CurrentSegmentIndex == Num - 1)
-			{
-				bForward = false;
-			}
-			else if (!bForward && CurrentSegmentIndex == 0)
-			{
-				bForward = true;
-			}
-		}
-
-		SegmentDistance = 0.0f;
-		RecomputeCurrentSegment();
-		if (!bSegmentValid)
-		{
-			break;
-		}
-	}
-
-	// 位置 = 当前段起点 + 归一化方向 * 已走距离。
-	if (bSegmentValid && SegmentLength >= KINDA_SMALL_NUMBER)
-	{
-		const FVector Start = PatrolPoints[CurrentSegmentIndex];
-		const FVector NextLocation = Start + SegmentDirection * SegmentDistance;
-		SetActorLocation(NextLocation, false, nullptr, ETeleportType::ResetPhysics);
-	}
-
+	FVector Position = GetActorLocation(), Velocity;
+	AdvancePatrolState(DeltaTime, CurrentSegmentIndex, SegmentDistance, bForward, Position, Velocity);
+	SetActorLocation(Position, false, nullptr, ETeleportType::ResetPhysics);
 	UE_LOG_THROTTLE(2.0f, LogUAVPlanning, Log,
 		TEXT("[DynamicObstacle] Tick: MoveType=%d, Loc=%s, SegIdx=%d, SegDist=%.1f, Forward=%d"),
-		(int32)MovementType, *GetActorLocation().ToString(), CurrentSegmentIndex, SegmentDistance, bForward ? 1 : 0);
+		(int32)MovementType, *Position.ToString(), CurrentSegmentIndex, SegmentDistance, bForward ? 1 : 0);
+}
+
+FObstacleInfo ADynamicObstacleActor::PredictObstacleSnapshot(float SecondsAhead) const
+{
+	FObstacleInfo Snapshot = GetObstacleSnapshot();
+	if (MovementType == EObstacleMovementType::LinearVelocity)
+		Snapshot.Center += LinearVelocity * FMath::Max(SecondsAhead, 0.0f);
+	else if (MovementType == EObstacleMovementType::PatrolLoop || MovementType == EObstacleMovementType::PatrolPingPong)
+	{
+		int32 Index = CurrentSegmentIndex;
+		float Distance = SegmentDistance;
+		bool Forward = bForward;
+		AdvancePatrolState(SecondsAhead, Index, Distance, Forward, Snapshot.Center, Snapshot.Velocity);
+	}
+	return Snapshot;
 }
 
 FVector ADynamicObstacleActor::GetVelocity() const
 {
 	if (MovementType == EObstacleMovementType::LinearVelocity) return LinearVelocity;
 	if (MovementType == EObstacleMovementType::PatrolLoop || MovementType == EObstacleMovementType::PatrolPingPong)
-		return bSegmentValid ? SegmentDirection * PatrolSpeed : FVector::ZeroVector;
+	{
+		int32 Index = CurrentSegmentIndex;
+		float Distance = SegmentDistance;
+		bool Forward = bForward;
+		FVector Position = GetActorLocation(), Velocity;
+		AdvancePatrolState(0.0f, Index, Distance, Forward, Position, Velocity);
+		return Velocity;
+	}
 	return FVector::ZeroVector;
 }
 

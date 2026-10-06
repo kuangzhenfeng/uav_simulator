@@ -184,7 +184,8 @@ public:
 	void RecordSafeCrashPoseForTest() { RecordSafeFlightState(); }
 	AUAVWreckActor* GetActiveWreckActorForTest() const { return ActiveWreckActor; }
 	void SetNearestObstacleDistanceForTest(float InDistance) { CachedNearestObsDist = InDistance; }
-	FVector ApplyHardLimitCorrectionForTest(const FVector& Acceleration, float CrossTrackDev);
+	FVector PrepareTrajectoryAccelerationForTest(const FVector& Acceleration);
+	void GetNMPCReferencePointsForTest(TArray<FVector>& Out) { PrepareReferencePoints(Out); }
 #endif
 
 	// 获取轨迹跟踪组件
@@ -514,15 +515,9 @@ private:
 	FVector CalculateEscapeDirection(const TArray<FObstacleInfo>& NearbyObstacles);
 	float CalculateEscapeAcceleration(float NearestObsDist);
 
-	// 偏差保护
-	FVector ApplyDeviationProtection(const FVector& NMPCAcceleration);
-	FVector LimitLateralAcceleration(const FVector& Acceleration);
-	FVector ApplyPDCorrection(const FVector& Acceleration);
-	FVector ApplyHardLimitCorrection(const FVector& Acceleration, float CrossTrackDev);
+	// 轨迹指标与执行准备
+	FVector PrepareTrajectoryAcceleration(const FVector& NMPCAcceleration);
 	void UpdateSpeedScaleForObstacles();
-
-	// 速度钳位
-	FVector ApplyVelocityClamp(const FVector& Acceleration);
 
 	// 位置保持
 	void ExecutePositionHold();

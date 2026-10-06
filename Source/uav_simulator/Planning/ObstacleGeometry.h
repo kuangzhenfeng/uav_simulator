@@ -7,4 +7,5 @@ namespace ObstacleGeometry
 {
 	UAV_SIMULATOR_API float SignedDistance(const FVector& Point, const FObstacleInfo& Obstacle);
 	UAV_SIMULATOR_API FVector Gradient(const FVector& Point, const FObstacleInfo& Obstacle);
+	UAV_SIMULATOR_API FObstacleInfo Predict(const FObstacleInfo& Obstacle, float SecondsAhead);
 }

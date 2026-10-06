@@ -261,9 +261,9 @@ void AUAVPawn::SetUAVStateForTest(const FUAVState& InState)
 	SetActorLocationAndRotation(CurrentState.Position, CurrentState.Rotation, false, nullptr, ETeleportType::TeleportPhysics);
 }
 
-FVector AUAVPawn::ApplyHardLimitCorrectionForTest(const FVector& Acceleration, float CrossTrackDev)
+FVector AUAVPawn::PrepareTrajectoryAccelerationForTest(const FVector& Acceleration)
 {
-	return ApplyHardLimitCorrection(Acceleration, CrossTrackDev);
+	return PrepareTrajectoryAcceleration(Acceleration);
 }
 #endif
 
@@ -513,28 +513,6 @@ void AUAVPawn::PrepareReferencePoints(TArray<FVector>& OutReferencePoints)
 		OutReferencePoints.Add(TrajectoryTrackerComponent->GetDesiredState(CurrentTime + i * Dt).Position);
 	}
 
-	// 参考点退化检测
-	if (OutReferencePoints.Num() > 1)
-	{
-		FVector EndRef = OutReferencePoints.Last();
-		bool bAllSame = true;
-		for (int32 i = 0; i < OutReferencePoints.Num() - 1; ++i)
-		{
-			if (!OutReferencePoints[i].Equals(EndRef, 10.0f))
-			{
-				bAllSame = false;
-				break;
-			}
-		}
-		if (bAllSame && FVector::Dist(CurrentState.Position, EndRef) > 50.0f)
-		{
-			for (int32 i = 0; i <= N; ++i)
-			{
-				float Alpha = (float)i / FMath::Max(N, 1);
-				OutReferencePoints[i] = FMath::Lerp(CurrentState.Position, EndRef, Alpha);
-			}
-		}
-	}
 }
 
 void AUAVPawn::FilterNearbyObstacles(TArray<FObstacleInfo>& OutObstacles)
@@ -607,14 +585,16 @@ void AUAVPawn::FixReferencePointsPenetratingObstacles(
 	TArray<FVector>& ReferencePoints,
 	const TArray<FObstacleInfo>& Obstacles)
 {
-	for (FVector& RefPt : ReferencePoints)
+	for (int32 k = 0; k < ReferencePoints.Num(); ++k)
 	{
+		FVector& RefPt = ReferencePoints[k];
 		for (const FObstacleInfo& Obs : Obstacles)
 		{
-			float Dist = NMPCComponent->CalculateDistanceToObstacle(RefPt, Obs);
+			const FObstacleInfo Future = ObstacleGeometry::Predict(Obs, k * NMPCComponent->Config.GetDt());
+			float Dist = NMPCComponent->CalculateDistanceToObstacle(RefPt, Future);
 			if (Dist < NMPCComponent->Config.Obstacle.ObstacleSafeDistance)
 			{
-				FVector PushDir = ObstacleGeometry::Gradient(RefPt, Obs).GetSafeNormal();
+				FVector PushDir = ObstacleGeometry::Gradient(RefPt, Future).GetSafeNormal();
 				if (PushDir.IsNearlyZero())
 				{
 					PushDir = FVector::UpVector;
@@ -735,19 +715,7 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 		HandleStuckEscape(Result, NearbyObstacles);
 	}
 
-	// NMPC 净空不足制动：减速但保留 NMPC 的避障方向分量
-	// 仅抑制向障碍物方向的速度，不丢弃 NMPC 计算的避障加速度
-	if (Result.Diagnostics.bClearanceInsufficient && !Result.bStuck)
-	{
-		float Speed = CurrentState.Velocity.Size();
-		FVector VelDir = Speed > 10.0f ? CurrentState.Velocity.GetSafeNormal() : FVector::ForwardVector;
-		// 沿速度方向施加制动，但保留 50% 的 NMPC 横向/垂直避障分量
-		FVector NMPCHoriz = CachedNMPCAcceleration - VelDir * FVector::DotProduct(CachedNMPCAcceleration, VelDir);
-		CachedNMPCAcceleration = NMPCHoriz * 0.5f - VelDir * 200.0f;
-		UE_LOG_THROTTLE(0.5, LogUAVActor, Warning,
-			TEXT("[NMPC] Clearance insufficient (%.0fcm), applying brake"),
-			Result.Diagnostics.MinPredictedClearance);
-	}
+
 }
 
 // ========== 逃逸逻辑辅助方法 ==========
@@ -799,87 +767,6 @@ void AUAVPawn::HandleStuckEscape(
 }
 
 // ========== 偏差保护辅助方法 ==========
-
-FVector AUAVPawn::LimitLateralAcceleration(const FVector& Acceleration)
-{
-	FVector Result = Acceleration;
-	// 基础最大横向加速度限制（cm/s²）
-	float MaxLateralAccel = 300.0f;
-
-	// 近障碍时放宽横向限制（400），允许更积极的侧向避障
-	if (CachedNearestObsDist < NMPCComponent->Config.Obstacle.ObstacleSafeDistance * 2.0f)
-	{
-		MaxLateralAccel = 400.0f;
-	}
-
-	// 限制 Y（侧向）和 Z（高度）方向的加速度幅度，保持前进方向不受限
-	float LateralMag = FMath::Sqrt(Result.Y * Result.Y + Result.Z * Result.Z);
-	if (LateralMag > MaxLateralAccel)
-	{
-		float Scale = MaxLateralAccel / LateralMag;
-		Result.Y *= Scale;
-		Result.Z *= Scale;
-	}
-
-	return Result;
-}
-
-// PD 横向修正：当轨迹跟踪有横向偏差时，叠加 P+D 校正
-FVector AUAVPawn::ApplyPDCorrection(const FVector& Acceleration)
-{
-	FVector Result = Acceleration;
-	FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
-
-	// 计算横向位置误差（Y: 左右，Z: 高度）
-	float YError = DesiredPos.Y - CurrentState.Position.Y;
-	float ZError = DesiredPos.Z - CurrentState.Position.Z;
-
-	constexpr float Kp = 1.2f;
-	constexpr float Kd = 1.5f;
-	// 速度反馈：抑制横向振荡
-	float YVelError = -CurrentState.Velocity.Y;
-	float ZVelError = -CurrentState.Velocity.Z;
-
-	Result.Y += Kp * YError + Kd * YVelError;
-	Result.Z += Kp * ZError + Kd * ZVelError;
-
-	return Result;
-}
-
-// 硬限制修正：偏差超过阈值时，用固定强度加速度强制拉回
-FVector AUAVPawn::ApplyHardLimitCorrection(const FVector& Acceleration, float CrossTrackDev)
-{
-	FVector Result = Acceleration;
-	FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
-
-	float YError = DesiredPos.Y - CurrentState.Position.Y;
-	float ZError = DesiredPos.Z - CurrentState.Position.Z;
-
-	// 基础偏差硬限制 80cm (0.8m)，近障碍时适度放宽到 100cm
-	float HardLimit = 80.0f;
-	if (CachedNearestObsDist < NMPCComponent->Config.Obstacle.ObstacleSafeDistance * 3.0f)
-	{
-		float ProximityRatio = FMath::Clamp(
-			1.0f - CachedNearestObsDist / (NMPCComponent->Config.Obstacle.ObstacleSafeDistance * 3.0f), 0.0f, 1.0f);
-		HardLimit = FMath::Lerp(80.0f, 100.0f, ProximityRatio);
-	}
-
-	// 偏差超过硬限制时，用固定强度（800 cm/s²）+ 速度阻尼强制拉回。
-	// 严重横向偏差阶段大幅抑制前向加速度，优先回轨迹。
-	if (CrossTrackDev > HardLimit)
-	{
-		FVector CorrDir(0.0f, YError, ZError);
-		CorrDir = CorrDir.GetSafeNormal();
-		constexpr float Kd = 1.5f;
-		float YVelError = -CurrentState.Velocity.Y;
-		float ZVelError = -CurrentState.Velocity.Z;
-		Result.X *= 0.15f;  // 严重偏差时保留少量前向加速度
-		Result.Y = CorrDir.Y * 800.0f + Kd * YVelError;
-		Result.Z = CorrDir.Z * 800.0f + Kd * ZVelError;
-	}
-
-	return Result;
-}
 
 void AUAVPawn::UpdateSpeedScaleForObstacles()
 {
@@ -936,7 +823,7 @@ void AUAVPawn::UpdateSpeedScaleForObstacles()
 	TrajectoryTrackerComponent->SetSpeedScale(SpeedScale);
 }
 
-FVector AUAVPawn::ApplyDeviationProtection(const FVector& NMPCAcceleration)
+FVector AUAVPawn::PrepareTrajectoryAcceleration(const FVector& NMPCAcceleration)
 {
 	FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
 
@@ -960,19 +847,8 @@ FVector AUAVPawn::ApplyDeviationProtection(const FVector& NMPCAcceleration)
 	// 更新速度缩放（基于障碍物距离）
 	UpdateSpeedScaleForObstacles();
 
-	// 偏差保护：当偏差超过 2m 时，叠加 PD 纠偏，防止 NMPC 陷入局部最优
-	// 降低阈值以更早介入，特别是在高速飞行时
-	FVector Result = NMPCAcceleration;
-	if (CrossTrackDev > 200.0f)
-	{
-		Result = ApplyPDCorrection(Result);
-
-		// 硬限制：偏差超过 3m 时强制纠偏
-		if (CrossTrackDev > 300.0f)
-		{
-			Result = ApplyHardLimitCorrection(Result, CrossTrackDev);
-		}
-	}
+	// 轨迹误差由 NMPC 代价处理，执行层保持可行控制量。
+	const FVector Result = NMPCAcceleration;
 
 	if (CrossTrackDev > 500.0f)
 	{
@@ -986,57 +862,6 @@ FVector AUAVPawn::ApplyDeviationProtection(const FVector& NMPCAcceleration)
 			NMPCAcceleration.X, NMPCAcceleration.Y, NMPCAcceleration.Z,
 			Result.X, Result.Y, Result.Z,
 			CachedNearestObsDist);
-	}
-
-	return Result;
-}
-
-// ========== 速度钳位辅助方法 ==========
-
-FVector AUAVPawn::ApplyVelocityClamp(const FVector& Acceleration)
-{
-	FVector Result = Acceleration;
-	float MaxVel = PositionControllerComponent->MaxVelocity;
-	float CurSpeed = CurrentState.Velocity.Size();
-
-	// 偏差感知速度限制：偏差大时降低速度上限，防止飞过纠偏范围
-	// 基于当前横向偏差计算允许的最大速度比例
-	float DevSpeedLimit = 1.0f;
-	if (TrajectoryTrackerComponent)
-	{
-		FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
-		float YErr = DesiredPos.Y - CurrentState.Position.Y;
-		float ZErr = DesiredPos.Z - CurrentState.Position.Z;
-		float Dev = FMath::Sqrt(YErr * YErr + ZErr * ZErr);
-		if (Dev > 800.0f)
-		{
-			// 偏差 > 8m：速度限制 30%
-			DevSpeedLimit = 0.3f;
-		}
-		else if (Dev > 500.0f)
-		{
-			// 偏差 > 5m：速度限制 50%
-			DevSpeedLimit = FMath::Lerp(0.5f, 0.3f, (Dev - 500.0f) / 300.0f);
-		}
-		else if (Dev > 250.0f)
-		{
-			// 偏差 > 2.5m：速度限制 70%
-			DevSpeedLimit = FMath::Lerp(1.0f, 0.5f, (Dev - 250.0f) / 250.0f);
-		}
-	}
-
-	float EffectiveMaxSpeed = MaxVel * DevSpeedLimit;
-
-	// 仅限制前向（X轴）速度分量，不影响横向/纵向纠偏速度
-	float ForwardSpeed = FMath::Abs(CurrentState.Velocity.X);
-	if (ForwardSpeed > EffectiveMaxSpeed && DevSpeedLimit < 1.0f)
-	{
-		float ForwardAccel = Result.X;
-		if ((ForwardSpeed > 0 && ForwardAccel > 0) || (ForwardSpeed < 0 && ForwardAccel < 0))
-		{
-			float Ratio = FMath::Clamp((ForwardSpeed - EffectiveMaxSpeed) / FMath::Max(EffectiveMaxSpeed * 0.1f, 10.0f), 0.0f, 1.0f);
-			Result.X -= ForwardAccel * Ratio;
-		}
 	}
 
 	return Result;
@@ -1116,40 +941,9 @@ void AUAVPawn::UpdateController(float DeltaTime)
 				SolveNMPCAvoidance(DeltaTime);
 			}
 
-			// 应用偏差保护和速度钳位：卡死时跳过EMA，直接使用原始控制量
-			if (bNMPCStuck)
-			{
-				SmoothedNMPCAcceleration = CachedNMPCAcceleration;
-			}
-			else
-			{
-				SmoothedNMPCAcceleration = SmoothedNMPCAcceleration * 0.4f + CachedNMPCAcceleration * 0.6f;
-			}
-			// 最小加速度保证：当 UAV 速度极低且 NMPC 控制量过小时，注入最小前进加速度
-			// 防止 NMPC 因自适应时间缩放冻结参考点 + 温启动零控制形成死循环
-			{
-				const float CurSpeed = CurrentState.Velocity.Size();
-				const float NMPCMag = SmoothedNMPCAcceleration.Size();
-				const float MinSpeed = 600.0f;      // 6 m/s（MaxVel 的 50%）
-				const float MinControlMag = 250.0f;  // NMPC 控制量低于此值视为过小（SatRatio < 0.5）
-
-				if (CurSpeed < MinSpeed && NMPCMag < MinControlMag)
-				{
-					// 朝向轨迹期望位置注入最小加速度
-					FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
-					FVector ToRef = (DesiredPos - CurrentState.Position);
-					float DistToRef = ToRef.Size();
-
-					if (DistToRef > 50.0f) // 距参考点 > 50cm 时才注入
-					{
-						FVector MinAccelVec = ToRef.GetSafeNormal() * 200.0f; // 2 m/s^2
-						SmoothedNMPCAcceleration = SmoothedNMPCAcceleration + MinAccelVec;
-					}
-				}
-			}
-
-			FVector EffectiveAccel = ApplyDeviationProtection(SmoothedNMPCAcceleration);
-			EffectiveAccel = ApplyVelocityClamp(EffectiveAccel);
+			// 平滑和执行约束已包含在预测优化中，不在安全滤波前叠加启发式控制。
+			SmoothedNMPCAcceleration = CachedNMPCAcceleration;
+			FVector EffectiveAccel = PrepareTrajectoryAcceleration(CachedNMPCAcceleration);
 
 				// ---- CBF-QP 统一安全滤波 ----
 				bMetricsCBFActiveThisFrame = false;
@@ -1557,6 +1351,7 @@ void AUAVPawn::SetTrajectory(const FTrajectory& InTrajectory)
 
 void AUAVPawn::StartTrajectoryTracking()
 {
+	if (MissionComponent && MissionComponent->GetMissionState() == EMissionState::Failed) return;
 	if (TrajectoryTrackerComponent)
 	{
 		UE_LOG(LogUAVActor, Log, TEXT("Starting trajectory tracking."));

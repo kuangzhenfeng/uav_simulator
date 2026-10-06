@@ -28,6 +28,8 @@ public:
 	virtual void Tick(float DeltaTime) override;
 	virtual FVector GetVelocity() const override;
 	FObstacleInfo GetObstacleSnapshot() const;
+	/** 使用与实际推进相同的巡逻模型查询未来状态，不修改 Actor。 */
+	FObstacleInfo PredictObstacleSnapshot(float SecondsAhead) const;
 
 protected:
 	virtual void BeginPlay() override;
@@ -42,8 +44,8 @@ private:
 	/** 巡逻推进：沿段推进并处理跨段/反向。 */
 	void AdvanceAlongPoints(float DeltaTime);
 
-	/** 重新计算当前段（起点/终点）的方向与长度缓存。 */
-	void RecomputeCurrentSegment();
+	void AdvancePatrolState(float DeltaTime, int32& SegmentIndex, float& Distance, bool& Forward,
+		FVector& Position, FVector& Velocity) const;
 
 	// ===== 运动模型参数（由 Configure 写入） =====
 
@@ -74,12 +76,4 @@ private:
 	/** PingPong 当前推进方向（true=正向递增，false=反向递减） */
 	bool bForward = true;
 
-	/** 当前段方向向量（归一化） */
-	FVector SegmentDirection = FVector::ForwardVector;
-
-	/** 当前段长度（cm） */
-	float SegmentLength = 0.0f;
-
-	/** 段缓存是否已对当前段索引有效 */
-	bool bSegmentValid = false;
 };

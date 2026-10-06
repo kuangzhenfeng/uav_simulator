@@ -390,7 +390,7 @@ void UJointNMPCSolver::ComputeJointGradient(
 {
 	int32 NumAgents = AgentStates.Num();
 	int32 N = Config.BaseConfig.Solver.PredictionSteps;
-	float Epsilon = Config.BaseConfig.Solver.FiniteDiffEpsilon;
+	float Epsilon = Config.FiniteDiffEpsilon;
 	float Dt = Config.BaseConfig.GetDt();
 	float MaxVel = Config.BaseConfig.Actuator.MaxVelocity;
 
