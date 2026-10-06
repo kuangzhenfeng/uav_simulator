@@ -429,6 +429,9 @@ protected:
 private:
 	bool bNMPCStuck = false;
 
+	// 控制与动力学共用固定步长，帧间保留未积分的时间。
+	double PhysicsStepAccumulator = 0.0;
+
 	// NMPC 调用节流：缓存上次结果，避免每个子步都调用
 	float NMPCSolveAccumulator = 0.0f;
 	FVector CachedNMPCAcceleration = FVector::ZeroVector;
@@ -527,7 +530,8 @@ private:
 	// 基于 Mellinger & Kumar 微分平坦方法，通过 jerk 解析推导角速度，再数值微分得角加速度
 	FRotator ComputeAngularAccelerationFromLinearAccel(
 		const FVector& LinearAccel,
-		float CurrentYaw);
+		float CurrentYaw,
+		float DeltaTime);
 
 	// 前馈数值微分历史状态
 	FVector PrevFeedforwardAccel = FVector::ZeroVector;     // 上一帧线性加速度

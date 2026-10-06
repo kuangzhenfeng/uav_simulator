@@ -109,10 +109,12 @@ void UTrajectoryTracker::HandleOvertimeCompletion(float DeltaTime)
 void UTrajectoryTracker::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-	SCOPE_CYCLE_COUNTER(STAT_TrajectoryTracker);
+	AdvanceTracking(DeltaTime);
+}
 
-	// 与 UAVPawn::Tick 保持一致的步长上限，防止首帧大步长导致轨迹时间跳变
-	DeltaTime = FMath::Min(DeltaTime, 0.02f);
+void UTrajectoryTracker::AdvanceTracking(float DeltaTime)
+{
+	SCOPE_CYCLE_COUNTER(STAT_TrajectoryTracker);
 
 	// 轨迹时间耗尽后切换为位置控制兜底：持续检测是否到达终点
 	if (ShouldCheckOvertimeCompletion())

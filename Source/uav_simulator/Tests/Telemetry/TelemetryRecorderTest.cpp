@@ -6,8 +6,43 @@
 #include "../../Core/UAVPawn.h"
 #include "../../Core/UAVTypes.h"
 #include "../../Planning/PlanningVisualizer.h"
+#include "../../Debug/DebugDrawBuffer.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDebugDrawSnapshotTest,
+	"UAVSimulator.Telemetry.DebugDrawSnapshot", UAV_TEST_FLAGS)
+
+bool FDebugDrawSnapshotTest::RunTest(const FString& Parameters)
+{
+	UGameInstance* GameInstance = NewObject<UGameInstance>();
+	UDebugDrawBuffer* Buffer = NewObject<UDebugDrawBuffer>(GameInstance);
+	TGuardValue<uint64> FrameGuard(GFrameCounter, GFrameCounter);
+	Buffer->AddSphere(nullptr, FVector(1, 0, 0), 10, FColor::White, -1, 1);
+	Buffer->AddLine(nullptr, FVector::ZeroVector, FVector::UpVector, FColor::Red, 1, 5, 2);
+	++GFrameCounter;
+	Buffer->AddSphere(nullptr, FVector(2, 0, 0), 10, FColor::White, -1, 1);
+	Buffer->AddSphere(nullptr, FVector(3, 0, 0), 10, FColor::White, -1, 2);
+	const TArray<FBufferedPrimitive> Primitives = Buffer->FlushAndReset();
+	TestEqual(TEXT("Latest frame plus retained duration event"), Primitives.Num(), 3);
+	int32 LatestCount = 0;
+	int32 EventCount = 0;
+	for (const FBufferedPrimitive& Primitive : Primitives)
+	{
+		if (Primitive.Duration < 0)
+		{
+			++LatestCount;
+			TestTrue(TEXT("Old frame excluded"), Primitive.Points[0].X >= 2);
+		}
+		else ++EventCount;
+	}
+	TestEqual(TEXT("Both agents retained in latest frame"), LatestCount, 2);
+	TestEqual(TEXT("Duration event retained across frames"), EventCount, 1);
+	TestTrue(TEXT("Consumer drains buffer"), Buffer->IsEmpty());
+	Buffer->AddSphere(nullptr, FVector(4, 0, 0), 10, FColor::White);
+	TestEqual(TEXT("Same frame can append after draining"), Buffer->FlushAndReset().Num(), 1);
+	return true;
+}
 
 // ==================== 降采样索引（纯函数契约）====================
 // TelemetryRecorder::SampleIndices 是 static 纯函数，验证首尾入选 + 上限 + 等距。

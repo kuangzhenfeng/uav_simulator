@@ -57,6 +57,7 @@ AUAVPawn::AUAVPawn()
 
 	// 创建轨迹跟踪组件
 	TrajectoryTrackerComponent = CreateDefaultSubobject<UTrajectoryTracker>(TEXT("TrajectoryTracker"));
+	TrajectoryTrackerComponent->PrimaryComponentTick.bCanEverTick = false;
 
 	// 创建障碍物管理组件
 	ObstacleManagerComponent = CreateDefaultSubobject<UObstacleManager>(TEXT("ObstacleManager"));
@@ -299,18 +300,18 @@ void AUAVPawn::Tick(float DeltaTime)
 
 	SCOPE_CYCLE_COUNTER(STAT_UAVPawnTick);
 
-	// 子步积分：将大帧拆成固定 0.02s 步长，保证物理精度的同时支持时间加速
+	// 固定步长累计调度，避免渲染帧率改变控制频率或产生极短的 PID 微分步。
 	const float FixedStep = 0.02f;
-	float Remaining = FMath::Min(DeltaTime, 1.0f); // 最多1秒防止卡顿帧
-	while (Remaining > KINDA_SMALL_NUMBER)
+	PhysicsStepAccumulator += FMath::Clamp(static_cast<double>(DeltaTime), 0.0, 1.0);
+	while (PhysicsStepAccumulator >= FixedStep)
 	{
-		const float Step = FMath::Min(Remaining, FixedStep);
+		const float Step = FixedStep;
+		PhysicsStepAccumulator -= FixedStep;
 
 		// 炸机状态：由 UE 刚体物理接管坠落，只同步状态，不再手动覆盖位置
 		if (FlightState == EFlightState::Crashed)
 		{
 			SyncStateFromWreck();
-			Remaining -= Step;
 			continue;
 		}
 
@@ -331,6 +332,7 @@ void AUAVPawn::Tick(float DeltaTime)
 			}
 			{
 				SCOPE_CYCLE_COUNTER(STAT_PawnControllerUpdate);
+				if (TrajectoryTrackerComponent) TrajectoryTrackerComponent->AdvanceTracking(Step);
 				UpdateController(Step);
 			}
 			RecordSafeFlightState();
@@ -355,7 +357,6 @@ void AUAVPawn::Tick(float DeltaTime)
 				SetActorRotation(CurrentState.Rotation);
 			}
 		}
-		Remaining -= Step;
 	}
 
 	// 更新仿真指标
@@ -1047,7 +1048,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 
 				// 计算期望角加速度（用于前馈控制）
 				FRotator DesiredAngularAccel = ComputeAngularAccelerationFromLinearAccel(
-					EffectiveAccel, CurrentState.Rotation.Yaw);
+					EffectiveAccel, CurrentState.Rotation.Yaw, DeltaTime);
 
 			// CBF 完整性检查：Active 模式下，确保 CBF 输出未被意外修改
 			if (CBFQPConfig.Mode == ECBFMode::Active && bMetricsCBFActiveThisFrame)
@@ -1461,7 +1462,8 @@ void AUAVPawn::ClearWaypoints()
 
 FRotator AUAVPawn::ComputeAngularAccelerationFromLinearAccel(
 	const FVector& LinearAccel,
-	float CurrentYaw)
+	float CurrentYaw,
+	float DeltaTime)
 {
 	// Mellinger & Kumar 微分平坦: 用 jerk 解析推导角速度，再数值微分得角加速度
 	// 相比旧方案（双重微分 z_B），只对加速度做一次微分，噪声显著降低
@@ -1504,11 +1506,8 @@ FRotator AUAVPawn::ComputeAngularAccelerationFromLinearAccel(
 
 	FVector x_B = FVector::CrossProduct(y_B, z_B);
 
-	float dt = GetWorld()->GetDeltaSeconds();
-	if (dt < KINDA_SMALL_NUMBER)
-	{
-		dt = 0.02f;
-	}
+	// 差分历史按控制步更新，必须使用同一时钟，不能使用渲染帧间隔。
+	const float dt = FMath::Max(DeltaTime, KINDA_SMALL_NUMBER);
 
 	// Step 3: 预热期 — 前2帧只积累状态，返回零
 	if (FeedforwardWarmupCount < 2)

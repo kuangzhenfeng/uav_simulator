@@ -21,6 +21,10 @@ public:
 	UPlanningVisualizer();
 
 protected:
+	// 仅限制显示折线的点数，完整轨迹继续用于控制与验收。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visualization Settings", meta = (ClampMin = "2"))
+	int32 MaxTrajectoryDrawPoints = 128;
+
 	virtual void BeginPlay() override;
 
 public:

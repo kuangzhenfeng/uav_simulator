@@ -1,6 +1,7 @@
 #include "DebugDrawBuffer.h"
 #include "Engine/Engine.h"
 #include "DrawDebugHelpers.h"
+#include "Misc/App.h"
 
 UDebugDrawBuffer* UDebugDrawBuffer::Get(const UObject* WorldContext)
 {
@@ -23,18 +24,30 @@ void UDebugDrawBuffer::Initialize(FSubsystemCollectionBase& Collection)
 void UDebugDrawBuffer::Deinitialize()
 {
 	FramePrims.Reset();
+	TransientPrims.Reset();
 	Super::Deinitialize();
+}
+
+FBufferedPrimitive& UDebugDrawBuffer::AppendPrimitive(float Duration)
+{
+	if (Duration >= 0.0f) return FramePrims.AddDefaulted_GetRef();
+	if (TransientFrame != GFrameCounter)
+	{
+		TransientPrims.Reset();
+		TransientFrame = GFrameCounter;
+	}
+	return TransientPrims.AddDefaulted_GetRef();
 }
 
 void UDebugDrawBuffer::AddSphere(UWorld* World, const FVector& Pos, float Radius,
 	const FColor& Color, float Duration, int32 AgentID, const FString& Layer)
 {
-	if (World)
+	if (World && FApp::CanEverRender())
 	{
 		DrawDebugSphere(World, Pos, Radius, 12, Color, false, Duration, 0, 2.0f);
 	}
 
-	FBufferedPrimitive& P = FramePrims.AddDefaulted_GetRef();
+	FBufferedPrimitive& P = AppendPrimitive(Duration);
 	P.Type = EDebugPrimType::Sphere;
 	P.Points.Add(Pos);
 	P.Radius = Radius;
@@ -47,12 +60,12 @@ void UDebugDrawBuffer::AddSphere(UWorld* World, const FVector& Pos, float Radius
 void UDebugDrawBuffer::AddLine(UWorld* World, const FVector& A, const FVector& B,
 	const FColor& Color, float Thickness, float Duration, int32 AgentID, const FString& Layer)
 {
-	if (World)
+	if (World && FApp::CanEverRender())
 	{
 		DrawDebugLine(World, A, B, Color, false, Duration, 0, Thickness);
 	}
 
-	FBufferedPrimitive& P = FramePrims.AddDefaulted_GetRef();
+	FBufferedPrimitive& P = AppendPrimitive(Duration);
 	P.Type = EDebugPrimType::Line;
 	P.Points.Add(A);
 	P.Points.Add(B);
@@ -67,12 +80,12 @@ void UDebugDrawBuffer::AddArrow(UWorld* World, const FVector& A, const FVector& 
 	float ArrowSize, const FColor& Color, float Thickness, float Duration,
 	int32 AgentID, const FString& Layer)
 {
-	if (World)
+	if (World && FApp::CanEverRender())
 	{
 		DrawDebugDirectionalArrow(World, A, B, ArrowSize, Color, false, Duration, 0, Thickness);
 	}
 
-	FBufferedPrimitive& P = FramePrims.AddDefaulted_GetRef();
+	FBufferedPrimitive& P = AppendPrimitive(Duration);
 	P.Type = EDebugPrimType::Arrow;
 	P.Points.Add(A);
 	P.Points.Add(B);
@@ -87,12 +100,12 @@ void UDebugDrawBuffer::AddArrow(UWorld* World, const FVector& A, const FVector& 
 void UDebugDrawBuffer::AddBox(UWorld* World, const FVector& Center, const FVector& Extent,
 	const FQuat& Rot, const FColor& Color, float Duration, int32 AgentID, const FString& Layer)
 {
-	if (World)
+	if (World && FApp::CanEverRender())
 	{
 		DrawDebugBox(World, Center, Extent, Rot, Color, false, Duration, 0, 2.0f);
 	}
 
-	FBufferedPrimitive& P = FramePrims.AddDefaulted_GetRef();
+	FBufferedPrimitive& P = AppendPrimitive(Duration);
 	P.Type = EDebugPrimType::Box;
 	P.Points.Add(Center);
 	P.Radius = Extent.X;
@@ -108,12 +121,12 @@ void UDebugDrawBuffer::AddBox(UWorld* World, const FVector& Center, const FVecto
 void UDebugDrawBuffer::AddPoint(UWorld* World, const FVector& Pos, float Size,
 	const FColor& Color, float Duration, int32 AgentID, const FString& Layer)
 {
-	if (World)
+	if (World && FApp::CanEverRender())
 	{
 		DrawDebugPoint(World, Pos, Size, Color, false, Duration);
 	}
 
-	FBufferedPrimitive& P = FramePrims.AddDefaulted_GetRef();
+	FBufferedPrimitive& P = AppendPrimitive(Duration);
 	P.Type = EDebugPrimType::Point;
 	P.Points.Add(Pos);
 	P.Thickness = Size;
@@ -126,12 +139,12 @@ void UDebugDrawBuffer::AddPoint(UWorld* World, const FVector& Pos, float Size,
 void UDebugDrawBuffer::AddText(UWorld* World, const FVector& Pos, const FString& Text,
 	const FColor& Color, float Duration, int32 AgentID, const FString& Layer)
 {
-	if (World)
+	if (World && FApp::CanEverRender())
 	{
 		DrawDebugString(World, Pos, Text, nullptr, Color, Duration);
 	}
 
-	FBufferedPrimitive& P = FramePrims.AddDefaulted_GetRef();
+	FBufferedPrimitive& P = AppendPrimitive(Duration);
 	P.Type = EDebugPrimType::Text;
 	P.Points.Add(Pos);
 	P.Text = Text;
@@ -144,6 +157,8 @@ void UDebugDrawBuffer::AddText(UWorld* World, const FVector& Pos, const FString&
 TArray<FBufferedPrimitive> UDebugDrawBuffer::FlushAndReset()
 {
 	TArray<FBufferedPrimitive> Out = MoveTemp(FramePrims);
+	Out.Append(MoveTemp(TransientPrims));
 	FramePrims.Reset();
+	TransientPrims.Reset();
 	return Out;
 }

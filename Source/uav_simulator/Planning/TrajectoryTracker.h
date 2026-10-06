@@ -27,6 +27,8 @@ protected:
 
 public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+	// 由飞行控制固定步调度，轨迹时间与动力学使用同一时钟。
+	void AdvanceTracking(float DeltaTime);
 
 	/**
 	 * 设置要跟踪的轨迹

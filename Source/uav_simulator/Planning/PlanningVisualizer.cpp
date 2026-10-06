@@ -68,11 +68,15 @@ void UPlanningVisualizer::DrawTrajectory(const FTrajectory& Trajectory, FColor C
 	UDebugDrawBuffer* Buffer = UDebugDrawBuffer::Get(this);
 	int32 AgentID = -1;
 
-	// 绘制轨迹曲线
-	for (int32 i = 1; i < Trajectory.Points.Num(); ++i)
+	// 等距选取显示点，保留首尾，避免逐帧绘制控制轨迹的全部密集采样点。
+	const int32 NumSegments = FMath::Min(FMath::Max(2, MaxTrajectoryDrawPoints) - 1, Trajectory.Points.Num() - 1);
+	int32 PreviousIndex = 0;
+	for (int32 Segment = 1; Segment <= NumSegments; ++Segment)
 	{
-		Buffer->AddLine(GetWorld(), Trajectory.Points[i - 1].Position, Trajectory.Points[i].Position,
+		const int32 Index = static_cast<int32>(static_cast<int64>(Segment) * (Trajectory.Points.Num() - 1) / NumSegments);
+		Buffer->AddLine(GetWorld(), Trajectory.Points[PreviousIndex].Position, Trajectory.Points[Index].Position,
 			Color, LineThickness, Duration, AgentID, TEXT("trajectory"));
+		PreviousIndex = Index;
 	}
 
 	// 绘制速度向量

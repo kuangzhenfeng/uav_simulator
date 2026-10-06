@@ -443,4 +443,56 @@ bool FUAVPawnTrajectoryTerminalStateTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAVPawnFixedControlStepTest,
+	"UAVSimulator.Core.UAVPawn.FixedControlStep", UAV_TEST_FLAGS)
+
+bool FUAVPawnFixedControlStepTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CreateUAVCrashTestWorld(TEXT("FixedControlStep"));
+	if (!World) return false;
+	AUAVPawn* Reference = SpawnCrashTestPawn(World, FVector(0, 0, 1000));
+	AUAVPawn* FastFrames = SpawnCrashTestPawn(World, FVector(0, 0, 1000));
+	if (!Reference || !FastFrames)
+	{
+		DestroyUAVCrashTestWorld(World);
+		return false;
+	}
+	Reference->SetTargetPosition(FVector(100, 0, 1000));
+	FastFrames->SetTargetPosition(FVector(100, 0, 1000));
+	const FUAVState Initial = FastFrames->GetUAVState();
+	FastFrames->Tick(0.005f);
+	UAV_TEST_VECTOR_EQUAL(FastFrames->GetUAVState().Position, Initial.Position, 0.0001f);
+	UAV_TEST_VECTOR_EQUAL(FastFrames->GetUAVState().Velocity, Initial.Velocity, 0.0001f);
+	FastFrames->Tick(0.015f);
+	Reference->Tick(0.02f);
+	for (int32 Step = 1; Step < 50; ++Step)
+	{
+		Reference->Tick(0.02f);
+		for (int32 Frame = 0; Frame < 4; ++Frame) FastFrames->Tick(0.005f);
+	}
+	const FUAVState Expected = Reference->GetUAVState();
+	const FUAVState Actual = FastFrames->GetUAVState();
+	UAV_TEST_VECTOR_EQUAL(Actual.Position, Expected.Position, 0.001f);
+	UAV_TEST_VECTOR_EQUAL(Actual.Velocity, Expected.Velocity, 0.001f);
+	UAV_TEST_VECTOR_EQUAL(Actual.AngularVelocity, Expected.AngularVelocity, 0.001f);
+	UAV_TEST_ROTATOR_EQUAL(Actual.Rotation, Expected.Rotation, 0.001f);
+	TestTrue(TEXT("Control input produces motion"), FVector::Dist(Expected.Position, Initial.Position) > 1.0f);
+	const FTrajectory Trajectory = UAVTestHelpers::CreateLinearTrajectory(
+		Expected.Position, Expected.Position + FVector(5000, 0, 0), 10.0f, 2);
+	for (AUAVPawn* Pawn : {Reference, FastFrames})
+	{
+		Pawn->SetTrajectory(Trajectory);
+		Pawn->GetTrajectoryTracker()->bEnableAdaptiveTimeScale = false;
+		Pawn->GetTrajectoryTracker()->StartTracking();
+	}
+	// 大游戏帧和高帧率必须消费相同的轨迹时间，不能按渲染帧截断。
+	Reference->Tick(0.2f);
+	for (int32 Frame = 0; Frame < 40; ++Frame) FastFrames->Tick(0.005f);
+	UAV_TEST_FLOAT_EQUAL(Reference->GetTrajectoryTracker()->GetCurrentTime(), 0.2f, 0.0001f);
+	UAV_TEST_FLOAT_EQUAL(FastFrames->GetTrajectoryTracker()->GetCurrentTime(), 0.2f, 0.0001f);
+	UAV_TEST_VECTOR_EQUAL(FastFrames->GetUAVState().Position, Reference->GetUAVState().Position, 0.001f);
+	DestroyUAVCrashTestWorld(World);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

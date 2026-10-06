@@ -90,8 +90,12 @@ public:
 
 	TArray<FBufferedPrimitive> FlushAndReset();
 
-	bool IsEmpty() const { return FramePrims.Num() == 0; }
+	bool IsEmpty() const { return FramePrims.IsEmpty() && TransientPrims.IsEmpty(); }
 
 private:
+	FBufferedPrimitive& AppendPrimitive(float Duration);
+	// 单帧图元只保留最新游戏帧；有持续时间的绘制事件保留到遥测消费。
+	TArray<FBufferedPrimitive> TransientPrims;
+	uint64 TransientFrame = MAX_uint64;
 	TArray<FBufferedPrimitive> FramePrims;
 };
