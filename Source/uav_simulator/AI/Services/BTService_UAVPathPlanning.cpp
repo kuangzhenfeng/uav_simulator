@@ -43,6 +43,12 @@ void UBTService_UAVPathPlanning::TickNode(UBehaviorTreeComponent& OwnerComp, uin
 		return;
 	}
 
+	const UMissionComponent* Mission = UAVPawn->GetMissionComponent();
+	if (UAVPawn->IsCrashed() || (Mission && (Mission->GetMissionState() == EMissionState::Failed || Mission->IsMissionCompleted())))
+	{
+		return;
+	}
+
 	UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
 	if (!BlackboardComp)
 	{
@@ -201,17 +207,10 @@ bool UBTService_UAVPathPlanning::PlanMultiSegmentPath(AUAVPawn* UAVPawn, const T
 		return false;
 	}
 
-	// 获取障碍物（过滤超大地形障碍物，extents > 5000cm 视为地面/天花板平面）
+	// 全局规划和局部安全层共享障碍几何，地形按真实高度查询。
 	TArray<FObstacleInfo> Obstacles;
 	UObstacleManager* ObstacleManager = UAVPawn->GetObstacleManager();
-	if (ObstacleManager)
-	{
-		for (const FObstacleInfo& Obs : ObstacleManager->GetAllObstacles())
-		{
-			if (Obs.Extents.GetMax() <= 5000.0f)
-				Obstacles.Add(Obs);
-		}
-	}
+	if (ObstacleManager) Obstacles = ObstacleManager->GetAllObstacles();
 
 	UE_LOG(LogUAVPlanning, Log, TEXT("[MultiSeg] Planning started"));
 	UE_LOG(LogUAVPlanning, Log, TEXT("[MultiSeg] Waypoints: %d (after subdivision: %d), Obstacles: %d, Algorithm: %s"),
@@ -485,7 +484,13 @@ bool UBTService_UAVPathPlanning::ApplyOptimizedTrajectory(AUAVPawn* UAVPawn, con
 		return false;
 	}
 
-	FTrajectory Trajectory = Optimizer->OptimizeTrajectory(Path, MaxVelocity, MaxAcceleration);
+	float SpeedLimit = MaxVelocity;
+	if (UAVPawn->GetMaxVelocity() > 0.0f) SpeedLimit = FMath::Min(SpeedLimit, UAVPawn->GetMaxVelocity());
+	if (const UMissionComponent* Mission = UAVPawn->GetMissionComponent())
+	{
+		SpeedLimit = FMath::Min(SpeedLimit, Mission->GetRemainingTrajectorySpeedLimit());
+	}
+	FTrajectory Trajectory = Optimizer->OptimizeTrajectory(Path, SpeedLimit, MaxAcceleration);
 	if (!Trajectory.bIsValid)
 	{
 		UE_LOG(LogUAVPlanning, Error, TEXT("Trajectory optimization failed!"));

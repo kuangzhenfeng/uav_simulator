@@ -28,6 +28,10 @@ struct FCBFQPResult
 	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
 	float MinHValue = MAX_FLT;
 
+	// 静态/动态障碍的净空约束值（cm），与机间平方距离约束分开诊断。
+	UPROPERTY(BlueprintReadOnly, Category = "CBF")
+	float MinStaticHValue = MAX_FLT;
+
 	// 活跃约束数量
 	UPROPERTY(BlueprintReadOnly, Category = "CBFQP")
 	int32 ActiveConstraintCount = 0;

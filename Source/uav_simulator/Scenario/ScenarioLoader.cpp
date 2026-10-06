@@ -61,36 +61,17 @@ int32 UScenarioLoader::AssembleObstacles(const UScenario* Scenario, UObstacleMan
 		Obstacle.Velocity = (Entry.MovementType == EObstacleMovementType::LinearVelocity)
 			? Entry.Velocity : FVector::ZeroVector;
 
-		// Spawn 可视化/驱动 Actor 并建立关联（逻辑几何与可视化表现同源）。
-		// - Static：Spawn 裸 AActor 作 LinkedActor，位置静止。
-		// - 非 Static：Spawn ADynamicObstacleActor 自驱动运动，ObstacleManager
-		//   会从 LinkedActor 反算位置/速度从而按动态处理。
-		// SpawnActor 对裸 AActor 基类不会自动落地 Location（无 RootComponent），
-		// 真实场景使用 BP_Obstacle_Default 时其 RootComponent 会处理位姿；
-		// 此处显式 SetActorLocation/Rotation 保证裸 Actor 也落到声明位姿。
+		// 所有场景障碍共用声明驱动的 Actor，避免静态裸 Actor 和动态尺寸反推。
 		if (World)
 		{
 			FActorSpawnParameters SpawnParams;
 			SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-			if (Entry.MovementType == EObstacleMovementType::Static)
+			ADynamicObstacleActor* Actor = World->SpawnActor<ADynamicObstacleActor>(Entry.Center, Entry.Rotation, SpawnParams);
+			if (Actor)
 			{
-				AActor* VisualActor = World->SpawnActor<AActor>(AActor::StaticClass(), Entry.Center, Entry.Rotation, SpawnParams);
-				if (VisualActor)
-				{
-					VisualActor->SetActorLocation(Entry.Center, false, nullptr, ETeleportType::ResetPhysics);
-					VisualActor->SetActorRotation(Entry.Rotation, ETeleportType::ResetPhysics);
-					Obstacle.LinkedActor = VisualActor;
-				}
-			}
-			else
-			{
-				ADynamicObstacleActor* DynamicActor = World->SpawnActor<ADynamicObstacleActor>(ADynamicObstacleActor::StaticClass(), Entry.Center, Entry.Rotation, SpawnParams);
-				if (DynamicActor)
-				{
-					DynamicActor->Configure(Entry);
-					Obstacle.LinkedActor = DynamicActor;
-				}
+				Actor->Configure(Entry);
+				Obstacle = Actor->GetObstacleSnapshot();
+				ObstacleManager->AddTickPrerequisiteActor(Actor);
 			}
 		}
 

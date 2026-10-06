@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ObstacleDetector.h"
+#include "LandscapeProxy.h"
 #include "../uav_simulator.h"
 #include "DrawDebugHelpers.h"
 #include "uav_simulator/Planning/ObstacleManager.h"
@@ -160,7 +161,7 @@ TArray<FDetectedObstacle> UObstacleDetector::ClusterHitResults(const TArray<FHit
 	for (const FHitResult& Hit : HitResults)
 	{
 		AActor* HitActor = Hit.GetActor();
-		if (!HitActor)
+		if (!HitActor || HitActor->IsA<ALandscapeProxy>())
 		{
 			continue;
 		}
@@ -197,7 +198,7 @@ TArray<FDetectedObstacle> UObstacleDetector::ClusterHitResults(const TArray<FHit
 
 				// UAV 特殊处理：GetActorBounds 包含 CameraBoom 等子组件，返回异常大的包围盒
 				// 使用 UAV 实际碰撞半径替代
-				FVector Origin, BoxExtent;
+				FVector Origin = FVector::ZeroVector, BoxExtent = FVector::ZeroVector;
 				const AUAVPawn* HitUAV = Cast<AUAVPawn>(HitActor);
 				if (HitUAV)
 				{

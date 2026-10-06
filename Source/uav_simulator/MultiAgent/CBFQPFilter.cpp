@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CBFQPFilter.h"
+#include "../Planning/ObstacleGeometry.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "../uav_simulator.h"
 
@@ -9,27 +10,8 @@ namespace
 float ComputeObstacleDistanceAndGradient(const FVector& Point, const FObstacleInfo& Obs,
     float StaticSafetyDistance, FVector& OutGradient)
 {
-    float Distance = MAX_FLT;
-    switch (Obs.Type)
-    {
-    case EObstacleType::Sphere:
-    {
-        const FVector Delta = Point - Obs.Center;
-        const float Dist = Delta.Size();
-        Distance = Dist - Obs.Extents.X - Obs.SafetyMargin - StaticSafetyDistance;
-        OutGradient = Dist > KINDA_SMALL_NUMBER ? Delta / Dist : FVector::UpVector;
-        break;
-    }
-    default:
-    {
-        const FVector Delta = Point - Obs.Center;
-        const float Dist = Delta.Size();
-        Distance = Dist - Obs.Extents.GetMax() - Obs.SafetyMargin - StaticSafetyDistance;
-        OutGradient = Dist > KINDA_SMALL_NUMBER ? Delta / Dist : FVector::UpVector;
-        break;
-    }
-    }
-    return Distance;
+    OutGradient = ObstacleGeometry::Gradient(Point, Obs);
+    return ObstacleGeometry::SignedDistance(Point, Obs) - StaticSafetyDistance;
 }
 
 FVector ComputeExecutableEscapeAcceleration(const FVector& EscapeDir, const FCBFQPConfig& Config)
@@ -758,104 +740,7 @@ void UCBFQPFilter::BuildStaticObstacleConstraints(
         float d = 0.0f;
         FVector GradD = FVector::ZeroVector;
 
-        switch (Obs.Type)
-        {
-        case EObstacleType::Sphere:
-        {
-            FVector Delta = MyState.Position - Obs.Center;
-            float Dist = Delta.Size();
-            d = Dist - Obs.Extents.X - Obs.SafetyMargin - Config.DSafeStatic;
-            if (Dist > KINDA_SMALL_NUMBER)
-                GradD = Delta / Dist;
-            else
-                GradD = FVector::UpVector;
-            break;
-        }
-        case EObstacleType::Box:
-        {
-            FVector LocalPoint = Obs.Rotation.UnrotateVector(MyState.Position - Obs.Center);
-            FVector Clamped;
-            Clamped.X = FMath::Clamp(LocalPoint.X, -Obs.Extents.X, Obs.Extents.X);
-            Clamped.Y = FMath::Clamp(LocalPoint.Y, -Obs.Extents.Y, Obs.Extents.Y);
-            Clamped.Z = FMath::Clamp(LocalPoint.Z, -Obs.Extents.Z, Obs.Extents.Z);
-
-            FVector LocalGrad;
-            if (LocalPoint.Equals(Clamped, KINDA_SMALL_NUMBER))
-            {
-                // 内部: 最小穿透轴
-                float PenX = Obs.Extents.X - FMath::Abs(LocalPoint.X);
-                float PenY = Obs.Extents.Y - FMath::Abs(LocalPoint.Y);
-                float PenZ = Obs.Extents.Z - FMath::Abs(LocalPoint.Z);
-                float MinPen = FMath::Min3(PenX, PenY, PenZ);
-                d = -MinPen - Obs.SafetyMargin - Config.DSafeStatic;
-
-                if (PenX <= PenY && PenX <= PenZ)
-                    LocalGrad = FVector(LocalPoint.X > 0 ? 1.0f : -1.0f, 0.0f, 0.0f);
-                else if (PenY <= PenX && PenY <= PenZ)
-                    LocalGrad = FVector(0.0f, LocalPoint.Y > 0 ? 1.0f : -1.0f, 0.0f);
-                else
-                    LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0 ? 1.0f : -1.0f);
-            }
-            else
-            {
-                d = FVector::Dist(LocalPoint, Clamped) - Obs.SafetyMargin - Config.DSafeStatic;
-                LocalGrad = (LocalPoint - Clamped).GetSafeNormal();
-            }
-            GradD = Obs.Rotation.RotateVector(LocalGrad);
-            break;
-        }
-        case EObstacleType::Cylinder:
-        {
-            FVector LocalPoint = Obs.Rotation.UnrotateVector(MyState.Position - Obs.Center);
-            float HDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
-            float VDist = FMath::Abs(LocalPoint.Z);
-            float HPen = HDist - Obs.Extents.X;
-            float VPen = VDist - Obs.Extents.Z;
-
-            FVector LocalGrad;
-            if (HPen < 0 && VPen < 0)
-            {
-                d = FMath::Max(HPen, VPen) - Obs.SafetyMargin - Config.DSafeStatic;
-                if (FMath::Abs(HPen) <= FMath::Abs(VPen))
-                    LocalGrad = HDist > KINDA_SMALL_NUMBER
-                        ? FVector(LocalPoint.X, LocalPoint.Y, 0.0f).GetSafeNormal()
-                        : FVector(1.0f, 0.0f, 0.0f);
-                else
-                    LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0 ? 1.0f : -1.0f);
-            }
-            else if (HPen < 0)
-            {
-                d = VPen - Obs.SafetyMargin - Config.DSafeStatic;
-                LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0 ? 1.0f : -1.0f);
-            }
-            else if (VPen < 0)
-            {
-                d = HPen - Obs.SafetyMargin - Config.DSafeStatic;
-                LocalGrad = HDist > KINDA_SMALL_NUMBER
-                    ? FVector(LocalPoint.X, LocalPoint.Y, 0.0f).GetSafeNormal()
-                    : FVector(1.0f, 0.0f, 0.0f);
-            }
-            else
-            {
-                d = FMath::Sqrt(HPen * HPen + VPen * VPen) - Obs.SafetyMargin - Config.DSafeStatic;
-                FVector2D HDir = HDist > KINDA_SMALL_NUMBER
-                    ? FVector2D(LocalPoint.X, LocalPoint.Y).GetSafeNormal()
-                    : FVector2D(1.0f, 0.0f);
-                float VSign = LocalPoint.Z > 0 ? 1.0f : -1.0f;
-                LocalGrad = FVector(HDir.X * HPen, HDir.Y * HPen, VSign * VPen).GetSafeNormal();
-            }
-            GradD = Obs.Rotation.RotateVector(LocalGrad);
-            break;
-        }
-        default:
-        {
-            FVector Delta = MyState.Position - Obs.Center;
-            float Dist = Delta.Size();
-            d = Dist - Obs.Extents.GetMax() - Obs.SafetyMargin - Config.DSafeStatic;
-            GradD = Dist > KINDA_SMALL_NUMBER ? Delta / Dist : FVector::UpVector;
-            break;
-        }
-        }
+        d = ComputeObstacleDistanceAndGradient(MyState.Position, Obs, Config.DSafeStatic, GradD);
 
         // CBF 函数: h = d(p) - d_safe (已经包含了 DSafeStatic 在上面的 d 计算中)
         // 实际上 h = d_without_dsafe - d_safe, 我们上面直接算了 d = d_without_dsafe - d_safe
@@ -944,6 +829,11 @@ FCBFQPResult UCBFQPFilter::Filter(
     // 1. 静态障碍 HOCBF 约束
     TArray<float> StaticAFlat, StaticBounds;
     BuildStaticObstacleConstraints(MyState, DedupedStaticObstacles, Config, StaticAFlat, StaticBounds);
+    for (const FObstacleInfo& Obs : DedupedStaticObstacles)
+    {
+        Result.MinStaticHValue = FMath::Min(Result.MinStaticHValue,
+            ObstacleGeometry::SignedDistance(MyState.Position, Obs) - Config.DSafeStatic);
+    }
     int32 StaticCount = StaticBounds.Num();
     AllAFlat.Append(StaticAFlat);
     AllBounds.Append(StaticBounds);
@@ -1148,110 +1038,8 @@ FCBFQPResult UCBFQPFilter::Filter(
         auto ComputeStaticDistanceAndGradient = [](const FVector& Point, const FObstacleInfo& Obs,
             float& OutDistance, FVector& OutGradient)
         {
-            switch (Obs.Type)
-            {
-            case EObstacleType::Sphere:
-            {
-                const FVector Delta = Point - Obs.Center;
-                const float Dist = Delta.Size();
-                OutDistance = Dist - Obs.Extents.X - Obs.SafetyMargin;
-                OutGradient = Dist > KINDA_SMALL_NUMBER ? Delta / Dist : FVector::UpVector;
-                return;
-            }
-            case EObstacleType::Box:
-            {
-                const FVector LocalPoint = Obs.Rotation.UnrotateVector(Point - Obs.Center);
-                FVector Clamped;
-                Clamped.X = FMath::Clamp(LocalPoint.X, -Obs.Extents.X, Obs.Extents.X);
-                Clamped.Y = FMath::Clamp(LocalPoint.Y, -Obs.Extents.Y, Obs.Extents.Y);
-                Clamped.Z = FMath::Clamp(LocalPoint.Z, -Obs.Extents.Z, Obs.Extents.Z);
-
-                FVector LocalGrad;
-                if (LocalPoint.Equals(Clamped, KINDA_SMALL_NUMBER))
-                {
-                    const float PenX = Obs.Extents.X - FMath::Abs(LocalPoint.X);
-                    const float PenY = Obs.Extents.Y - FMath::Abs(LocalPoint.Y);
-                    const float PenZ = Obs.Extents.Z - FMath::Abs(LocalPoint.Z);
-                    const float MinPen = FMath::Min3(PenX, PenY, PenZ);
-                    OutDistance = -MinPen - Obs.SafetyMargin;
-
-                    if (PenX <= PenY && PenX <= PenZ)
-                    {
-                        LocalGrad = FVector(LocalPoint.X > 0.0f ? 1.0f : -1.0f, 0.0f, 0.0f);
-                    }
-                    else if (PenY <= PenX && PenY <= PenZ)
-                    {
-                        LocalGrad = FVector(0.0f, LocalPoint.Y > 0.0f ? 1.0f : -1.0f, 0.0f);
-                    }
-                    else
-                    {
-                        LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0.0f ? 1.0f : -1.0f);
-                    }
-                }
-                else
-                {
-                    OutDistance = FVector::Dist(LocalPoint, Clamped) - Obs.SafetyMargin;
-                    LocalGrad = (LocalPoint - Clamped).GetSafeNormal();
-                }
-                OutGradient = Obs.Rotation.RotateVector(LocalGrad);
-                return;
-            }
-            case EObstacleType::Cylinder:
-            {
-                const FVector LocalPoint = Obs.Rotation.UnrotateVector(Point - Obs.Center);
-                const float HDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
-                const float VDist = FMath::Abs(LocalPoint.Z);
-                const float HPen = HDist - Obs.Extents.X;
-                const float VPen = VDist - Obs.Extents.Z;
-
-                FVector LocalGrad;
-                if (HPen < 0.0f && VPen < 0.0f)
-                {
-                    OutDistance = FMath::Max(HPen, VPen) - Obs.SafetyMargin;
-                    if (FMath::Abs(HPen) <= FMath::Abs(VPen))
-                    {
-                        LocalGrad = HDist > KINDA_SMALL_NUMBER
-                            ? FVector(LocalPoint.X, LocalPoint.Y, 0.0f).GetSafeNormal()
-                            : FVector(1.0f, 0.0f, 0.0f);
-                    }
-                    else
-                    {
-                        LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0.0f ? 1.0f : -1.0f);
-                    }
-                }
-                else if (HPen < 0.0f)
-                {
-                    OutDistance = VPen - Obs.SafetyMargin;
-                    LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0.0f ? 1.0f : -1.0f);
-                }
-                else if (VPen < 0.0f)
-                {
-                    OutDistance = HPen - Obs.SafetyMargin;
-                    LocalGrad = HDist > KINDA_SMALL_NUMBER
-                        ? FVector(LocalPoint.X, LocalPoint.Y, 0.0f).GetSafeNormal()
-                        : FVector(1.0f, 0.0f, 0.0f);
-                }
-                else
-                {
-                    OutDistance = FMath::Sqrt(HPen * HPen + VPen * VPen) - Obs.SafetyMargin;
-                    const FVector2D HDir = HDist > KINDA_SMALL_NUMBER
-                        ? FVector2D(LocalPoint.X, LocalPoint.Y).GetSafeNormal()
-                        : FVector2D(1.0f, 0.0f);
-                    const float VSign = LocalPoint.Z > 0.0f ? 1.0f : -1.0f;
-                    LocalGrad = FVector(HDir.X * HPen, HDir.Y * HPen, VSign * VPen).GetSafeNormal();
-                }
-                OutGradient = Obs.Rotation.RotateVector(LocalGrad);
-                return;
-            }
-            default:
-            {
-                const FVector Delta = Point - Obs.Center;
-                const float Dist = Delta.Size();
-                OutDistance = Dist - Obs.Extents.GetMax() - Obs.SafetyMargin;
-                OutGradient = Dist > KINDA_SMALL_NUMBER ? Delta / Dist : FVector::UpVector;
-                return;
-            }
-            }
+            OutDistance = ObstacleGeometry::SignedDistance(Point, Obs);
+            OutGradient = ObstacleGeometry::Gradient(Point, Obs);
         };
 
         constexpr float ControlStepSeconds = 0.02f;

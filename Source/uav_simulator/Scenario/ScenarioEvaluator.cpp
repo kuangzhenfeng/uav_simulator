@@ -230,6 +230,7 @@ FScenarioMetrics UScenarioEvaluatorComponent::CollectMetrics() const
 
 	if (LeadUAV)
 	{
+		M.MaxLateralDeviationCm = FMath::Max(M.MaxLateralDeviationCm, LeadUAV->GetMaxCrossTrackDev());
 		// 炸机检测：lead UAV 进入 Crashed 状态即视为场景级碰撞硬失败
 		if (LeadUAV->IsCrashed())
 		{
@@ -251,7 +252,7 @@ FScenarioMetrics UScenarioEvaluatorComponent::CollectMetrics() const
 		{
 			FObstacleInfo Nearest;
 			const float Dist = Obs->GetDistanceToNearestObstacle(LeadUAV->GetActorLocation(), Nearest);
-			if (Dist >= 0.0f && Dist < M.MinClearanceCm)
+			if (Dist < M.MinClearanceCm)
 			{
 				M.MinClearanceCm = Dist;
 			}
@@ -265,7 +266,7 @@ void UScenarioEvaluatorComponent::TickComponent(float DeltaTime, ELevelTick Tick
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (!Scenario)
+	if (!Scenario || bFinalFlushed)
 	{
 		return;
 	}
@@ -278,6 +279,13 @@ void UScenarioEvaluatorComponent::TickComponent(float DeltaTime, ELevelTick Tick
 	Accumulated.MaxLateralDeviationCm = FMath::Max(Accumulated.MaxLateralDeviationCm, Current.MaxLateralDeviationCm);
 	Accumulated.WaypointsReached = Current.WaypointsReached;
 	Accumulated.WaypointsTotal = Current.WaypointsTotal;
+	Accumulated.bCollided |= Current.bCollided;
+
+	if (Accumulated.bCollided || (Criteria && Criteria->TimeoutSeconds > 0.0f && ElapsedTime >= Criteria->TimeoutSeconds))
+	{
+		FlushFinalResult();
+		return;
+	}
 
 	// 周期快照写 JSON（pkill 强杀时留最近一次）
 	SnapshotAccumulator += DeltaTime;
@@ -301,7 +309,7 @@ void UScenarioEvaluatorComponent::FlushFinalResult()
 	}
 	bFinalFlushed = true;
 
-	FScenarioMetrics Final = Accumulated;
+	FScenarioMetrics Final = CollectMetrics();
 	Final.ElapsedSec = ElapsedTime;
 
 	const FScenarioVerdict Verdict = UScenarioEvaluator::Evaluate(Final, Criteria);

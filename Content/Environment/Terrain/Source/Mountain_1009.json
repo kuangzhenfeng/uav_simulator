@@ -1,0 +1,21 @@
+{
+  "seed": 20261005,
+  "resolution": 1009,
+  "spacing_m": 4.0,
+  "extent_m": 4032,
+  "height_range_m": [
+    0,
+    650
+  ],
+  "landscape_scale": [
+    400,
+    400,
+    300
+  ],
+  "landscape_location_cm": [
+    -201600,
+    -201600,
+    0
+  ],
+  "launch_radius_m": 100
+}

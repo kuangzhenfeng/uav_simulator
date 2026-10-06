@@ -1,7 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DynamicObstacleActor.h"
-#include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Utility/Filter.h"
 
@@ -10,10 +11,12 @@ ADynamicObstacleActor::ADynamicObstacleActor()
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = true;
 
-	// 仅持有一个可移动的根组件，保证 SetActorLocation 生效；
-	// 可视化壳由蓝图负责（与裸 AActor 作 LinkedActor 的方案一致）。
-	USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
-	SetRootComponent(Root);
+	ObstacleMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ObstacleMesh"));
+	SetRootComponent(ObstacleMesh);
+	ObstacleMesh->SetMobility(EComponentMobility::Movable);
+	ObstacleMesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+	ObstacleMesh->SetGenerateOverlapEvents(false);
+
 }
 
 void ADynamicObstacleActor::BeginPlay()
@@ -23,13 +26,32 @@ void ADynamicObstacleActor::BeginPlay()
 
 void ADynamicObstacleActor::Configure(const FScenarioObstacleEntry& Entry)
 {
+	Definition = Entry;
+	const TCHAR* MeshPath = TEXT("/Engine/BasicShapes/Cube.Cube");
+	FVector Size = Entry.Extents * 2.0f;
+	if (Entry.Type == EObstacleType::Sphere)
+	{
+		MeshPath = TEXT("/Engine/BasicShapes/Sphere.Sphere");
+		Size = FVector(Entry.Extents.X * 2.0f);
+	}
+	else if (Entry.Type == EObstacleType::Cylinder)
+	{
+		MeshPath = TEXT("/Engine/BasicShapes/Cylinder.Cylinder");
+		Size = FVector(Entry.Extents.X * 2.0f, Entry.Extents.X * 2.0f, Entry.Extents.Z * 2.0f);
+	}
+	if (UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, MeshPath))
+	{
+		ObstacleMesh->SetStaticMesh(Mesh);
+		const FVector NativeSize = Mesh->GetBoundingBox().GetSize();
+		ObstacleMesh->SetRelativeScale3D(Size / NativeSize);
+	}
 	MovementType = Entry.MovementType;
 	LinearVelocity = Entry.Velocity;
 	PatrolPoints = Entry.PatrolPoints;
 	PatrolSpeed = FMath::Max(0.0f, Entry.PatrolSpeed);
 
 	// 初始位姿：巡逻类落第一个航点（若有），其余落声明中心。
-	const FVector InitialLocation = (PatrolPoints.Num() > 0) ? PatrolPoints[0] : Entry.Center;
+	const FVector InitialLocation = ((MovementType == EObstacleMovementType::PatrolLoop || MovementType == EObstacleMovementType::PatrolPingPong) && PatrolPoints.Num() > 0) ? PatrolPoints[0] : Entry.Center;
 	SetActorLocation(InitialLocation, false, nullptr, ETeleportType::ResetPhysics);
 	SetActorRotation(Entry.Rotation, ETeleportType::ResetPhysics);
 
@@ -66,7 +88,7 @@ void ADynamicObstacleActor::Tick(float DeltaTime)
 		break;
 	case EObstacleMovementType::Static:
 	default:
-		// 静态：ScenarioLoader 不应 Spawn 本 Actor，防御性无操作。
+		// 静态障碍保持声明位姿。
 		break;
 	}
 }
@@ -191,4 +213,26 @@ void ADynamicObstacleActor::AdvanceAlongPoints(float DeltaTime)
 	UE_LOG_THROTTLE(2.0f, LogUAVPlanning, Log,
 		TEXT("[DynamicObstacle] Tick: MoveType=%d, Loc=%s, SegIdx=%d, SegDist=%.1f, Forward=%d"),
 		(int32)MovementType, *GetActorLocation().ToString(), CurrentSegmentIndex, SegmentDistance, bForward ? 1 : 0);
+}
+
+FVector ADynamicObstacleActor::GetVelocity() const
+{
+	if (MovementType == EObstacleMovementType::LinearVelocity) return LinearVelocity;
+	if (MovementType == EObstacleMovementType::PatrolLoop || MovementType == EObstacleMovementType::PatrolPingPong)
+		return bSegmentValid ? SegmentDirection * PatrolSpeed : FVector::ZeroVector;
+	return FVector::ZeroVector;
+}
+
+FObstacleInfo ADynamicObstacleActor::GetObstacleSnapshot() const
+{
+	FObstacleInfo Snapshot;
+	Snapshot.Type = Definition.Type;
+	Snapshot.Center = GetActorLocation();
+	Snapshot.Extents = Definition.Extents;
+	Snapshot.Rotation = GetActorRotation();
+	Snapshot.SafetyMargin = Definition.SafetyMargin;
+	Snapshot.bIsDynamic = MovementType != EObstacleMovementType::Static;
+	Snapshot.Velocity = GetVelocity();
+	Snapshot.LinkedActor = const_cast<ADynamicObstacleActor*>(this);
+	return Snapshot;
 }

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "LinearMPCAvoidance.h"
+#include "ObstacleGeometry.h"
 #include "../Debug/UAVLogConfig.h"
 
 ULinearMPCAvoidance::ULinearMPCAvoidance()
@@ -57,12 +58,7 @@ FNMPCAvoidanceResult ULinearMPCAvoidance::ComputeAvoidance(
 
 float ULinearMPCAvoidance::CalculateDistanceToObstacle(const FVector& Position, const FObstacleInfo& Obstacle) const
 {
-	// 复用NMPC的障碍物距离计算
-	// 简化：使用球体近似
-	FVector Delta = Position - Obstacle.Center;
-	float Dist = Delta.Size();
-	float Radius = Obstacle.Extents.GetMax();
-	return FMath::Max(0.0f, Dist - Radius);
+	return ObstacleGeometry::SignedDistance(Position, Obstacle);
 }
 
 void ULinearMPCAvoidance::ComputeLinearization(
@@ -216,7 +212,7 @@ void ULinearMPCAvoidance::ComputeAnalyticGradient(
 				float Dist = CalculateDistanceToObstacle(X[k], Obs);
 				if (Dist < Config.Obstacle.ObstacleInfluenceDistance)
 				{
-					FVector GradDir = (X[k] - Obs.Center).GetSafeNormal();
+					FVector GradDir = ObstacleGeometry::Gradient(X[k], Obs);
 					float Penalty = Config.GetObstacleWeight() * FMath::Exp(-Dist / Config.Obstacle.ObstacleSafeDistance);
 					float dPenalty_dDist = -Penalty / Config.Obstacle.ObstacleSafeDistance;
 					dLdx += dPenalty_dDist * GradDir;

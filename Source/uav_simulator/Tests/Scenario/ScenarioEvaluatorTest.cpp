@@ -4,6 +4,8 @@
 #include "../UAVTestCommon.h"
 #include "../../Scenario/ScenarioEvaluator.h"
 #include "../../Scenario/ScenarioTypes.h"
+#include "../../Core/UAVPawn.h"
+#include "../../Planning/ObstacleManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HAL/PlatformFileManager.h"
@@ -234,6 +236,41 @@ bool FScenarioWriteResultJsonFailTest::RunTest(const FString& Parameters)
 	IPlatformFile& PF = FPlatformFileManager::Get().GetPlatformFile();
 	PF.DeleteFile(*TempPath);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FScenarioCrashSnapshotRegressionTest,
+	"UAVSimulator.Scenario.Evaluate.CrashSnapshotRegression", UAV_TEST_FLAGS)
+
+bool FScenarioCrashSnapshotRegressionTest::RunTest(const FString& Parameters)
+{
+	const FString ResultPath = FPaths::Combine(FPaths::ProjectDir(), TEXT("Logs/scenario_result.json"));
+	FString Original;
+	const bool bHadResult = FFileHelper::LoadFileToString(Original, *ResultPath);
+	UWorld* World = CreateScenarioTestWorld(TEXT("CrashSnapshotRegression"));
+	if (!World) return false;
+	AUAVPawn* Pawn = World->SpawnActor<AUAVPawn>();
+	UScenario* Scenario = NewObject<UScenario>();
+	Scenario->Name = TEXT("CrashSnapshotRegression");
+	Scenario->AcceptanceCriteria = NewObject<UAcceptanceCriteria>(Scenario);
+	UScenarioEvaluatorComponent* Evaluator = NewObject<UScenarioEvaluatorComponent>(Pawn);
+	Evaluator->RegisterComponent();
+	Evaluator->Initialize(Scenario, Pawn);
+	FObstacleInfo Obstacle = UAVTestHelpers::CreateSphereObstacle(0, Pawn->GetActorLocation(), 200, 50);
+	Pawn->GetObstacleManager()->RegisterObstacle(Obstacle);
+	Pawn->TestTriggerCrash();
+	Evaluator->TickComponent(1.0f, LEVELTICK_All, nullptr);
+	FString Result;
+	FFileHelper::LoadFileToString(Result, *ResultPath);
+	TestTrue(TEXT("最终快照记录碰撞"), Result.Contains(TEXT("\"collided\": true")));
+	TestTrue(TEXT("最终快照保留负净空"), Result.Contains(TEXT("\"minClearanceCm\": -250.00")));
+	Evaluator->TickComponent(1.0f, LEVELTICK_All, nullptr);
+	FString After;
+	FFileHelper::LoadFileToString(After, *ResultPath);
+	TestEqual(TEXT("最终失败不会被周期快照覆盖"), After, Result);
+	DestroyScenarioTestWorld(World);
+	if (bHadResult) FFileHelper::SaveStringToFile(Original, *ResultPath);
+	else FPlatformFileManager::Get().GetPlatformFile().DeleteFile(*ResultPath);
 	return true;
 }
 

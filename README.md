@@ -4,6 +4,11 @@
 
 ## 功能特性
 
+- 编辑器启动时直接加载 `UavSimulatorMap`，默认运行 `ComplexAvoidanceDebug`：单机从 10 m 高度出发，以 4 m/s 规划 90 m 航程；12 个组合障碍包含边界墙、错位旋转立墙、上下净空通道、柱阵，以及横向 Box、斜向 Sphere、垂直 Cylinder 三组移动障碍，均由 Scenario 装配。
+- 保留 `DynamicCrossingDebug` 单移动障碍场景，用于隔离问题和性能回归对比。
+- `UavSimulatorMap` 包含约 4×4 km 原生 Landscape 山地（最高约 650 m）、贯穿谷道和原点半径 100 m 平缓起降区，使用坡度/高度混合草地与岩石材质；高度图可通过 `Script/generate_mountain_heightmap.py` 重建。
+- 日光场景采用缓存预曝光 8（安全范围约 -4～16 EV），自动曝光使用默认范围，支持明暗环境适应。
+
 ### 物理仿真
 - 六自由度动力学模型（牛顿-欧拉方程）
 - RK4 数值积分器
@@ -127,6 +132,7 @@
 - A* 算法（3D 网格搜索）
 - RRT/RRT* 算法（快速随机探索树）
 - 5 阶多项式轨迹优化
+- 轨迹速度同时受任务航点期望速度与飞机物理上限约束；任务失败后行为树不自动重启飞行
 - 多航段路径规划（逐段 A* + line-of-sight 精简）
 - NMPC 局部避障（非线性模型预测控制）
   - 6-状态点质量模型，投影梯度下降求解器
@@ -142,6 +148,9 @@
   - 嵌套参数结构（Solver/Cost/Obstacle/Actuator/Init 分组）
   - 支持 Sphere/Box/Cylinder 障碍物及动态障碍物预测
 - 基于射线检测的障碍物感知（ObstacleDetector）与命名静态障碍物启动注册
+- 场景障碍的声明几何统一驱动网格、碰撞体和规划快照；动态更新保留尺寸与安全边距，并提供当前运动速度
+- Landscape 使用真实高度场垂直净空；路径规划、MPC、CBF 和碰撞检查共用几何查询
+- 场景验收累计碰撞、负净空和最大偏差，碰撞或超时立即保存最终失败结果
 
 ### AI 行为树
 - 任务节点：飞往位置、轨迹跟踪、悬停、巡逻
@@ -190,9 +199,10 @@
 - 声明式仿真场景（`UScenario` DataAsset）：障碍布局、风场、机队、任务航点、验收标准、随机种子
 - 组合引用式资产：`UScenario` 外壳引用 5 个可复用子资产（`UObstacleLayout`/`UWindProfile`/`UFleetSetup`/`UMissionProfile`/`UAcceptanceCriteria`）
 - 场景装配器（`UScenarioLoader`）：运行时按声明内容 Spawn 机队、注册障碍、配置风场、下发任务
-- 动态障碍驱动 Actor（`ADynamicObstacleActor`）：按场景声明的运动模型（LinearVelocity/PatrolLoop/PatrolPingPong）自驱动，ObstacleManager 从 LinkedActor 反算位置/速度
+- 障碍驱动 Actor（`ADynamicObstacleActor`）：统一装配静态与动态几何，按运动模型（LinearVelocity/PatrolLoop/PatrolPingPong）自驱动，向 ObstacleManager 提供当前位姿与运动速度快照
 - 场景验收器（`UScenarioEvaluator`）：周期快照指标，对照验收标准判定 PASS/FAIL，输出 `scenario_result.json`（不依赖进程正常退出，pkill 强杀时留最近一次快照）；fail-closed——场景缺失验收标准时直接判 FAIL，避免任务失败被误报为 PASS
 - 命令行驱动：`-Scenario=<资产路径>` 指定运行场景，`sim.sh` 据退出码（PASS=0/FAIL=1/缺失=2）供 CI 判定
+- 仿真脚本使用独立 `Logs/sim_engine.log` 采集本轮日志，并清理旧判决，避免编辑器日志编号或上轮结果干扰性能诊断
 - 风场为场景级单例（挂在 `AMultiAgentGameMode`，全关卡共享）
 
 ### 视角切换

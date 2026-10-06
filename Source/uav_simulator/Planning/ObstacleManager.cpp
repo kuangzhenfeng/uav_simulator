@@ -1,6 +1,9 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ObstacleManager.h"
+#include "ObstacleGeometry.h"
+#include "DynamicObstacleActor.h"
+#include "LandscapeProxy.h"
 #include "../uav_simulator.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
@@ -33,6 +36,11 @@ void UObstacleManager::BeginPlay()
 {
 	Super::BeginPlay();
 
+	for (TActorIterator<ALandscapeProxy> It(GetWorld()); It; ++It)
+	{
+		RegisterObstacleFromActor(*It, EObstacleType::Terrain, DefaultSafetyMargin);
+	}
+
 	if (bAutoDiscoverNamedStaticObstacles)
 	{
 		DiscoverNamedStaticObstacles();
@@ -63,6 +71,10 @@ void UObstacleManager::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 int32 UObstacleManager::RegisterObstacle(const FObstacleInfo& Obstacle)
 {
 	FObstacleInfo NewObstacle = Obstacle;
+	if (NewObstacle.bIsDynamic && NewObstacle.LinkedActor.IsValid())
+	{
+		AddTickPrerequisiteActor(NewObstacle.LinkedActor.Get());
+	}
 	NewObstacle.ObstacleID = NextObstacleID++;
 
 	Obstacles.Add(NewObstacle);
@@ -90,6 +102,12 @@ int32 UObstacleManager::RegisterObstacleFromActor(AActor* Actor, EObstacleType T
 		return -1;
 	}
 
+	if (const ADynamicObstacleActor* ScenarioActor = Cast<ADynamicObstacleActor>(Actor))
+	{
+		return RegisterObstacle(ScenarioActor->GetObstacleSnapshot());
+	}
+	if (Actor->IsA<ALandscapeProxy>()) Type = EObstacleType::Terrain;
+
 	// UAV 特殊处理：GetActorBounds 包含 CameraBoom 等子组件导致包围盒过大
 	const AUAVPawn* UAVActor = Cast<AUAVPawn>(Actor);
 	FVector Origin, BoxExtent;
@@ -103,15 +121,14 @@ int32 UObstacleManager::RegisterObstacleFromActor(AActor* Actor, EObstacleType T
 	}
 	else
 	{
-		FVector UnusedOrigin;
-		Actor->GetActorBounds(false, UnusedOrigin, BoxExtent);
-		Origin = Actor->GetActorLocation();
+		Actor->GetActorBounds(true, Origin, BoxExtent);
+				if (BoxExtent.IsNearlyZero()) Actor->GetActorBounds(false, Origin, BoxExtent);
 	}
 
 	FObstacleInfo Obstacle;
 	Obstacle.Type = Type;
 	Obstacle.Center = Origin;
-	Obstacle.Rotation = Actor->GetActorRotation();
+	Obstacle.Rotation = FRotator::ZeroRotator;
 	Obstacle.SafetyMargin = SafetyMargin;
 	Obstacle.LinkedActor = Actor;
 	Obstacle.Extents = ComputeObstacleExtentsFromBounds(Type, BoxExtent);
@@ -337,6 +354,15 @@ void UObstacleManager::UpdateDynamicObstacles(float DeltaTime)
 		if (Obstacle.bIsDynamic && Obstacle.LinkedActor.IsValid())
 		{
 			AActor* Actor = Obstacle.LinkedActor.Get();
+			if (const ADynamicObstacleActor* ScenarioActor = Cast<ADynamicObstacleActor>(Actor))
+			{
+				const FObstacleInfo Snapshot = ScenarioActor->GetObstacleSnapshot();
+				Obstacle.Center = Snapshot.Center;
+				Obstacle.Velocity = Snapshot.Velocity;
+				Obstacle.Rotation = Snapshot.Rotation;
+				// 声明尺寸不从可视化网格的包围盒反推。
+				continue;
+			}
 			FVector Origin, BoxExtent;
 
 			// UAV 特殊处理
@@ -348,14 +374,13 @@ void UObstacleManager::UpdateDynamicObstacles(float DeltaTime)
 			}
 			else
 			{
-				FVector UnusedOrigin;
-				Actor->GetActorBounds(false, UnusedOrigin, BoxExtent);
-				Origin = Actor->GetActorLocation();
+				Actor->GetActorBounds(true, Origin, BoxExtent);
+				if (BoxExtent.IsNearlyZero()) Actor->GetActorBounds(false, Origin, BoxExtent);
 			}
 
 			const FVector PreviousCenter = Obstacle.Center;
 			Obstacle.Center = Origin;
-			Obstacle.Rotation = Actor->GetActorRotation();
+			Obstacle.Rotation = FRotator::ZeroRotator;
 			Obstacle.Extents = ComputeObstacleExtentsFromBounds(Obstacle.Type, BoxExtent);
 
 			if (DeltaTime > KINDA_SMALL_NUMBER)
@@ -416,7 +441,7 @@ bool UObstacleManager::TryUpdateExistingObstacle(
 
 			Obstacle.Type = Type;
 			Obstacle.Center = Origin;
-			Obstacle.Rotation = Actor->GetActorRotation();
+			Obstacle.Rotation = FRotator::ZeroRotator;
 			Obstacle.Extents = ComputeObstacleExtentsFromBounds(Type, BoxExtent);
 			Obstacle.SafetyMargin = SafetyMargin;
 			Obstacle.bIsPerceived = true;
@@ -436,9 +461,16 @@ bool UObstacleManager::TryUpdateExistingObstacle(
 int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObstacleType Type, float SafetyMargin)
 {
 	// Early return: 无效Actor
-	if (!Actor || Actor == GetOwner())
+	if (!Actor || Actor == GetOwner() || Actor->IsA<ALandscapeProxy>())
 	{
 		return -1;
+	}
+
+	if (const ADynamicObstacleActor* ScenarioActor = Cast<ADynamicObstacleActor>(Actor))
+	{
+		for (const FObstacleInfo& Existing : Obstacles)
+			if (Existing.LinkedActor.Get() == Actor) return Existing.ObstacleID;
+		return RegisterObstacle(ScenarioActor->GetObstacleSnapshot());
 	}
 
 	UE_LOG_THROTTLE(5.0, LogUAVPlanning, Log, TEXT("[ObstacleManager] Registering perceived obstacle from actor: %s"), *Actor->GetName());
@@ -453,11 +485,9 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 	}
 	else
 	{
-		// 使用 GetActorBounds 获取包围盒尺寸，但中心位置用 GetActorLocation
-		// GetActorBounds 的 Origin 是包围盒几何中心，可能因子组件偏移而与 Actor 位置不同
-		FVector UnusedOrigin;
-		Actor->GetActorBounds(false, UnusedOrigin, BoxExtent);
-		Origin = Actor->GetActorLocation();
+		// 通用 Actor 使用碰撞组件的世界包围盒中心与尺寸。
+		Actor->GetActorBounds(true, Origin, BoxExtent);
+				if (BoxExtent.IsNearlyZero()) Actor->GetActorBounds(false, Origin, BoxExtent);
 	}
 	const float CurrentTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 
@@ -486,7 +516,7 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 
 			Obstacle.Type = Type;
 			Obstacle.Center = Origin;
-			Obstacle.Rotation = Actor->GetActorRotation();
+			Obstacle.Rotation = FRotator::ZeroRotator;
 			Obstacle.Extents = ComputeObstacleExtentsFromBounds(Type, BoxExtent);
 			Obstacle.SafetyMargin = SafetyMargin;
 			Obstacle.LinkedActor = Actor; // 刷新指针
@@ -504,7 +534,7 @@ int32 UObstacleManager::RegisterPerceivedObstacleFromActor(AActor* Actor, EObsta
 	FObstacleInfo Obstacle;
 	Obstacle.Type = Type;
 	Obstacle.Center = Origin;
-	Obstacle.Rotation = Actor->GetActorRotation();
+	Obstacle.Rotation = FRotator::ZeroRotator;
 	Obstacle.SafetyMargin = SafetyMargin;
 	Obstacle.LinkedActor = Actor;
 	Obstacle.bIsPerceived = true;
@@ -589,102 +619,12 @@ TArray<FObstacleInfo> UObstacleManager::GetPreregisteredObstacles() const
 // 计算点到障碍物表面的有符号距离（负值 = 穿透），已减去 SafetyMargin
 float UObstacleManager::CalculateDistanceToObstacle(const FVector& Point, const FObstacleInfo& Obstacle) const
 {
-	switch (Obstacle.Type)
-	{
-	case EObstacleType::Sphere:
-		// 球体：中心距离 - 半径 - 安全裕度
-		return FVector::Dist(Point, Obstacle.Center) - Obstacle.Extents.X - Obstacle.SafetyMargin;
-
-	case EObstacleType::Box:
-		{
-			// 盒体：转到局部坐标系，找最近点，计算距离
-			FVector LocalPoint = Obstacle.Rotation.UnrotateVector(Point - Obstacle.Center);
-			FVector ClosestPoint;
-			ClosestPoint.X = FMath::Clamp(LocalPoint.X, -Obstacle.Extents.X, Obstacle.Extents.X);
-			ClosestPoint.Y = FMath::Clamp(LocalPoint.Y, -Obstacle.Extents.Y, Obstacle.Extents.Y);
-			ClosestPoint.Z = FMath::Clamp(LocalPoint.Z, -Obstacle.Extents.Z, Obstacle.Extents.Z);
-
-			float Distance = FVector::Dist(LocalPoint, ClosestPoint);
-			return Distance - Obstacle.SafetyMargin;
-		}
-
-	case EObstacleType::Cylinder:
-		{
-			// 圆柱体：分别计算水平径向和垂向距离
-			FVector LocalPoint = Point - Obstacle.Center;
-			float HorizontalDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
-			float VerticalDist = FMath::Abs(LocalPoint.Z);
-
-			float HorizontalPenetration = HorizontalDist - Obstacle.Extents.X;
-			float VerticalPenetration = VerticalDist - Obstacle.Extents.Z;
-
-			// 四种情况：内部(双负)、纯水平外、纯垂直外、角点外
-			if (HorizontalPenetration < 0 && VerticalPenetration < 0)
-			{
-				return FMath::Max(HorizontalPenetration, VerticalPenetration) - Obstacle.SafetyMargin;
-			}
-			else if (HorizontalPenetration < 0)
-			{
-				return VerticalPenetration - Obstacle.SafetyMargin;
-			}
-			else if (VerticalPenetration < 0)
-			{
-				return HorizontalPenetration - Obstacle.SafetyMargin;
-			}
-			else
-			{
-				// 角点：到圆柱表面最近点的欧氏距离
-				return FMath::Sqrt(HorizontalPenetration * HorizontalPenetration +
-								   VerticalPenetration * VerticalPenetration) - Obstacle.SafetyMargin;
-			}
-		}
-
-	default:
-		// 未知类型：保守估计为球体
-		return FVector::Dist(Point, Obstacle.Center) - Obstacle.Extents.GetMax() - Obstacle.SafetyMargin;
-	}
+	return ObstacleGeometry::SignedDistance(Point, Obstacle);
 }
 
-// 检查指定点（含附加半径）是否在障碍物内部
 bool UObstacleManager::IsPointInObstacle(const FVector& Point, const FObstacleInfo& Obstacle, float Radius) const
 {
-	// 总判定半径 = 查询半径 + 安全裕度
-	float TotalRadius = Radius + Obstacle.SafetyMargin;
-
-	switch (Obstacle.Type)
-	{
-	case EObstacleType::Sphere:
-		{
-			float Distance = FVector::Dist(Point, Obstacle.Center);
-			float Threshold = Obstacle.Extents.X + TotalRadius;
-			bool bInside = Distance < Threshold;
-			UE_LOG_THROTTLE(2.0, LogUAVPlanning, Log, TEXT("[ObstacleManager] IsPointInObstacle: Point=%s, Dist=%.1f, Threshold=%.1f, Inside=%s"),
-				*Point.ToString(), Distance, Threshold, bInside ? TEXT("YES") : TEXT("NO"));
-			return bInside;
-		}
-
-	case EObstacleType::Box:
-		{
-			FVector LocalPoint = Obstacle.Rotation.UnrotateVector(Point - Obstacle.Center);
-			FVector ExpandedExtents = Obstacle.Extents + FVector(TotalRadius);
-
-			return FMath::Abs(LocalPoint.X) < ExpandedExtents.X &&
-				   FMath::Abs(LocalPoint.Y) < ExpandedExtents.Y &&
-				   FMath::Abs(LocalPoint.Z) < ExpandedExtents.Z;
-		}
-
-	case EObstacleType::Cylinder:
-		{
-			FVector LocalPoint = Point - Obstacle.Center;
-			float HorizontalDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
-
-			return HorizontalDist < (Obstacle.Extents.X + TotalRadius) &&
-				   FMath::Abs(LocalPoint.Z) < (Obstacle.Extents.Z + TotalRadius);
-		}
-
-	default:
-		return false;
-	}
+	return ObstacleGeometry::SignedDistance(Point, Obstacle) < Radius;
 }
 
 void UObstacleManager::DrawDebugObstacles() const

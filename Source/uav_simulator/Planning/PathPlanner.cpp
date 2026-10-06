@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PathPlanner.h"
+#include "ObstacleGeometry.h"
 #include "DrawDebugHelpers.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "../Debug/DebugDrawBuffer.h"
@@ -42,11 +43,6 @@ bool UPathPlanner::CheckCollision(const FVector& Point, float Radius) const
 
 	for (const FObstacleInfo& Obstacle : Obstacles)
 	{
-		// 跳过超大地形/边界障碍物（extents > 5000cm 视为世界边界，不参与路径规划碰撞检测）
-		if (Obstacle.Extents.GetMax() > 5000.0f)
-		{
-			continue;
-		}
 		if (IsPointInObstacle(Point, Obstacle, TotalRadius))
 		{
 			return true;
@@ -90,49 +86,7 @@ bool UPathPlanner::CheckLineCollision(const FVector& Start, const FVector& End, 
 
 bool UPathPlanner::IsPointInObstacle(const FVector& Point, const FObstacleInfo& Obstacle, float Radius) const
 {
-	switch (Obstacle.Type)
-	{
-	case EObstacleType::Sphere:
-		{
-			float Distance = FVector::Dist(Point, Obstacle.Center);
-			float Threshold = Obstacle.Extents.X + Radius;
-			bool bInside = Distance < Threshold;
-			return bInside;
-		}
-
-	case EObstacleType::Box:
-		{
-			// 将点转换到障碍物局部坐标系
-			FVector LocalPoint = Obstacle.Rotation.UnrotateVector(Point - Obstacle.Center);
-			FVector ExpandedExtents = Obstacle.Extents + FVector(Radius);
-
-			bool bInsideX = FMath::Abs(LocalPoint.X) < ExpandedExtents.X;
-			bool bInsideY = FMath::Abs(LocalPoint.Y) < ExpandedExtents.Y;
-			bool bInsideZ = FMath::Abs(LocalPoint.Z) < ExpandedExtents.Z;
-			bool bInside = bInsideX && bInsideY && bInsideZ;
-
-			return bInside;
-		}
-
-	case EObstacleType::Cylinder:
-		{
-			// Extents.X = 半径, Extents.Z = 半高
-			FVector LocalPoint = Point - Obstacle.Center;
-			float HorizontalDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
-			float HorizontalThreshold = Obstacle.Extents.X + Radius;
-			float VerticalThreshold = Obstacle.Extents.Z + Radius;
-
-			bool bInsideHorizontal = HorizontalDist < HorizontalThreshold;
-			bool bInsideVertical = FMath::Abs(LocalPoint.Z) < VerticalThreshold;
-			bool bInside = bInsideHorizontal && bInsideVertical;
-
-			return bInside;
-		}
-
-	default:
-		// UE_LOG(LogUAVPlanning, Warning, TEXT("[PathPlanner::IsPointInObstacle] Unknown obstacle type: %d"), (int32)Obstacle.Type);
-		return false;
-	}
+	return ObstacleGeometry::SignedDistance(Point, Obstacle) < Radius;
 }
 
 void UPathPlanner::SimplifyPath(TArray<FVector>& Path) const

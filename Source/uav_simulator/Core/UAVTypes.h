@@ -170,7 +170,8 @@ enum class EObstacleType : uint8
 	Sphere		UMETA(DisplayName = "Sphere"),
 	Box			UMETA(DisplayName = "Box"),
 	Cylinder	UMETA(DisplayName = "Cylinder"),
-	Custom		UMETA(DisplayName = "Custom")
+	Custom		UMETA(DisplayName = "Custom"),
+	Terrain		UMETA(DisplayName = "Terrain")
 };
 
 /**

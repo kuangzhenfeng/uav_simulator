@@ -6,6 +6,8 @@
 #include "../../Scenario/ScenarioTypes.h"
 #include "../../Planning/ObstacleManager.h"
 #include "../../Core/UAVTypes.h"
+#include "../../Planning/DynamicObstacleActor.h"
+#include "Components/StaticMeshComponent.h"
 
 #include "Logging/LogMacros.h"
 
@@ -168,12 +170,52 @@ bool FScenarioLoadObstaclesSpawnsActorTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("注册了障碍"), All.Num() == 1);
 	if (All.Num() == 1)
 	{
-		// 逻辑碰撞与可视化表现同源：注册的障碍关联了 Spawn 出的可视化 Actor。
-		// 注意：此处 Spawn 的是裸 AActor（测试无 BP 资产），仅验证"关联已建立"这一外部行为；
-		// 具体 Actor 位姿由真实 BP_Obstacle_Default 的 Mesh 决定，不在此断言。
+		// 逻辑碰撞与可视化表现同源。
 		TestTrue(TEXT("注册障碍关联了可视化 Actor"), All[0].LinkedActor.IsValid());
 	}
 
+	DestroyScenarioTestWorld(World);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FScenarioDynamicGeometryRegressionTest,
+	"UAVSimulator.Scenario.LoadObstacles.DynamicGeometryAndVelocity", UAV_TEST_FLAGS)
+
+bool FScenarioDynamicGeometryRegressionTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CreateScenarioTestWorld(TEXT("DynamicGeometryRegression"));
+	if (!World) return false;
+	UObstacleManager* Manager = NewObject<UObstacleManager>(World->SpawnActor<AActor>());
+	Manager->RegisterComponent();
+	UScenarioLoader* Loader = NewObject<UScenarioLoader>();
+	FScenarioObstacleEntry Entry;
+	Entry.Type = EObstacleType::Box;
+	Entry.Center = FVector(1000, 0, 1000);
+	Entry.Extents = FVector(200, 300, 400);
+	Entry.Rotation = FRotator(0, 30, 0);
+	Entry.SafetyMargin = 100;
+	Entry.MovementType = EObstacleMovementType::PatrolPingPong;
+	Entry.PatrolPoints = { FVector(1000, -100, 1000), FVector(1000, 100, 1000) };
+	Entry.PatrolSpeed = 100;
+	UScenario* Scenario = MakeScenarioWithObstacles(GetTransientPackage(), { Entry });
+	Loader->AssembleObstacles(Scenario, Manager, World);
+	ADynamicObstacleActor* Actor = Cast<ADynamicObstacleActor>(Manager->GetAllObstacles()[0].LinkedActor.Get());
+	if (TestNotNull(TEXT("声明生成障碍 Actor"), Actor))
+	{
+		UStaticMeshComponent* Mesh = Actor->FindComponentByClass<UStaticMeshComponent>();
+		TestTrue(TEXT("网格与碰撞可查询"), Mesh && Mesh->GetStaticMesh() && Mesh->IsQueryCollisionEnabled());
+		UAV_TEST_VECTOR_EQUAL(Actor->GetActorLocation(), Entry.PatrolPoints[0], 0.01f);
+		Actor->Tick(3.0f);
+		Manager->TickComponent(3.0f, LEVELTICK_All, nullptr);
+		const FObstacleInfo& Snapshot = Manager->GetAllObstacles()[0];
+		UAV_TEST_VECTOR_EQUAL(Snapshot.Center, FVector(1000, 0, 1000), 0.01f);
+		UAV_TEST_VECTOR_EQUAL(Snapshot.Extents, Entry.Extents, 0.01f);
+		UAV_TEST_VECTOR_EQUAL(Snapshot.Velocity, FVector(0, -100, 0), 0.01f);
+		TestEqual(TEXT("安全边距未被感知覆盖"), Snapshot.SafetyMargin, Entry.SafetyMargin);
+		TestTrue(TEXT("逻辑旋转未被世界 AABB 覆盖"), Snapshot.Rotation.Equals(Entry.Rotation, 0.01f));
+		TestEqual(TEXT("重复感知不新增障碍"), Manager->RegisterPerceivedObstacleFromActor(Actor), Snapshot.ObstacleID);
+		TestEqual(TEXT("仅一个逻辑障碍"), Manager->GetAllObstacles().Num(), 1);
+	}
 	DestroyScenarioTestWorld(World);
 	return true;
 }

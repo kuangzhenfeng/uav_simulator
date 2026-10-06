@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UAVPawn.h"
+#include "../Planning/ObstacleGeometry.h"
 #include "../uav_simulator.h"
 #include "UAVProductManager.h"
 #include "UAVWreckActor.h"
@@ -548,11 +549,6 @@ void AUAVPawn::FilterNearbyObstacles(TArray<FObstacleInfo>& OutObstacles)
 	for (const FObstacleInfo& Obs : ObstacleManagerComponent->GetObstaclesInRange(
 		CurrentState.Position, NMPCComponent->Config.Obstacle.ObstacleInfluenceDistance))
 	{
-		if (Obs.Extents.GetMax() > 5000.0f)
-		{
-			continue;
-		}
-
 		// 排除其他 UAV：机间避障由 CBF-QP 安全滤波器处理，不应进入 NMPC 障碍物列表
 		if (Obs.LinkedActor.IsValid())
 		{
@@ -618,7 +614,7 @@ void AUAVPawn::FixReferencePointsPenetratingObstacles(
 			float Dist = NMPCComponent->CalculateDistanceToObstacle(RefPt, Obs);
 			if (Dist < NMPCComponent->Config.Obstacle.ObstacleSafeDistance)
 			{
-				FVector PushDir = (RefPt - Obs.Center).GetSafeNormal();
+				FVector PushDir = ObstacleGeometry::Gradient(RefPt, Obs).GetSafeNormal();
 				if (PushDir.IsNearlyZero())
 				{
 					PushDir = FVector::UpVector;
@@ -759,7 +755,7 @@ void AUAVPawn::SolveNMPCAvoidance(float DeltaTime)
 FVector AUAVPawn::CalculateEscapeDirection(const TArray<FObstacleInfo>& NearbyObstacles)
 {
 	float NearestD = MAX_FLT;
-	FVector NearestObsCenter = FVector::ZeroVector;
+	FVector AwayFromObs = FVector::ZeroVector;
 
 	for (const FObstacleInfo& Obs : NearbyObstacles)
 	{
@@ -767,11 +763,10 @@ FVector AUAVPawn::CalculateEscapeDirection(const TArray<FObstacleInfo>& NearbyOb
 		if (D < NearestD)
 		{
 			NearestD = D;
-			NearestObsCenter = Obs.Center;
+			AwayFromObs = ObstacleGeometry::Gradient(CurrentState.Position, Obs).GetSafeNormal();
 		}
 	}
 
-	FVector AwayFromObs = (CurrentState.Position - NearestObsCenter).GetSafeNormal();
 	FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
 	FVector ToRef = (DesiredPos - CurrentState.Position).GetSafeNormal();
 
@@ -906,7 +901,7 @@ void AUAVPawn::UpdateSpeedScaleForObstacles()
 			for (const FObstacleInfo& Obs : ObstacleManagerComponent->GetObstaclesInRange(
 				CurrentState.Position, ObsInfluence * 2.0f))
 			{
-				if (Obs.Extents.GetMax() > 5000.0f) continue;
+				if (Obs.Type == EObstacleType::Terrain) continue;
 
 				FVector ToObs = Obs.Center - CurrentState.Position;
 				float ForwardDot = FVector::DotProduct(ToObs.GetSafeNormal(), VelDir);
@@ -1195,11 +1190,11 @@ void AUAVPawn::UpdateController(float DeltaTime)
 						FVector NearestObsDir = FVector::ZeroVector;
 						for (const FObstacleInfo& Obs : ObsForCBF)
 						{
-							const float D = FVector::Dist(CurrentState.Position, Obs.Center) - Obs.Extents.GetMax() - Obs.SafetyMargin;
+							const float D = ObstacleGeometry::SignedDistance(CurrentState.Position, Obs);
 							if (D < NearestObsDist)
 							{
 								NearestObsDist = D;
-								NearestObsDir = (CurrentState.Position - Obs.Center).GetSafeNormal();
+								NearestObsDir = ObstacleGeometry::Gradient(CurrentState.Position, Obs).GetSafeNormal();
 							}
 						}
 
@@ -1209,7 +1204,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 							? -FVector::DotProduct(EffectiveAccel, NearestObsDir) : 0.0f;
 						const float CBFToward = (NearestObsDir.IsNormalized() && CBFMag > 1.0f)
 							? -FVector::DotProduct(CBFResult.SafeAcceleration, NearestObsDir) : 0.0f;
-						UE_LOG(LogUAVMetrics, Log,
+						UE_LOG_THROTTLE(0.5, LogUAVMetrics, Log,
 							TEXT("[CBF_DETAIL] Agent=%d ObsCount=%d NearDist=%.1f NomAccel=(%.0f,%.0f,%.0f) CBFAccel=(%.0f,%.0f,%.0f) NomToward=%.1f CBFToward=%.1f StaticSlack=%.1f AgentSlack=%.1f Status=%d"),
 							AgentID, ObsForCBF.Num(), NearestObsDist,
 							EffectiveAccel.X, EffectiveAccel.Y, EffectiveAccel.Z,
@@ -1220,9 +1215,9 @@ void AUAVPawn::UpdateController(float DeltaTime)
 
 					if (CBFResult.bWasFiltered || CBFResult.StaticConstraintCount > 0 || CBFResult.AgentConstraintCount > 0)
 					{
-						UE_LOG(LogUAVMetrics, Log,
-							TEXT("[CBF_SOLVE] Agent=%d MinH=%.0f Residual=%.4f Violation=%.4f StaticSlack=%.4f AgentSlack=%.4f Active=%d Status=%d Ms=%.2f"),
-							AgentID, CBFResult.MinHValue, CBFResult.KKTResidual,
+						UE_LOG_THROTTLE(0.2, LogUAVMetrics, Log,
+							TEXT("[CBF_SOLVE] Agent=%d MinAgentH=%.0f MinStaticH=%.1f Residual=%.4f Violation=%.4f StaticSlack=%.4f AgentSlack=%.4f Active=%d Status=%d Ms=%.2f"),
+							AgentID, CBFResult.MinHValue, CBFResult.MinStaticHValue, CBFResult.KKTResidual,
 							CBFResult.MaxConstraintViolation, CBFResult.StaticSlack, CBFResult.AgentSlack,
 							CBFResult.ActiveConstraintCount, (int32)CBFResult.SolveStatus,
 							CBFResult.SolveTimeMs);
@@ -1462,7 +1457,7 @@ void AUAVPawn::CheckCollision()
 		return;
 	}
 
-	// 障碍物穿透检测：UAV 中心点进入障碍物内部时触发炸机
+	// 障碍物穿透检测：机体碰撞包络接触障碍时触发炸机
 	if (!ObstacleManagerComponent)
 	{
 		return;
@@ -1471,17 +1466,10 @@ void AUAVPawn::CheckCollision()
 	const TArray<FObstacleInfo>& Obstacles = ObstacleManagerComponent->GetAllObstacles();
 	for (const FObstacleInfo& Obs : Obstacles)
 	{
-		// 复用 NMPC 的障碍物距离计算（ObstacleManager 的同名方法为 private）
-		float D = MAX_FLT;
-		if (NMPCComponent)
-		{
-			D = NMPCComponent->CalculateDistanceToObstacle(CurrentState.Position, Obs);
-		}
-		else
-		{
-			// 简化回退：球体近似
-			D = FVector::Dist(CurrentState.Position, Obs.Center) - Obs.Extents.X - Obs.SafetyMargin;
-		}
+		// 物理接触使用机体半径，安全裕度仅用于规划，不能作为炸机阈值。
+		FObstacleInfo PhysicalObstacle = Obs;
+		PhysicalObstacle.SafetyMargin = 0.0f;
+		const float D = ObstacleGeometry::SignedDistance(CurrentState.Position, PhysicalObstacle) - GetCollisionRadius();
 
 		if (D < 0.0f)
 		{

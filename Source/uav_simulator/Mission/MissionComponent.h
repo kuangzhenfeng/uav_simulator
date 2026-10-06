@@ -169,6 +169,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Mission|Config")
 	const FMissionConfig& GetMissionConfig() const { return Config; }
 
+	/** 整条剩余轨迹采用航段速度上限的最小值，避免超过任一航点的期望速度。 */
+	float GetRemainingTrajectorySpeedLimit() const
+	{
+		float Limit = MAX_flt;
+		for (int32 Index = CurrentWaypointIndex; Index < Waypoints.Num(); ++Index)
+		{
+			const float Speed = Waypoints[Index].DesiredSpeed > 0.0f ? Waypoints[Index].DesiredSpeed : Config.DefaultSpeed;
+			if (Speed > 0.0f) Limit = FMath::Min(Limit, Speed);
+		}
+		return Limit;
+	}
+
 	/** 设置任务配置 */
 	UFUNCTION(BlueprintCallable, Category = "Mission|Config")
 	void SetMissionConfig(const FMissionConfig& InConfig);

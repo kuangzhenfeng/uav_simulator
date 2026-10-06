@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NMPCAvoidance.h"
+#include "ObstacleGeometry.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Utility/Filter.h"
 #include "../uav_simulator.h"
@@ -36,190 +37,17 @@ void UNMPCAvoidance::ForwardSimulate(
 // ========== 点到障碍物距离 ==========
 float UNMPCAvoidance::CalculateCylinderDistance(const FVector& Point, const FObstacleInfo& Obstacle) const
 {
-	FVector LocalPoint = Obstacle.Rotation.UnrotateVector(Point - Obstacle.Center);
-	float HorizontalDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
-	float VerticalDist = FMath::Abs(LocalPoint.Z);
-
-	float HorizontalPen = HorizontalDist - Obstacle.Extents.X;
-	float VerticalPen = VerticalDist - Obstacle.Extents.Z;
-
-	// 两个方向都在内部
-	if (HorizontalPen < 0 && VerticalPen < 0)
-	{
-		return FMath::Max(HorizontalPen, VerticalPen) - Obstacle.SafetyMargin;
-	}
-
-	// 仅水平方向在内部
-	if (HorizontalPen < 0)
-	{
-		return VerticalPen - Obstacle.SafetyMargin;
-	}
-
-	// 仅垂直方向在内部
-	if (VerticalPen < 0)
-	{
-		return HorizontalPen - Obstacle.SafetyMargin;
-	}
-
-	// 两个方向都在外部
-	return FMath::Sqrt(HorizontalPen * HorizontalPen + VerticalPen * VerticalPen) - Obstacle.SafetyMargin;
+	return ObstacleGeometry::SignedDistance(Point, Obstacle);
 }
 
 float UNMPCAvoidance::CalculateDistanceToObstacle(const FVector& Point, const FObstacleInfo& Obstacle) const
 {
-	switch (Obstacle.Type)
-	{
-	case EObstacleType::Sphere:
-		return FVector::Dist(Point, Obstacle.Center) - Obstacle.Extents.X - Obstacle.SafetyMargin;
-
-	case EObstacleType::Box:
-		{
-			FVector LocalPoint = Obstacle.Rotation.UnrotateVector(Point - Obstacle.Center);
-			FVector ClosestPoint;
-			ClosestPoint.X = FMath::Clamp(LocalPoint.X, -Obstacle.Extents.X, Obstacle.Extents.X);
-			ClosestPoint.Y = FMath::Clamp(LocalPoint.Y, -Obstacle.Extents.Y, Obstacle.Extents.Y);
-			ClosestPoint.Z = FMath::Clamp(LocalPoint.Z, -Obstacle.Extents.Z, Obstacle.Extents.Z);
-
-			if (LocalPoint.Equals(ClosestPoint))
-			{
-				// 点在 Box 内部：返回负的穿透深度（到最近面的距离）
-				float MinPen = FMath::Min3(
-					Obstacle.Extents.X - FMath::Abs(LocalPoint.X),
-					Obstacle.Extents.Y - FMath::Abs(LocalPoint.Y),
-					Obstacle.Extents.Z - FMath::Abs(LocalPoint.Z));
-				return -MinPen - Obstacle.SafetyMargin;
-			}
-			return FVector::Dist(LocalPoint, ClosestPoint) - Obstacle.SafetyMargin;
-		}
-
-	case EObstacleType::Cylinder:
-		return CalculateCylinderDistance(Point, Obstacle);
-
-	default:
-		return FVector::Dist(Point, Obstacle.Center) - Obstacle.Extents.GetMax() - Obstacle.SafetyMargin;
-	}
+	return ObstacleGeometry::SignedDistance(Point, Obstacle);
 }
 
-// ========== 有符号距离梯度 ==========
 FVector UNMPCAvoidance::ComputeDistanceGradient(const FVector& Point, const FObstacleInfo& Obstacle) const
 {
-	switch (Obstacle.Type)
-	{
-	case EObstacleType::Sphere:
-		{
-			FVector Delta = Point - Obstacle.Center;
-			float Dist = Delta.Size();
-			if (Dist < KINDA_SMALL_NUMBER)
-			{
-				// 在球心处，梯度方向不确定，默认返回上方向
-				return FVector::UpVector;
-			}
-			return Delta / Dist;
-		}
-
-	case EObstacleType::Box:
-		{
-			FVector LocalPoint = Obstacle.Rotation.UnrotateVector(Point - Obstacle.Center);
-
-			// 找最近表面点
-			FVector Clamped;
-			Clamped.X = FMath::Clamp(LocalPoint.X, -Obstacle.Extents.X, Obstacle.Extents.X);
-			Clamped.Y = FMath::Clamp(LocalPoint.Y, -Obstacle.Extents.Y, Obstacle.Extents.Y);
-			Clamped.Z = FMath::Clamp(LocalPoint.Z, -Obstacle.Extents.Z, Obstacle.Extents.Z);
-
-			if (LocalPoint.Equals(Clamped, KINDA_SMALL_NUMBER))
-			{
-				// 点在 Box 内部：沿最小穿透轴方向推出
-				float PenX = Obstacle.Extents.X - FMath::Abs(LocalPoint.X);
-				float PenY = Obstacle.Extents.Y - FMath::Abs(LocalPoint.Y);
-				float PenZ = Obstacle.Extents.Z - FMath::Abs(LocalPoint.Z);
-
-				FVector LocalGrad;
-				if (PenX <= PenY && PenX <= PenZ)
-					LocalGrad = FVector(LocalPoint.X > 0 ? 1.0f : -1.0f, 0.0f, 0.0f);
-				else if (PenY <= PenX && PenY <= PenZ)
-					LocalGrad = FVector(0.0f, LocalPoint.Y > 0 ? 1.0f : -1.0f, 0.0f);
-				else
-					LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0 ? 1.0f : -1.0f);
-
-				return Obstacle.Rotation.RotateVector(LocalGrad).GetSafeNormal();
-			}
-
-			// 点在 Box 外部：梯度 = (Point - ClosestPoint).GetSafeNormal()
-			FVector LocalGrad = (LocalPoint - Clamped).GetSafeNormal();
-			return Obstacle.Rotation.RotateVector(LocalGrad);
-		}
-
-	case EObstacleType::Cylinder:
-		{
-			FVector LocalPoint = Obstacle.Rotation.UnrotateVector(Point - Obstacle.Center);
-			float HorizontalDist = FVector2D(LocalPoint.X, LocalPoint.Y).Size();
-			float VerticalDist = FMath::Abs(LocalPoint.Z);
-
-			float HorizontalPen = HorizontalDist - Obstacle.Extents.X;
-			float VerticalPen = VerticalDist - Obstacle.Extents.Z;
-
-			FVector LocalGrad;
-
-			// 两个方向都在内部
-			if (HorizontalPen < 0 && VerticalPen < 0)
-			{
-				// 沿最小穿透方向退出
-				if (FMath::Abs(HorizontalPen) <= FMath::Abs(VerticalPen))
-				{
-					// 水平方向穿透更浅，沿水平推出
-					if (HorizontalDist > KINDA_SMALL_NUMBER)
-						LocalGrad = FVector(LocalPoint.X, LocalPoint.Y, 0.0f).GetSafeNormal();
-					else
-						LocalGrad = FVector(1.0f, 0.0f, 0.0f);
-				}
-				else
-				{
-					// 垂直方向穿透更浅，沿垂直推出
-					LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0 ? 1.0f : -1.0f);
-				}
-			}
-			// 仅水平方向在内部
-			else if (HorizontalPen < 0)
-			{
-				LocalGrad = FVector(0.0f, 0.0f, LocalPoint.Z > 0 ? 1.0f : -1.0f);
-			}
-			// 仅垂直方向在内部
-			else if (VerticalPen < 0)
-			{
-				if (HorizontalDist > KINDA_SMALL_NUMBER)
-					LocalGrad = FVector(LocalPoint.X, LocalPoint.Y, 0.0f).GetSafeNormal();
-				else
-					LocalGrad = FVector(1.0f, 0.0f, 0.0f);
-			}
-			// 两个方向都在外部
-			else
-			{
-				FVector2D HDir(LocalPoint.X, LocalPoint.Y);
-				if (HDir.Size() > KINDA_SMALL_NUMBER)
-					HDir.Normalize();
-				else
-					HDir = FVector2D(1.0f, 0.0f);
-
-				float VSign = LocalPoint.Z > 0 ? 1.0f : -1.0f;
-
-				// 梯度 = (HorizontalPen, VerticalPen) 方向的归一化
-				FVector Grad3D(HDir.X * HorizontalPen, HDir.Y * HorizontalPen, VSign * VerticalPen);
-				LocalGrad = Grad3D.GetSafeNormal();
-			}
-
-			return Obstacle.Rotation.RotateVector(LocalGrad);
-		}
-
-	default:
-		{
-			FVector Delta = Point - Obstacle.Center;
-			float Dist = Delta.Size();
-			if (Dist < KINDA_SMALL_NUMBER)
-				return FVector::UpVector;
-			return Delta / Dist;
-		}
-	}
+	return ObstacleGeometry::Gradient(Point, Obstacle);
 }
 
 // ========== 障碍物代价 ==========

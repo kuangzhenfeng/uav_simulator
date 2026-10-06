@@ -45,6 +45,12 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 		return EBTNodeResult::Failed;
 	}
 
+	const UMissionComponent* Mission = UAVPawn->GetMissionComponent();
+	if (UAVPawn->IsCrashed() || (Mission && Mission->GetMissionState() == EMissionState::Failed))
+	{
+		return EBTNodeResult::Failed;
+	}
+
 	UTrajectoryTracker* Tracker = UAVPawn->GetTrajectoryTracker();
 	if (!Tracker)
 	{
@@ -195,6 +201,10 @@ EBTNodeResult::Type UBTTask_UAVFollowTrajectory::ExecuteTask(UBehaviorTreeCompon
 		// 轨迹速度上限服从 UAV 物理能力（型号 Spec.MaxVelocity），而非节点硬编码默认值。
 		// 否则按 2000cm/s 规划、1200cm/s 物理上限的 UAV 会跟不上轨迹，飞越航点后失控。
 		float TrajectoryMaxVelocity = MaxVelocity;
+		if (bUseMissionComponent && Mission)
+		{
+			TrajectoryMaxVelocity = FMath::Min(TrajectoryMaxVelocity, Mission->GetRemainingTrajectorySpeedLimit());
+		}
 		const float PhysicalMaxVelocity = UAVPawn->GetMaxVelocity();
 		if (PhysicalMaxVelocity > 0.0f && PhysicalMaxVelocity < TrajectoryMaxVelocity)
 		{

@@ -440,7 +440,8 @@ bool FObstacleManagerPerceivedObstacleReRegisterUpdatesPoseAndExtentsTest::RunTe
 		FMath::Abs(UpdatedObstacle.Extents.Z - UpdatedExtent.Z) < 30.0f);
 	TestTrue(TEXT("Updated extents should be non-zero"),
 		UpdatedObstacle.Extents.X > 0.0f && UpdatedObstacle.Extents.Y > 0.0f);
-	UAV_TEST_ROTATOR_EQUAL(UpdatedObstacle.Rotation, UpdatedRotation, 1.0f);
+	// 通用 Actor 的世界 AABB 已包含旋转，不应重复旋转。
+	UAV_TEST_ROTATOR_EQUAL(UpdatedObstacle.Rotation, FRotator::ZeroRotator, 1.0f);
 	UAV_TEST_FLOAT_EQUAL(UpdatedObstacle.SafetyMargin, 75.0f, 0.1f);
 	TestTrue(TEXT("Perceived obstacle should remain dynamic"), UpdatedObstacle.bIsDynamic);
 
