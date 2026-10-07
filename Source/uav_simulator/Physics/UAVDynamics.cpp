@@ -11,6 +11,7 @@ UUAVDynamics::UUAVDynamics()
 	// 初始化4个电机推力和转速为0
 	MotorThrusts.Init(0.0f, 4);
 	MotorSpeeds.Init(0.0f, 4);
+	RotorAngles.Init(0.0f, 4);
 }
 
 void UUAVDynamics::BeginPlay()
@@ -182,12 +183,8 @@ void UUAVDynamics::EmergencyStopMotors()
 void UUAVDynamics::ComputeForcesAndTorques(FVector& OutForce, FVector& OutTorque) const
 {
 	SCOPE_CYCLE_COUNTER(STAT_ComputeForces);
-	// 四旋翼配置 (X型):
-	//     0(CW)
-	//       |
-	// 3(CCW)-+-1(CCW)
-	//       |
-	//     2(CW)
+	// X 型布局：0=前左、1=前右、2=后右、3=后左。
+	// 桨叶本地 Yaw 方向为 [-,+,-,+]，机体反扭矩取相反方向。
 
 	// 使用完整电机动力学模型
 	// 推力: T = k_t * ω²
@@ -213,7 +210,7 @@ void UUAVDynamics::ComputeForcesAndTorques(FVector& OutForce, FVector& OutTorque
 
 	// Yaw力矩 (绕Z轴): 由电机反扭矩产生
 	// 完整模型: τ_yaw = k_m * (ω0² - ω1² + ω2² - ω3²)
-	// 其中 CW 电机 (0, 2) 产生正扭矩，CCW 电机 (1, 3) 产生负扭矩
+	// 电机 0、2 产生正 Yaw 反扭矩，电机 1、3 产生负 Yaw 反扭矩。
 	float YawTorque = TorqueCoefficient * (
 		MotorSpeeds[0] * MotorSpeeds[0] -
 		MotorSpeeds[1] * MotorSpeeds[1] +
@@ -232,7 +229,7 @@ void UUAVDynamics::ComputeForcesAndTorques(FVector& OutForce, FVector& OutTorque
 void UUAVDynamics::UpdateMotorDynamics(float DeltaTime)
 {
 	// 停桨状态：电机转速保持为零，跳过动力学
-	if (bMotorsStopped)
+	if (bMotorsStopped || DeltaTime <= 0.0f)
 	{
 		return;
 	}
@@ -249,13 +246,15 @@ void UUAVDynamics::UpdateMotorDynamics(float DeltaTime)
 		// 从期望推力反解期望转速
 		float DesiredSpeed = SolveMotorSpeedFromThrust(DesiredThrust);
 
-		// 一阶惯性环节更新
-		// ω[k+1] = ω[k] + (ω_desired - ω[k]) * dt / τ
-		float SpeedError = DesiredSpeed - MotorSpeeds[i];
-		MotorSpeeds[i] += SpeedError * DeltaTime / MotorTimeConstant;
-
-		// 限制转速范围
-		MotorSpeeds[i] = FMath::Clamp(MotorSpeeds[i], MinMotorSpeed, MaxMotorSpeed);
+		// 一阶系统解析解及其时间积分，避免步长大于时间常数时超调，并保留真实相位。
+		const float Tau = FMath::Max(MotorTimeConstant, SMALL_NUMBER);
+		const float Decay = FMath::Exp(-DeltaTime / Tau);
+		const float InitialSpeed = MotorSpeeds[i];
+		MotorSpeeds[i] = DesiredSpeed + (InitialSpeed - DesiredSpeed) * Decay;
+		const float AngleDelta = DesiredSpeed * DeltaTime
+			+ (InitialSpeed - DesiredSpeed) * Tau * (1.0f - Decay);
+		const float Direction = (i % 2 == 0) ? -1.0f : 1.0f;
+		RotorAngles[i] = FMath::Fmod(RotorAngles[i] + Direction * AngleDelta, 2.0f * PI);
 	}
 }
 
@@ -266,7 +265,7 @@ float UUAVDynamics::SolveMotorSpeedFromThrust(float DesiredThrust) const
 
 	if (DesiredThrust <= 0.0f || ThrustCoefficient <= 0.0f)
 	{
-		return MinMotorSpeed;
+		return 0.0f;
 	}
 
 	float Speed = FMath::Sqrt(DesiredThrust / ThrustCoefficient);

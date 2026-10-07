@@ -293,4 +293,45 @@ bool FUAVDynamicsLargeDeltaTimeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAVRotorDynamicsTest,
+	"UAVSimulator.Physics.UAVDynamics.RotorDynamics", UAV_TEST_FLAGS)
+
+bool FUAVRotorDynamicsTest::RunTest(const FString& Parameters)
+{
+	UUAVDynamics* Coarse = NewObject<UUAVDynamics>();
+	UUAVDynamics* Fine = NewObject<UUAVDynamics>();
+	Coarse->SetPhysicsParams(1.5f, 0.225f, FVector(0.029f, 0.029f, 0.055f), 15.0f);
+	Fine->SetPhysicsParams(1.5f, 0.225f, FVector(0.029f, 0.029f, 0.055f), 15.0f);
+	const TArray<float> Thrusts = {0.16f, 0.36f, 0.16f, 0.36f};
+	Coarse->SetMotorThrusts(Thrusts);
+	Fine->SetMotorThrusts(Thrusts);
+	Coarse->UpdateDynamics(FUAVState(), 0.02f);
+	for (int32 Step = 0; Step < 4; ++Step) Fine->UpdateDynamics(FUAVState(), 0.005f);
+	const TArray<float> Speeds = Coarse->GetMotorSpeeds();
+	const TArray<float> Angles = Coarse->GetRotorAngles();
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		TestTrue(TEXT("Motor speed is independent of integration step"),
+			FMath::IsNearlyEqual(Speeds[Index], Fine->GetMotorSpeeds()[Index], 0.001f));
+		TestTrue(TEXT("Rotor phase is independent of integration step"),
+			FMath::IsNearlyEqual(Angles[Index], Fine->GetRotorAngles()[Index], 0.0001f));
+	}
+	TestTrue(TEXT("Motor response preserves first-order lag"),
+		FMath::IsNearlyEqual(Speeds[0], 838.0f * 0.4f * (1.0f - FMath::Exp(-1.0f)), 0.001f));
+	// 相位取模后不能直接检查正负，使用小于一周的解析期望值。
+	const float Travel = 838.0f * 0.4f * 0.02f * FMath::Exp(-1.0f);
+	TestTrue(TEXT("Rotor zero opposes positive body yaw reaction"),
+		FMath::IsNearlyEqual(Angles[0], -Travel, 0.0001f));
+	TestTrue(TEXT("Opposite rotors spin together"), FMath::IsNearlyEqual(Angles[0], Angles[2], 0.0001f));
+	TestTrue(TEXT("Adjacent rotors counter-rotate"), Angles[0] * Angles[1] < 0.0f);
+	Coarse->EmergencyStopMotors();
+	Coarse->UpdateDynamics(FUAVState(), 0.1f);
+	TestEqual(TEXT("Emergency stop freezes rotor phase"), Coarse->GetRotorAngles()[0], Angles[0]);
+	TestEqual(TEXT("Emergency stop clears actual speed"), Coarse->GetMotorSpeeds()[0], 0.0f);
+	UUAVDynamics* Idle = NewObject<UUAVDynamics>();
+	Idle->UpdateDynamics(FUAVState(), 0.02f);
+	TestEqual(TEXT("Zero thrust does not start an idle motor"), Idle->GetMotorSpeeds()[0], 0.0f);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

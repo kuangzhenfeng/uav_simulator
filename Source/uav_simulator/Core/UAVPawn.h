@@ -442,6 +442,12 @@ protected:
 	bool bParked = false;
 
 private:
+	float FlightHeading = 0.0f;
+	TArray<TWeakObjectPtr<USceneComponent>> RotorComponents;
+	TArray<FQuat> RotorRestRotations;
+	void UpdateFlightHeading(float DeltaTime);
+	void UpdateRotorVisuals();
+
 	bool bNMPCStuck = false;
 
 	// 控制与动力学共用固定步长，帧间保留未积分的时间。

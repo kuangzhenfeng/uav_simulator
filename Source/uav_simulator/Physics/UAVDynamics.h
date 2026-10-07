@@ -46,6 +46,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
 	TArray<float> GetMotorThrusts() const { return MotorThrusts; }
 
+	// 实际转速和累计桨叶相位；相位使用 UE 本地 Yaw 弧度，方向与机体反扭矩相反。
+	UFUNCTION(BlueprintPure, Category = "UAV Dynamics")
+	TArray<float> GetMotorSpeeds() const { return MotorSpeeds; }
+
+	UFUNCTION(BlueprintPure, Category = "UAV Dynamics")
+	TArray<float> GetRotorAngles() const { return RotorAngles; }
+
 	// 获取线性加速度（机体坐标系，用于 IMU 仿真）
 	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
 	FVector GetLinearAcceleration() const { return LinearAcceleration; }
@@ -57,6 +64,8 @@ public:
 	// 获取质量 (kg)
 	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
 	float GetMass() const { return Mass; }
+
+	float GetYawControlGain() const { return 4.0f * TorqueCoefficient * MaxMotorSpeed * MaxMotorSpeed; }
 
 	// 批量设置物理参数（供型号注册表调用）
 	void SetPhysicsParams(float InMass, float InArmLength, const FVector& InMomentOfInertia, float InMaxThrust)
@@ -118,6 +127,8 @@ protected:
 	// 电机转速 (rad/s)
 	UPROPERTY(BlueprintReadOnly, Category = "Motor State")
 	TArray<float> MotorSpeeds;
+
+	TArray<float> RotorAngles;
 
 	// 电机是否已停止
 	bool bMotorsStopped = false;

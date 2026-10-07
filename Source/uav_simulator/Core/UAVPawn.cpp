@@ -149,6 +149,22 @@ void AUAVPawn::BeginPlay()
 	// 初始化位置和姿态
 	CurrentState.Position = GetActorLocation();
 	CurrentState.Rotation = GetActorRotation();
+	FlightHeading = CurrentState.Rotation.Yaw;
+	RotorComponents.SetNum(4);
+	RotorRestRotations.Init(FQuat::Identity, 4);
+	TArray<USceneComponent*> VisualComponents;
+	GetComponents<USceneComponent>(VisualComponents);
+	for (USceneComponent* Component : VisualComponents)
+	{
+		for (int32 Index = 0; Index < 4; ++Index)
+		{
+			if (Component->ComponentHasTag(FName(*FString::Printf(TEXT("UAVRotor%d"), Index))))
+			{
+				RotorComponents[Index] = Component;
+				RotorRestRotations[Index] = Component->GetRelativeRotation().Quaternion();
+			}
+		}
+	}
 
 	// 设置初始目标位置为当前位置
 	TargetPosition = CurrentState.Position;
@@ -160,6 +176,10 @@ void AUAVPawn::BeginPlay()
 		AttitudeControllerComponent->HoverThrust = Spec.HoverThrust;
 		AttitudeControllerComponent->RollPID     = Spec.RollPID;
 		AttitudeControllerComponent->PitchPID    = Spec.PitchPID;
+		// 按机型惯量和反扭矩增益配置 4 rad/s、阻尼比 0.9 的航向闭环。
+		const float YawGain = FMath::Max(DynamicsComponent->GetYawControlGain(), SMALL_NUMBER);
+		const float YawScale = Spec.MomentOfInertia.Z * PI / (180.0f * YawGain);
+		AttitudeControllerComponent->YawPID = FPIDParams(16.0f * YawScale, 0.0f, 7.2f * YawScale);
         if(ModelID==EUAVModelID::Agri_X100Demo)
         {
             auto Config=AttitudeControllerComponent->GetControlConfig();
@@ -408,6 +428,7 @@ void AUAVPawn::Tick(float DeltaTime)
 	SCOPE_CYCLE_COUNTER(STAT_UAVPawnTick);
 
     if(!bExternallyDriven) AdvanceFlightSimulation(DeltaTime);
+	UpdateRotorVisuals();
 
 	// 更新仿真指标
 	if (FlightState != EFlightState::Crashed)
@@ -971,6 +992,7 @@ void AUAVPawn::ExecutePositionHold()
 
 void AUAVPawn::UpdateController(float DeltaTime)
 {
+	UpdateFlightHeading(DeltaTime);
 	// 根据控制模式选择不同的控制策略
 	switch (ControlMode)
 	{
@@ -1126,6 +1148,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			float DesiredThrust;
 			PositionControllerComponent->AccelerationToControl(
 				EffectiveAccel, CurrentState.Rotation.Yaw, DesiredAttitude, DesiredThrust);
+			DesiredAttitude.Yaw = FlightHeading;
 
 			FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControlWithFeedforward(
 				CurrentState, DesiredAttitude, DesiredAngularAccel, DeltaTime, DesiredThrust);
@@ -1147,6 +1170,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 
 				PositionControllerComponent->ComputeControl(
 					CurrentState, TargetPosition, FVector::ZeroVector, DesiredAttitude, DesiredThrust, DeltaTime);
+				DesiredAttitude.Yaw = FlightHeading;
                 UE_LOG_THROTTLE(5.0, LogUAVActor, Log,
                     TEXT("[PositionHold] Agent=%d Target=(%.1f,%.1f,%.1f) Position=(%.1f,%.1f,%.1f) Velocity=(%.1f,%.1f,%.1f) Mass=%.2f Thrust=%.4f"),
                     AgentID,TargetPosition.X,TargetPosition.Y,TargetPosition.Z,CurrentState.Position.X,CurrentState.Position.Y,CurrentState.Position.Z,
@@ -1183,6 +1207,55 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			}
 		}
 		break;
+	}
+}
+
+void AUAVPawn::UpdateFlightHeading(float DeltaTime)
+{
+	if (ControlMode == EUAVControlMode::Attitude)
+	{
+		FlightHeading = CurrentState.Rotation.Yaw;
+		return;
+	}
+	FVector Direction = CurrentState.Velocity;
+	if (Direction.SizeSquared2D() < FMath::Square(50.0f))
+	{
+		Direction = FVector::ZeroVector;
+		if (ControlMode == EUAVControlMode::Trajectory && TrajectoryTrackerComponent
+			&& TrajectoryTrackerComponent->IsTracking())
+		{
+			Direction = TrajectoryTrackerComponent->GetDesiredState().Velocity;
+		}
+		else if (ControlMode == EUAVControlMode::Position
+			&& FVector::DistSquared2D(TargetPosition, CurrentState.Position) > FMath::Square(100.0f))
+		{
+			Direction = TargetPosition - CurrentState.Position;
+		}
+	}
+	// 低速和纯垂直飞行保持航向，转弯时按最短角路径限速，避免航向噪声和突变。
+	if (Direction.SizeSquared2D() >= FMath::Square(50.0f))
+	{
+		const float DesiredHeading = FMath::RadiansToDegrees(FMath::Atan2(Direction.Y, Direction.X));
+		const float Error = FMath::FindDeltaAngleDegrees(FlightHeading, DesiredHeading);
+		FlightHeading = FRotator::NormalizeAxis(FlightHeading
+			+ FMath::Clamp(Error, -45.0f * DeltaTime, 45.0f * DeltaTime));
+	}
+}
+
+void AUAVPawn::UpdateRotorVisuals()
+{
+	if (!DynamicsComponent) return;
+	const TArray<float> Angles = DynamicsComponent->GetRotorAngles();
+	for (int32 Index = 0; Index < RotorComponents.Num(); ++Index)
+	{
+		if (USceneComponent* Rotor = RotorComponents[Index].Get())
+		{
+			if (Angles.IsValidIndex(Index))
+			{
+				const FQuat Spin = FRotator(0.0f, FMath::RadiansToDegrees(Angles[Index]), 0.0f).Quaternion();
+				Rotor->SetRelativeRotation(RotorRestRotations[Index] * Spin);
+			}
+		}
 	}
 }
 

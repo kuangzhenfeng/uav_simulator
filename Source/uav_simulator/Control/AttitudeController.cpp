@@ -94,13 +94,12 @@ FMotorOutput UAttitudeController::ComputeControlWithFeedforward(
 	// 使用 PID 参数中的 Kd 作为阻尼系数
 	float RollD = -RollPID.Kd * AngularVelDeg.X;
 	float PitchD = -PitchPID.Kd * AngularVelDeg.Y;
-	float YawD = -YawPID.Kd * 0.5f * AngularVelDeg.Z;
+	float YawD = -YawPID.Kd * AngularVelDeg.Z;
 
 		// 限制阻尼项，防止高角速度时产生过大控制输出
 		const float MaxDamping = 0.20f;
 		RollD = FMath::Clamp(RollD, -MaxDamping, MaxDamping);
 		PitchD = FMath::Clamp(PitchD, -MaxDamping, MaxDamping);
-		YawD = FMath::Clamp(YawD, -0.08f, 0.08f);
 
 	// 计算前馈力矩
 	FRotator FeedforwardTorque = FRotator::ZeroRotator;
@@ -153,12 +152,7 @@ FMotorOutput UAttitudeController::ComputeControlWithFeedforward(
 	}
 
 	// 将控制输出映射到电机推力
-	// 四旋翼X型配置:
-	//     0(CW)
-	//       |
-	// 3(CCW)-+-1(CCW)
-	//       |
-	//     2(CW)
+	// X 型布局：0=前左、1=前右、2=后右、3=后左；相邻旋翼反转。
 
     Output=AllocateCollective(CollectiveThrust<0 ? HoverThrust : CollectiveThrust,
         {-RollControl-PitchControl+YawControl,RollControl-PitchControl-YawControl,
