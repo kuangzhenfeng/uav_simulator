@@ -20,6 +20,7 @@ class UAV_SIMULATOR_API UTrajectoryTracker : public UActorComponent
 	GENERATED_BODY()
 
 public:
+    void SetCompletionCriteria(float RadiusCm,float MaxSpeedCm) { CompletionRadius=FMath::Max(1.0f,RadiusCm);CompletionMaxSpeed=FMath::Max(1.0f,MaxSpeedCm); }
 	UTrajectoryTracker();
 
 protected:

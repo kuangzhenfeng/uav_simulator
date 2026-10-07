@@ -228,4 +228,20 @@ bool FJointNMPCProjectControlsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJointNMPCGradientRegressionTest,
+    "UAVSimulator.MultiAgent.JointNMPCSolver.AnalyticGradient",UAV_TEST_FLAGS)
+bool FJointNMPCGradientRegressionTest::RunTest(const FString&)
+{
+    auto* Solver=NewObject<UJointNMPCSolver>();FJointNMPCConfig C;C.BaseConfig.Solver.PredictionSteps=3;
+    TArray<FAgentStateSnapshot> States={UAVTestHelpers::CreateAgentSnapshot(0,FVector(0,0,1500)),UAVTestHelpers::CreateAgentSnapshot(1,FVector(1000,0,1500))};
+    TArray<TArray<FVector>> U={{FVector(5,3,1),FVector(7,2,1),FVector(3,0,0)},{FVector(1,2,0),FVector(4,3,1),FVector(2,0,0)}};
+    TArray<TArray<FVector>> P,V,R;TArray<FVector> Targets;
+    for(int32 I=0;I<2;++I) {TArray<FVector> Pi,Vi;Solver->ForwardSimulateAgent(States[I].State.Position,States[I].State.Velocity,U[I],C.BaseConfig.GetDt(),2000,Pi,Vi);P.Add(Pi);V.Add(Vi);R.Add(Pi);R[I][3]+=FVector(50,20,5);Targets.Add(R[I].Last());}
+    TArray<TArray<FVector>> G;Solver->ComputeJointGradient(States,U,P,V,R,{},Targets,C,G);
+    auto Cost=[&](double E){auto Ut=U;Ut[0][1].X+=E;auto Pt=P,Vt=V;Solver->ForwardSimulateAgent(States[0].State.Position,States[0].State.Velocity,Ut[0],C.BaseConfig.GetDt(),2000,Pt[0],Vt[0]);return Solver->ComputeJointCost(Pt,Vt,Ut,R,{},Targets,C);};
+    TestTrue(TEXT("Adjoint matches central difference"),FMath::Abs(G[0][1].X-(Cost(0.01)-Cost(-0.01))/0.02)<0.1);
+    TArray<FVector> Controls={FVector(500,0,0),FVector(500,0,0)};Solver->ProjectAgentControls(Controls,FVector(1990,0,0),500,2000,0.2);
+    FVector Velocity(1990,0,0);for(const auto& A:Controls){Velocity+=A*0.2;TestTrue(TEXT("Projected velocity bounded"),Velocity.Size()<=2000.001);TestTrue(TEXT("Projected acceleration bounded"),A.Size()<=500.001);}
+    return true;
+}
 #endif // WITH_DEV_AUTOMATION_TESTS

@@ -37,7 +37,7 @@ void UGPSSensor::UpdateSensor(const FUAVState& TrueState, float DeltaTime)
 float UGPSSensor::AddGaussianNoise(float Value, float StdDev) const
 {
 	// 使用Box-Muller变换生成高斯噪声
-	float U1 = FMath::FRand();
+	float U1 = FMath::Max(FMath::FRand(), SMALL_NUMBER);
 	float U2 = FMath::FRand();
 	float Noise = FMath::Sqrt(-2.0f * FMath::Loge(U1)) * FMath::Cos(2.0f * PI * U2) * StdDev;
 	return Value + Noise;

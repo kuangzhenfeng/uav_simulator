@@ -44,7 +44,7 @@ REM 默认仿真关卡：SimScenarioMap（空白舞台，含静态美术但不�
 REM 机队/航点/障碍/风场全部由 ScenarioLoader 声明式装配，避免关卡预放机
 REM 与场景程序装配机职责重叠）。
 if not defined SIM_MAP set "SIM_MAP=/Game/Scenarios/SimScenarioMap.SimScenarioMap"
-"%UE_EDITOR%" "%PROJECT_PATH%" "%SIM_MAP%" -game -NullRHI -NoSound -NoSplash -unattended -nopause -NOSAVECONFIG -abslog="%DEFAULT_LOG%" %EXTRA_ARGS% -ExecCmds="slomo %SLOMO%" -silent -LogCmds="Global Warning, LogUAVActor Log, LogUAVPlanning Log, LogUAVMission Log, LogUAVAI Log, LogUAVAttitude Log, LogUAVMultiAgent Log, LogUAVSensor Log, LogUAVMetrics Log, LogUAVProfiling Log, LogScenarioEval Log" >nul 2>&1
+"%UE_EDITOR%" "%PROJECT_PATH%" "%SIM_MAP%" -game -NullRHI -NoSound -NoSplash -unattended -nopause -NOSAVECONFIG -abslog="%DEFAULT_LOG%" %EXTRA_ARGS% -ExecCmds="slomo %SLOMO%" -silent -LogCmds="Global Warning, LogUAVActor Log, LogUAVPlanning Log, LogUAVMission Log, LogUAVAI Log, LogUAVAttitude Log, LogUAVMultiAgent Log, LogUAVSensor Log, LogUAVMetrics Log, LogUAVProfiling Log, LogScenarioEval Log, LogAgriculture Log" >nul 2>&1
 
 REM Kill lingering killer process so MSYS bash does not hang
 taskkill /F /IM ping.exe >nul 2>&1
@@ -55,7 +55,7 @@ if exist "%DEFAULT_LOG%" (
     copy /Y "%DEFAULT_LOG%" "%UAV_FULL_LOG%" >nul
 
     REM Create filtered log: keep only UAV-related logs, exclude STARTUP logs and UE5 errors
-    powershell -Command "Get-Content '%DEFAULT_LOG%' | Where-Object { (($_ -match 'LogUAV') -or ($_ -match 'LogScenarioEval')) -and ($_ -notmatch '\[STARTUP\]') -and ($_ -notmatch 'Failed to load') } | Set-Content '%UAV_LOG%'"
+    powershell -Command "Get-Content '%DEFAULT_LOG%' | Where-Object { (($_ -match 'LogUAV') -or ($_ -match 'LogScenarioEval') -or ($_ -match 'LogAgriculture')) -and ($_ -notmatch '\[STARTUP\]') -and ($_ -notmatch 'Failed to load') } | Set-Content '%UAV_LOG%'"
 
     echo [SIM] %TIME% Simulation complete. Logs saved:
     echo [SIM]   Filtered log: Logs\uav.log

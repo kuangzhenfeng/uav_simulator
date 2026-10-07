@@ -24,6 +24,10 @@ struct FJointNMPCSolveResult
 	UPROPERTY(BlueprintReadOnly, Category = "JointNMPC")
 	float TotalCost = MAX_FLT;
 
+	// 有限预算内得到可执行的受限控制，不等同于优化已收敛。
+	UPROPERTY(BlueprintReadOnly, Category = "JointNMPC")
+	bool bUsableControls = false;
+
 	// 是否收敛
 	UPROPERTY(BlueprintReadOnly, Category = "JointNMPC")
 	bool bConverged = false;
@@ -95,7 +99,7 @@ public:
 	 * @param Config 联合 NMPC 配置
 	 * @return 总代价
 	 */
-	float ComputeJointCost(
+	double ComputeJointCost(
 		const TArray<TArray<FVector>>& AllPositions,
 		const TArray<TArray<FVector>>& AllVelocities,
 		const TArray<TArray<FVector>>& AllControls,
@@ -122,18 +126,20 @@ public:
 	 */
 	void ProjectAgentControls(
 		TArray<FVector>& Controls, const FVector& InitVel,
-		float MaxAccel, float MaxVel) const;
+		float MaxAccel, float MaxVel, float Dt=0.2f) const;
 
 private:
 	// 上次求解控制序列（温启动）
 	TArray<TArray<FVector>> PreviousAllControls;
+	TArray<int32> PreviousAgentIDs;
 	bool bHasPreviousSolve = false;
 
 	// 上次总代价
-	float PreviousTotalCost = MAX_FLT;
+	double PreviousTotalCost = MAX_dbl;
 
+public:
 	/**
-	 * 有限差分计算联合梯度
+	 * 解析伴随计算联合梯度
 	 * 利用动力学解耦特性：扰动 Agent i 的控制只影响 Agent i 的前向仿真
 	 */
 	void ComputeJointGradient(

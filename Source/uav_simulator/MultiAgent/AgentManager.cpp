@@ -11,6 +11,10 @@
 #include "JointNMPCSolver.h"
 #include "TaskAllocator.h"
 #include "TaskMonitor.h"
+#include "../AI/UAVAIController.h"
+#include "../Planning/AStarPathPlanner.h"
+#include "../Planning/TrajectoryOptimizer.h"
+#include "FormationComponent.h"
 #include "uav_simulator/Debug/UAVHUD.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 #include "uav_simulator/Planning/ObstacleManager.h"
@@ -78,6 +82,9 @@ void AMultiAgentGameMode::BeginPlay()
 	// 创建任务分配器和监控器
 	TaskAllocatorInstance = NewObject<UTaskAllocator>(this);
 	TaskMonitorInstance = NewObject<UTaskMonitor>(this);
+	TaskMonitorInstance->OnTaskFailed.AddDynamic(this, &AMultiAgentGameMode::HandleTaskFailed);
+	TaskMonitorInstance->OnTaskCompleted.AddDynamic(this, &AMultiAgentGameMode::HandleTaskCompleted);
+	TaskMonitorInstance->OnReplanRequested.AddDynamic(this, &AMultiAgentGameMode::HandleTaskReplan);
 
 	// 创建遥测记录器并注入共享风场：作为可视化 Web 的专用 ndjson 数据源。
 	// 始终创建（非场景化关卡也记录，便于单机 PIE 可视化）。
@@ -134,6 +141,9 @@ void AMultiAgentGameMode::AssembleScenario(UScenario* ScenarioToLoad, bool bIsRe
 	}
 
 	ActiveScenario = ScenarioToLoad;
+	FMath::RandInit(ScenarioToLoad->RandomSeed);
+	FormationConfig = ScenarioToLoad->Formation;
+	JointNMPCSolverInstance = NewObject<UJointNMPCSolver>(this);
 	if (TelemetryRecorder)
 	{
 		TelemetryRecorder->SetScenarioName(ScenarioToLoad->Name);
@@ -166,6 +176,22 @@ void AMultiAgentGameMode::AssembleScenario(UScenario* ScenarioToLoad, bool bIsRe
 	}
 	Loader->AssembleFleetAndMission(ScenarioToLoad, World, Fleet, FallbackUAVClass);
 	ScenarioFleet = Fleet;
+	if (ScenarioToLoad->bCooperationDemo)
+		for (AUAVPawn* Pawn : Fleet)
+		{
+			if (auto* AI = Cast<AUAVAIController>(Pawn->GetController())) AI->StopBehaviorTree();
+			Pawn->StopTrajectoryTracking();
+			Pawn->SetTargetPosition(Pawn->GetUAVState().Position);
+		}
+	RefreshStateCache();
+	if (FormationConfig.Type!=EFormationType::None)
+    {
+        auto* LeaderPtr=AgentRegistry.Find(FormationConfig.LeaderID);
+        const FVector Anchor=LeaderPtr && LeaderPtr->IsValid() ? LeaderPtr->Get()->GetUAVState().Position : FVector::ZeroVector;
+        for(const auto& Pair:AgentRegistry) if(Pair.Value.IsValid() && Pair.Value->GetFormationComponent())
+            Pair.Value->GetFormationComponent()->InitializeOffset(Pair.Value->GetUAVState().Position-Anchor);
+    }
+    SetFormation(ScenarioToLoad->Formation);
 
 	if (Fleet.Num() > 0 && Fleet[0])
 	{
@@ -173,6 +199,10 @@ void AMultiAgentGameMode::AssembleScenario(UScenario* ScenarioToLoad, bool bIsRe
 		{
 			Loader->AssembleObstacles(ScenarioToLoad, ObstacleManager, World);
 		}
+
+		if (!ScenarioToLoad->Agriculture.bEnabled && !ScenarioToLoad->Tasks.IsEmpty()) SubmitTasks(ScenarioToLoad->Tasks);
+		else if (ScenarioToLoad->bCooperationDemo && !ScenarioToLoad->Agriculture.bEnabled)
+			for (AUAVPawn* Pawn : Fleet) StartScenarioWaypoint(Pawn);
 
 		// 挂载验收器组件：周期快照 + 最终判决
 		// 热重载时复用旧组件（先 Reset 再 Initialize），冷启动则新建。
@@ -205,6 +235,10 @@ void AMultiAgentGameMode::TearDownForReload()
 {
 	UWorld* World = GetWorld();
 
+	TaskPool.Empty();
+    TaskAssignedAgents.Empty(); TaskQueues.Empty(); FailedAgentIDs.Empty(); CompletedTaskIDs.Empty();
+    FailedTaskIDs.Empty();
+	AppliedAllocation = FTaskAllocationResult(); LastReplanReason.Empty();
 	// 1. 取消 BTTask_ExitSimulation 挂起的延迟退出，避免旧场景任务完成误杀进程
 	UBTTask_ExitSimulation::CancelPendingExit();
 
@@ -331,6 +365,10 @@ void AMultiAgentGameMode::Tick(float DeltaTime)
 		RefreshStateCache();
 	}
 
+	TArray<int32> CrashedIDs;
+	for (const auto& Pair : AgentRegistry)
+		if (Pair.Value.IsValid() && Pair.Value->IsCrashed() && !FailedAgentIDs.Contains(Pair.Key)) CrashedIDs.Add(Pair.Key);
+	for (int32 ID : CrashedIDs) FailAgent(ID);
 	// 联合 NMPC 求解（仅 Leader 触发）
 	if (AgentRegistry.Num() > 1 && JointNMPCSolverInstance)
 	{
@@ -343,8 +381,21 @@ void AMultiAgentGameMode::Tick(float DeltaTime)
 		}
 	}
 
-	// 任务监控更新
-	if (TaskMonitorInstance && AgentRegistry.Num() > 0)
+	// 演示航线由统一入口逐航点推进，防止行为树重复覆盖参考轨迹。
+    if (ActiveScenario && ActiveScenario->bCooperationDemo && !ActiveScenario->Agriculture.bEnabled && TaskPool.IsEmpty())
+        for (AUAVPawn* Pawn : GetScenarioFleet())
+        {
+            if (!Pawn || Pawn->IsCrashed()) continue;
+            auto* Mission = Pawn->GetMissionComponent();
+            if (Mission->IsMissionRunning() && Mission->HasReachedCurrentWaypoint())
+            {
+                Mission->AdvanceToNextWaypoint();
+                if (!Mission->IsMissionCompleted()) StartScenarioWaypoint(Pawn);
+            }
+        }
+
+    // 任务监控更新
+	if (TaskMonitorInstance && AgentRegistry.Num() > 0 && !(ActiveScenario && ActiveScenario->Agriculture.bEnabled))
 	{
 		TaskMonitorInstance->Update(DeltaTime, GetAllAgentStates());
 	}
@@ -405,6 +456,7 @@ TArray<FAgentStateSnapshot> AMultiAgentGameMode::GetAllAgentStates() const
 {
 	TArray<FAgentStateSnapshot> Result;
 	StateCache.GenerateValueArray(Result);
+	Result.Sort([](const FAgentStateSnapshot& A,const FAgentStateSnapshot& B){return A.AgentID<B.AgentID;});
 	return Result;
 }
 
@@ -460,17 +512,12 @@ void AMultiAgentGameMode::SetFormation(const FFormationConfig& InConfig)
 	}
 
 	TArray<FVector> Offsets = ComputeFormationOffsets(NumAgents);
-	int32 OffsetIdx = 0;
-	for (const auto& Pair : AgentRegistry)
-	{
-		if (Pair.Value.IsValid() && OffsetIdx < Offsets.Num())
-		{
-			AUAVPawn* Pawn = Pair.Value.Get();
-			// 编队偏移通过 FormationComponent 设置
-			// UAVPawn 集成后实现
-			OffsetIdx++;
-		}
-	}
+    TArray<int32> IDs;AgentRegistry.GenerateKeyArray(IDs);IDs.Sort();
+    const int32 LeaderIndex=IDs.IndexOfByKey(FormationConfig.LeaderID);
+    const FVector Anchor=Offsets.IsValidIndex(LeaderIndex) ? Offsets[LeaderIndex] : FVector::ZeroVector;
+    for (int32 I=0;I<IDs.Num();++I)
+        if (auto* P=AgentRegistry[IDs[I]].Get())
+            if (auto* F=P->GetFormationComponent()) F->SetTargetOffset(Offsets[I]-Anchor);
 
 	UE_LOG(LogUAVMultiAgent, Log, TEXT("[AgentManager] Formation changed to %s, spacing=%.0f, agents=%d"),
 		*UEnum::GetValueAsString(FormationConfig.Type),
@@ -488,9 +535,10 @@ bool AMultiAgentGameMode::GetFormationTarget(int32 AgentID, FVector& OutTarget) 
 	// 获取偏移量数组
 	TArray<FVector> Offsets = ComputeFormationOffsets(AgentRegistry.Num());
 	int32 AgentIndex = 0;
-	for (const auto& Pair : AgentRegistry)
+	TArray<int32> SortedIDs; AgentRegistry.GenerateKeyArray(SortedIDs); SortedIDs.Sort();
+	for (int32 ID : SortedIDs)
 	{
-		if (Pair.Key == AgentID)
+		if (ID == AgentID)
 		{
 			break;
 		}
@@ -528,7 +576,12 @@ bool AMultiAgentGameMode::GetFormationTarget(int32 AgentID, FVector& OutTarget) 
 		}
 	}
 
-	OutTarget = LeaderPosition + Offsets[AgentIndex];
+	FVector Offset=Offsets[AgentIndex];
+    const int32 LeaderIndex=SortedIDs.IndexOfByKey(FormationConfig.LeaderID);
+    if(Offsets.IsValidIndex(LeaderIndex)) Offset-=Offsets[LeaderIndex];
+    if(const auto* Ptr=AgentRegistry.Find(AgentID))
+        if(Ptr->IsValid() && Ptr->Get()->GetFormationComponent()) Offset=Ptr->Get()->GetFormationComponent()->GetCurrentOffset();
+    OutTarget = LeaderPosition + Offset;
 	return true;
 }
 
@@ -582,12 +635,19 @@ void AMultiAgentGameMode::SolveJointNMPC()
 
 	// 收集所有 Agent 的状态
 	TArray<FAgentStateSnapshot> AllStates = GetAllAgentStates();
+	AllStates.RemoveAll([this](const FAgentStateSnapshot& S){
+		const auto* P=AgentRegistry.Find(S.AgentID);
+		return FailedAgentIDs.Contains(S.AgentID) || (P && P->IsValid() && P->Get()->IsParked());
+	});
+	if(AllStates.Num()<2) {JointNMPCResultCache.Empty();return;}
 
 	// 收集所有 Agent 的参考轨迹点
 	TArray<TArray<FVector>> RefPointsPerAgent;
 	// 拷贝 AgentRegistry 的 key 集合，避免迭代时潜在的容器修改
 	TArray<int32> RefAgentIDs;
 	AgentRegistry.GenerateKeyArray(RefAgentIDs);
+	RefAgentIDs.Sort();
+	RefAgentIDs.RemoveAll([&AllStates](int32 ID){return !AllStates.ContainsByPredicate([ID](const auto& S){return S.AgentID==ID;});});
 	for (int32 AgentID : RefAgentIDs)
 	{
 		TArray<FVector> RefPoints;
@@ -597,7 +657,19 @@ void AMultiAgentGameMode::SolveJointNMPC()
 			AUAVPawn* Pawn = PawnPtr->Get();
 			// 从 TrajectoryTracker 采样未来 N+1 个参考点
 			UTrajectoryTracker* Tracker = Pawn->GetTrajectoryTracker();
-			if (Tracker && Tracker->IsTracking())
+			FVector FormationTarget;
+			if (!IsLeader(AgentID) && GetFormationTarget(AgentID, FormationTarget))
+			{
+				const auto* LeaderPtr=AgentRegistry.Find(FormationConfig.LeaderID);
+                const AUAVPawn* Leader=LeaderPtr && LeaderPtr->IsValid() ? LeaderPtr->Get() : nullptr;
+                auto* LeaderTracker=Leader ? Leader->GetTrajectoryTracker() : nullptr;
+                const FVector Offset=FormationTarget-(Leader ? Leader->GetUAVState().Position : FVector::ZeroVector);
+                for(int32 K=0;K<=JointNMPCConfig.BaseConfig.Solver.PredictionSteps;++K)
+                    RefPoints.Add(LeaderTracker && LeaderTracker->IsTracking()
+                        ? LeaderTracker->GetDesiredState(LeaderTracker->GetCurrentTime()+K*JointNMPCConfig.BaseConfig.GetDt()).Position+Offset
+                        : FormationTarget);
+			}
+			else if (Tracker && (Tracker->IsTracking() || Tracker->IsComplete()))
 			{
 				int32 N = JointNMPCConfig.BaseConfig.Solver.PredictionSteps;
 				float Dt = JointNMPCConfig.BaseConfig.GetDt();
@@ -634,114 +706,225 @@ void AMultiAgentGameMode::SolveJointNMPC()
 	}
 
 	// 调用联合 NMPC 求解
+	FJointNMPCConfig SolveConfig=JointNMPCConfig;
+	if (FormationConfig.Type==EFormationType::None) SolveConfig.WeightFormation=0;
 	FJointNMPCSolveResult Result = JointNMPCSolverInstance->Solve(
-		AllStates, RefPointsPerAgent, StaticObstacles, JointNMPCConfig);
+		AllStates, RefPointsPerAgent, StaticObstacles, SolveConfig);
 
 	// 缓存每个 Agent 的加速度结果
-	if (Result.bConverged)
+	JointNMPCResultCache.Empty();
+	if (Result.bUsableControls)
 	{
 		for (int32 i = 0; i < AllStates.Num() && i < Result.OptimalAccelerations.Num(); ++i)
 		{
 			SetJointNMPCCache(AllStates[i].AgentID, Result.OptimalAccelerations[i]);
 		}
 	}
-		UE_LOG(LogUAVMultiAgent, Log, TEXT("[JointNMPC] Solved: agents=%d cost=%.1f converged=%s"),
+		UE_LOG_THROTTLE(5.0, LogUAVMultiAgent, Log, TEXT("[JointNMPC] Solved: agents=%d cost=%.1f converged=%s"),
 			AllStates.Num(), Result.TotalCost, Result.bConverged ? TEXT("Y") : TEXT("N"));
 }
 
 // ---- 任务分配 ----
 
+bool AMultiAgentGameMode::KeepsDemoOpen() const
+{
+    return ActiveScenario && ActiveScenario->bCooperationDemo;
+}
+
 FTaskAllocationResult AMultiAgentGameMode::SubmitTasks(const TArray<FTaskDescriptor>& Tasks)
 {
-	if (!TaskAllocatorInstance)
-	{
-		UE_LOG(LogUAVMultiAgent, Error, TEXT("[AgentManager] TaskAllocator not initialized"));
-		FTaskAllocationResult EmptyResult;
-		return EmptyResult;
-	}
+    TaskPool = Tasks;
+    TaskAssignedAgents.Empty();
+    CompletedTaskIDs.Empty();
+    FailedTaskIDs.Empty();
+    TaskPoolEpoch = GetWorld()->GetTimeSeconds();
+    LastReplanReason = TEXT("Initial allocation");
+    return AllocatePendingTasks();
+}
 
-	// 从注册表派生 UAV 能力
-	TArray<FUAVCapability> Capabilities = UTaskAllocator::DeriveCapabilities(GetAllAgentStates());
+FTaskAllocationResult AMultiAgentGameMode::InsertTask(FTaskDescriptor Task)
+{
+    int32 NextID = 0;
+    for (const auto& T : TaskPool) NextID = FMath::Max(NextID,T.TaskID+1);
+    Task.TaskID = NextID;
+    TaskPool.Add(Task);
+    return TriggerReplan(TEXT("Urgent task inserted"));
+}
 
-	// 求解分配
-	FTaskAllocationResult Result = TaskAllocatorInstance->Allocate(Tasks, Capabilities, TaskAllocationConfig);
+FTaskAllocationResult AMultiAgentGameMode::AllocatePendingTasks()
+{
+    RefreshStateCache();
+    TArray<FTaskDescriptor> Pending;
+    const float Age = GetWorld()->GetTimeSeconds()-TaskPoolEpoch;
+    for (FTaskDescriptor T : TaskPool)
+        if (!CompletedTaskIDs.Contains(T.TaskID) && !FailedTaskIDs.Contains(T.TaskID))
+        {
+            T.Deadline -= Age; T.LatestFinish -= Age;
+            T.EarliestStart = FMath::Max(0.0f,T.EarliestStart-Age);
+            if(FMath::Min(T.Deadline,T.LatestFinish)<=0) FailedTaskIDs.Add(T.TaskID);
+            else Pending.Add(T);
+        }
+    Pending.StableSort([](const FTaskDescriptor& A,const FTaskDescriptor& B)
+    { return A.Priority != B.Priority ? A.Priority > B.Priority : A.TaskID < B.TaskID; });
+    TArray<FAgentStateSnapshot> States = GetAllAgentStates();
+    States.RemoveAll([this](const FAgentStateSnapshot& S){return FailedAgentIDs.Contains(S.AgentID);});
+    FTaskAllocationResult Result;
+    if (Pending.IsEmpty()) Result.bIsFeasible = true;
+    else
+    {
+        auto Capabilities=UTaskAllocator::DeriveCapabilities(States);
+        for(auto& C:Capabilities) C.MaxSpeed=TaskExecutionSpeedCm;
+        Result = TaskAllocatorInstance->Allocate(Pending,Capabilities,TaskAllocationConfig);
+    }
+    AppliedAllocation = Result;
+    if (ScenarioEvaluatorComponent) ScenarioEvaluatorComponent->InvalidateFinalResult();
+    if (!Result.bIsFeasible)
+    {
+        for(const auto& T:Pending) FailedTaskIDs.Add(T.TaskID);
+        TaskMonitorInstance->Reset();
+        TaskMonitorInstance->PreserveCompleted(CompletedTaskIDs);
+        TaskMonitorInstance->PreserveFailed(FailedTaskIDs);
+        TaskQueues.Empty();
+        for (const auto& Pair : AgentRegistry)
+            if (Pair.Value.IsValid())
+            {
+                auto* P=Pair.Value.Get();
+                if (auto* AI=Cast<AUAVAIController>(P->GetController())) AI->StopBehaviorTree();
+                P->StopTrajectoryTracking(); P->SetTargetPosition(P->GetUAVState().Position);
+            }
+        LastReplanReason += TEXT(" / allocation infeasible");
+        UE_LOG(LogUAVMultiAgent, Error, TEXT("[TaskExecution] Allocation infeasible: %s"), *LastReplanReason);
+        return Result;
+    }
+    TaskMonitorInstance->Initialize(Result, TaskMonitorConfig, Pending);
+    TaskMonitorInstance->PreserveCompleted(CompletedTaskIDs);
+    TaskMonitorInstance->PreserveFailed(FailedTaskIDs);
+    ApplyTaskAllocation(Result);
+    return Result;
+}
 
-	// 初始化监控
-	if (Result.bIsFeasible && TaskMonitorInstance)
-	{
-		TaskMonitorInstance->Initialize(Result, TaskMonitorConfig);
-	}
+void AMultiAgentGameMode::ApplyTaskAllocation(const FTaskAllocationResult& Result)
+{
+    TaskQueues.Empty();
+    JointNMPCResultCache.Empty();
+    for (const auto& A : Result.Assignments) { TaskQueues.FindOrAdd(A.AgentID).Add(A.TaskID); TaskAssignedAgents.Add(A.TaskID,A.AgentID); }
+    for (const auto& Pair : AgentRegistry)
+    {
+        if (!Pair.Value.IsValid() || FailedAgentIDs.Contains(Pair.Key)) continue;
+        AUAVPawn* P = Pair.Value.Get();
+        if (auto* AI = Cast<AUAVAIController>(P->GetController())) AI->StopBehaviorTree();
+        P->StopTrajectoryTracking();
+        P->SetTargetPosition(P->GetUAVState().Position);
+        P->GetMissionComponent()->ClearWaypoints();
+        DispatchNextTask(Pair.Key);
+    }
+}
 
-	// 将分配结果推送到各 Agent 的 MissionComponent
-	if (Result.bIsFeasible)
-	{
-		for (const FTaskAssignment& Assignment : Result.Assignments)
-		{
-			TWeakObjectPtr<AUAVPawn>* PawnPtr = AgentRegistry.Find(Assignment.AgentID);
-			if (PawnPtr && PawnPtr->IsValid())
-			{
-				AUAVPawn* Pawn = PawnPtr->Get();
-				UMissionComponent* Mission = Pawn->GetMissionComponent();
-				if (Mission)
-				{
-					// 查找任务描述
-					for (const FTaskDescriptor& Task : Tasks)
-					{
-						if (Task.TaskID == Assignment.TaskID)
-						{
-							Mission->ClearWaypoints();
-							FMissionWaypoint WP;
-							WP.Position = Task.TargetLocation;
-							WP.DesiredSpeed = 1000.0f; // 默认速度
-							Mission->AddMissionWaypoint(WP);
-							Mission->StartMission();
-							break;
-						}
-					}
-				}
-			}
-		}
-	}
+bool AMultiAgentGameMode::StartRoute(AUAVPawn* Pawn, const FVector& Target, float Speed, float Acceleration)
+{
+    if(!Pawn || Target.ContainsNaN()) return false;
+    const FVector Start=Pawn->GetUAVState().Position;
+    if(Start.Equals(Target,1)) {Pawn->StopTrajectoryTracking();Pawn->SetTargetPosition(Target);return true;}
+    UAStarPathPlanner* Planner = NewObject<UAStarPathPlanner>(Pawn);
+    TArray<FObstacleInfo> RouteObstacles=Pawn->GetObstacleManager()->GetAllObstacles();
+    RouteObstacles.RemoveAll([](const FObstacleInfo& O){
+        const AUAVPawn* Other=Cast<AUAVPawn>(O.LinkedActor.Get());
+        return Other && !Other->IsParked() && !Other->IsCrashed();
+    });
+    Planner->SetObstacles(RouteObstacles);
+    TArray<FVector> Path;
+    if(!Planner->CheckLineCollision(Start,Target,Pawn->GetCollisionRadius())) Path={Start,Target};
+    else if (!Planner->PlanPath(Start,Target,Path)) return false;
+    if(Path.Num()<2)
+    {
+        if(Planner->CheckLineCollision(Start,Target,Pawn->GetCollisionRadius())) return false;
+        Path={Start,Target};
+    }
+    UTrajectoryOptimizer* Optimizer = NewObject<UTrajectoryOptimizer>(Pawn);
+    Optimizer->SetStartVelocity(Pawn->GetUAVState().Velocity);
+    const FTrajectory Trajectory=Optimizer->OptimizeTrajectory(Path,Speed,Acceleration);
+    if(!Trajectory.bIsValid || Trajectory.Points.Num()<2) return false;
+    Pawn->SetTrajectory(Trajectory);
+    Pawn->StartTrajectoryTracking();
+    return true;
+}
 
-	UE_LOG(LogUAVMultiAgent, Log, TEXT("[AgentManager] Submitted %d tasks, %d assignments"),
-		Tasks.Num(), Result.Assignments.Num());
+void AMultiAgentGameMode::StartScenarioWaypoint(AUAVPawn* Pawn)
+{
+    if (!Pawn || (FormationConfig.Type!=EFormationType::None && !IsLeader(Pawn->GetAgentID()))) return;
+    UMissionComponent* Mission = Pawn->GetMissionComponent();
+    FMissionWaypoint Waypoint;
+    if (!Mission->GetCurrentWaypoint(Waypoint)) return;
+    if (!Mission->IsMissionRunning()) Mission->StartMission();
+    if (!StartRoute(Pawn,Waypoint.Position,Mission->GetRemainingTrajectorySpeedLimit(),TaskExecutionAccelerationCm))
+        Mission->FailMission(TEXT("Scenario route infeasible"));
+}
 
-	return Result;
+void AMultiAgentGameMode::DispatchNextTask(int32 AgentID)
+{
+    auto* Ptr = AgentRegistry.Find(AgentID);
+    auto* Queue = TaskQueues.Find(AgentID);
+    if (!Ptr || !Ptr->IsValid() || !Queue || Queue->IsEmpty()) return;
+    const int32 ID = (*Queue)[0];
+    const auto* Task = TaskPool.FindByPredicate([ID](const FTaskDescriptor& T){return T.TaskID==ID;});
+    if (!Task) return;
+    AUAVPawn* Pawn = Ptr->Get();
+    UMissionComponent* Mission = Pawn->GetMissionComponent();
+    Mission->SetMissionMode(EMissionMode::Once);
+    Mission->SetMissionWaypoints({FMissionWaypoint(Task->TargetLocation,Task->EstimatedDuration,TaskExecutionSpeedCm)});
+    Mission->StartMission();
+    if (!StartRoute(Pawn,Task->TargetLocation,TaskExecutionSpeedCm,TaskExecutionAccelerationCm))
+    {
+        FailedTaskIDs.Add(ID);
+        TaskMonitorInstance->MarkFailed(ID);
+        Queue->Remove(ID);
+        LastReplanReason = TEXT("Task route infeasible");
+        Mission->FailMission(LastReplanReason);
+        UE_LOG(LogUAVMultiAgent, Error, TEXT("[TaskExecution] Route infeasible: task=%d agent=%d"),ID,AgentID);
+        DispatchNextTask(AgentID);
+        return;
+    }
+    TaskMonitorInstance->ActivateTask(ID);
+    UE_LOG(LogUAVMultiAgent, Log, TEXT("[TaskExecution] Started task=%d agent=%d"),ID,AgentID);
+}
+
+void AMultiAgentGameMode::HandleTaskCompleted(int32 TaskID, int32 AgentID)
+{
+    CompletedTaskIDs.Add(TaskID);
+    if (auto* Queue = TaskQueues.Find(AgentID)) Queue->Remove(TaskID);
+    UE_LOG(LogUAVMultiAgent, Log, TEXT("[TaskExecution] Completed task=%d agent=%d"),TaskID,AgentID);
+    DispatchNextTask(AgentID);
+}
+
+void AMultiAgentGameMode::HandleTaskFailed(int32 TaskID, int32 AgentID, const FString& Reason)
+{
+    FailedTaskIDs.Add(TaskID);
+    if (auto* Queue=TaskQueues.Find(AgentID)) Queue->Remove(TaskID);
+    LastReplanReason=Reason;
+}
+
+void AMultiAgentGameMode::HandleTaskReplan(const FString& Reason) { TriggerReplan(Reason); }
+
+void AMultiAgentGameMode::FailAgent(int32 AgentID)
+{
+    auto* Ptr = AgentRegistry.Find(AgentID);
+    if (!Ptr || !Ptr->IsValid() || FailedAgentIDs.Contains(AgentID)) return;
+    FailedAgentIDs.Add(AgentID);
+    AUAVPawn* P = Ptr->Get();
+    if (auto* AI = Cast<AUAVAIController>(P->GetController())) AI->StopBehaviorTree();
+    P->StopTrajectoryTracking();
+    P->SetTargetPosition(P->GetUAVState().Position);
+    P->GetMissionComponent()->FailMission(TEXT("Agent disabled"));
+    TriggerReplan(FString::Printf(TEXT("Agent %d disabled"),AgentID));
 }
 
 FTaskAllocationResult AMultiAgentGameMode::TriggerReplan(const FString& Reason)
 {
-	UE_LOG(LogUAVMultiAgent, Log, TEXT("[AgentManager] Replan triggered: %s"), *Reason);
-
-	if (!TaskAllocatorInstance || !TaskAllocatorInstance->HasValidAllocation())
-	{
-		FTaskAllocationResult EmptyResult;
-		return EmptyResult;
-	}
-
-	// 获取当前 Agent 状态
-	TArray<FAgentStateSnapshot> CurrentStates = GetAllAgentStates();
-	TArray<FUAVCapability> Capabilities = UTaskAllocator::DeriveCapabilities(CurrentStates);
-
-	// 使用当前分配进行重规划
-	return TaskAllocatorInstance->Reallocate(
-		TaskAllocatorInstance->GetCurrentAllocation(),
-		TArray<FTaskDescriptor>(), // 无新任务
-		TArray<int32>(),           // 无失败 Agent
-		CurrentStates,
-		Capabilities,
-		TaskAllocationConfig);
+    LastReplanReason = Reason;
+    return AllocatePendingTasks();
 }
 
-FTaskAllocationResult AMultiAgentGameMode::GetCurrentTaskAllocation() const
-{
-	if (TaskAllocatorInstance)
-	{
-		return TaskAllocatorInstance->GetCurrentAllocation();
-	}
-	FTaskAllocationResult EmptyResult;
-	return EmptyResult;
-}
+FTaskAllocationResult AMultiAgentGameMode::GetCurrentTaskAllocation() const { return AppliedAllocation; }
 
 // ---- 编队计算 ----
 

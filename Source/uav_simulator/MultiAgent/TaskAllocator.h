@@ -118,4 +118,5 @@ private:
 
 	// 是否有有效分配
 	bool bHasValidAllocation = false;
+	TArray<FTaskDescriptor> CurrentTasks;
 };

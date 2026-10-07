@@ -495,4 +495,26 @@ bool FUAVPawnFixedControlStepTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUAVExternalControlOwnershipTest,
+    "UAVSimulator.Core.UAVPawn.ExternalControlOwnership",UAV_TEST_FLAGS)
+bool FUAVExternalControlOwnershipTest::RunTest(const FString&)
+{
+    UWorld* World=CreateUAVCrashTestWorld(TEXT("ExternalControlOwnership"));
+    if(!TestNotNull(TEXT("World"),World)) return false;
+    UClass* BlueprintClass=LoadClass<AUAVPawn>(nullptr,TEXT("/Game/UAV/Blueprints/UAVs/BP_UAVPawn_Default.BP_UAVPawn_Default_C"));
+    if(!TestNotNull(TEXT("Existing UAV blueprint"),BlueprintClass)) {DestroyUAVCrashTestWorld(World);return false;}
+    FActorSpawnParameters Parameters;Parameters.SpawnCollisionHandlingOverride=ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    AUAVPawn* Pawn=World->SpawnActor<AUAVPawn>(BlueprintClass,FVector(0,0,3000),FRotator::ZeroRotator,Parameters);
+    if(TestNotNull(TEXT("Pawn"),Pawn))
+    {
+        Pawn->SetExternallyDriven(true);Pawn->StopTrajectoryTracking();
+        const FVector Position=Pawn->GetUAVState().Position;
+        const FVector Target=Position+FVector(0,0,500);Pawn->SetTargetPosition(Target);
+        for(int32 I=0;I<20;++I) Pawn->Tick(.02f);
+        TestTrue(TEXT("Blueprint tick cannot overwrite externally owned target"),Pawn->GetTargetPosition().Equals(Target,0.01));
+        TestTrue(TEXT("Actor tick cannot advance externally owned physics"),Pawn->GetUAVState().Position.Equals(Position,0.01));
+    }
+    DestroyUAVCrashTestWorld(World);return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

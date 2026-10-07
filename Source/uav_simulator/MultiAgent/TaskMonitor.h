@@ -25,7 +25,14 @@ public:
 	 * 初始化监控（设置分配结果和配置）
 	 */
 	void Initialize(const FTaskAllocationResult& Allocation,
-		const FTaskMonitorConfig& Config);
+		const FTaskMonitorConfig& Config, const TArray<FTaskDescriptor>& Tasks = {});
+	void ActivateTask(int32 TaskID);
+	void PreserveCompleted(const TSet<int32>& TaskIDs);
+	void PreserveFailed(const TSet<int32>& TaskIDs);
+	void MarkFailed(int32 TaskID);
+	TSet<int32> GetCompletedTaskIDs() const;
+	int32 GetActiveTaskID(int32 AgentID) const;
+	void ReportExecution(int32 TaskID, int32 AgentID, ETaskStatus Status, float ActualProgress);
 
 	/**
 	 * 每帧更新（在 GameMode::Tick 中调用）
@@ -101,6 +108,12 @@ private:
 		float Progress;
 		int32 AssignedAgentID;
 		FVector TargetLocation;
+		float ServiceDuration = 0.0f;
+		float ServiceElapsed = 0.0f;
+		float Deadline = MAX_FLT;
+		float EarliestStart = 0;
+		float InitialDistance = 0.0f;
+		bool bHasTarget = false;
 	};
 
 	// 任务进度列表
@@ -126,4 +139,6 @@ private:
 
 	// 是否已初始化
 	bool bInitialized;
+	TSet<int32> CompletedTaskIDs;
+	TSet<int32> FailedTaskIDs;
 };

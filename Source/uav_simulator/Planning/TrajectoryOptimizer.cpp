@@ -34,7 +34,23 @@ FTrajectory UTrajectoryOptimizer::OptimizeTrajectory(const TArray<FVector>& Wayp
 	// 计算时间分配
 	TArray<float> SegmentTimes = ComputeTimeAllocation(Waypoints, MaxVelocity, MaxAcceleration);
 
-	return OptimizeTrajectoryWithTiming(Waypoints, SegmentTimes);
+    // 梯形时间估计不能保证七阶曲线的峰值约束，按实际导数重新分配时间。
+    for (int32 Attempt=0; Attempt<6; ++Attempt)
+    {
+        Result=OptimizeTrajectoryWithTiming(Waypoints,SegmentTimes);
+        if(!Result.bIsValid) return Result;
+        float Scale=1;
+        for(const auto& Point:Result.Points)
+        {
+            Scale=FMath::Max(Scale,Point.Velocity.Size()/FMath::Max(MaxVelocity,StartVelocity.Size()+1.e-3f));
+            Scale=FMath::Max(Scale,FMath::Sqrt(Point.Acceleration.Size()/FMath::Max(MaxAcceleration,StartAcceleration.Size()+1.e-3f)));
+        }
+        if(Scale<=1.001f) return Result;
+        for(float& Time:SegmentTimes) Time*=Scale*1.01f;
+    }
+    Result.bIsValid=false;
+    UE_LOG(LogUAVPlanning,Warning,TEXT("TrajectoryOptimizer: Derivative limits remain infeasible"));
+    return Result;
 }
 
 FTrajectory UTrajectoryOptimizer::OptimizeTrajectoryWithTiming(const TArray<FVector>& Waypoints, const TArray<float>& SegmentTimes)

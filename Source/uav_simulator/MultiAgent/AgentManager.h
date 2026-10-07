@@ -208,6 +208,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "MultiAgent|TaskAllocation")
 	FTaskAllocationResult GetCurrentTaskAllocation() const;
 
+	UFUNCTION(BlueprintCallable, Category = "MultiAgent|TaskAllocation")
+	FTaskAllocationResult InsertTask(FTaskDescriptor Task);
+	UFUNCTION(BlueprintCallable, Category = "MultiAgent|TaskAllocation")
+	void FailAgent(int32 AgentID);
+	FString GetLastReplanReason() const { return LastReplanReason; }
+	bool KeepsDemoOpen() const;
+	bool IsAgentFailed(int32 ID) const { return FailedAgentIDs.Contains(ID); }
+	int32 GetJointControlCount() const { return JointNMPCResultCache.Num(); }
+	int32 GetAssignedAgent(int32 TaskID) const { const int32* ID=TaskAssignedAgents.Find(TaskID); return ID ? *ID : INDEX_NONE; }
+	const TArray<FTaskDescriptor>& GetTaskPool() const { return TaskPool; }
+
 	// ---- 配置 ----
 
 	// 编队配置
@@ -229,6 +240,11 @@ public:
 	// 任务监控配置
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MultiAgent|TaskAllocation")
 	FTaskMonitorConfig TaskMonitorConfig;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MultiAgent|TaskExecution", meta=(ClampMin="1"))
+	float TaskExecutionSpeedCm = 300.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MultiAgent|TaskExecution", meta=(ClampMin="1"))
+	float TaskExecutionAccelerationCm = 150.0f;
 
 	// Agent 状态缓存刷新间隔 (秒)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MultiAgent")
@@ -280,7 +296,28 @@ protected:
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Scenario")
 	TArray<TObjectPtr<AUAVPawn>> ScenarioFleet;
 
+public:
+	bool StartRoute(AUAVPawn* Pawn, const FVector& Target, float Speed, float Acceleration);
 private:
+	TArray<FTaskDescriptor> TaskPool;
+	TMap<int32, TArray<int32>> TaskQueues;
+	TMap<int32,int32> TaskAssignedAgents;
+	TSet<int32> FailedAgentIDs;
+	TSet<int32> CompletedTaskIDs;
+	TSet<int32> FailedTaskIDs;
+	FString LastReplanReason;
+	FTaskAllocationResult AppliedAllocation;
+	float TaskPoolEpoch = 0.0f;
+	FTaskAllocationResult AllocatePendingTasks();
+	void ApplyTaskAllocation(const FTaskAllocationResult& Result);
+	void DispatchNextTask(int32 AgentID);
+	void StartScenarioWaypoint(AUAVPawn* Pawn);
+	UFUNCTION()
+	void HandleTaskCompleted(int32 TaskID, int32 AgentID);
+	UFUNCTION()
+	void HandleTaskReplan(const FString& Reason);
+	UFUNCTION()
+	void HandleTaskFailed(int32 TaskID, int32 AgentID, const FString& Reason);
 	// Agent 注册表
 	UPROPERTY()
 	TMap<int32, TWeakObjectPtr<AUAVPawn>> AgentRegistry;

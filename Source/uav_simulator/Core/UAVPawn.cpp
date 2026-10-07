@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UAVPawn.h"
+#include "Camera/CameraTypes.h"
 #include "../Planning/ObstacleGeometry.h"
 #include "../uav_simulator.h"
 #include "UAVProductManager.h"
@@ -127,6 +128,20 @@ AUAVPawn::AUAVPawn()
 	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
 }
 
+void AUAVPawn::CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult)
+{
+    if(ModelID!=EUAVModelID::Agri_X100Demo)
+    {
+        Super::CalcCamera(DeltaTime,OutResult);
+        return;
+    }
+    const FVector Focus=GetActorLocation();
+    const FRotator Heading(0,GetActorRotation().Yaw,0);
+    OutResult.Location=Focus+Heading.RotateVector(FVector(-1200,0,700));
+    OutResult.Rotation=(Focus-OutResult.Location).Rotation();
+    OutResult.FOV=70;
+}
+
 void AUAVPawn::BeginPlay()
 {
 	Super::BeginPlay();
@@ -145,6 +160,14 @@ void AUAVPawn::BeginPlay()
 		AttitudeControllerComponent->HoverThrust = Spec.HoverThrust;
 		AttitudeControllerComponent->RollPID     = Spec.RollPID;
 		AttitudeControllerComponent->PitchPID    = Spec.PitchPID;
+        if(ModelID==EUAVModelID::Agri_X100Demo)
+        {
+            auto Config=AttitudeControllerComponent->GetControlConfig();
+            Config.MomentOfInertia=Spec.MomentOfInertia;
+            const float Gain=4*Spec.MaxThrust*Spec.ArmLength*0.707f;
+            Config.TorquePerNormalizedControl=FVector(Gain,Gain,4*Spec.MaxThrust*0.016f);
+            AttitudeControllerComponent->SetControlConfig(Config);
+        }
 		PositionControllerComponent->MaxVelocity          = Spec.MaxVelocity;
 		PositionControllerComponent->UAVMass              = Spec.Mass;
 		PositionControllerComponent->SingleMotorMaxThrust = Spec.MaxThrust;
@@ -294,12 +317,8 @@ void AUAVPawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	UE_LOG(LogUAVActor, Log, TEXT("[EndPlay] Agent %d cleaned up (Reason=%d)"), AgentID, (int32)EndPlayReason);
 }
 
-void AUAVPawn::Tick(float DeltaTime)
+void AUAVPawn::AdvanceFlightSimulation(float DeltaTime)
 {
-	Super::Tick(DeltaTime);
-
-	SCOPE_CYCLE_COUNTER(STAT_UAVPawnTick);
-
 	// 固定步长累计调度，避免渲染帧率改变控制频率或产生极短的 PID 微分步。
 	const float FixedStep = 0.02f;
 	PhysicsStepAccumulator += FMath::Clamp(static_cast<double>(DeltaTime), 0.0, 1.0);
@@ -308,6 +327,7 @@ void AUAVPawn::Tick(float DeltaTime)
 		const float Step = FixedStep;
 		PhysicsStepAccumulator -= FixedStep;
 
+		if (bParked) continue;
 		// 炸机状态：由 UE 刚体物理接管坠落，只同步状态，不再手动覆盖位置
 		if (FlightState == EFlightState::Crashed)
 		{
@@ -339,6 +359,25 @@ void AUAVPawn::Tick(float DeltaTime)
 			{
 				SCOPE_CYCLE_COUNTER(STAT_PawnPhysicsUpdate);
 				UpdatePhysics(Step);
+				bGroundContact = false;
+				if (LandingSurfaceCm > -MAX_FLT && CurrentState.Position.Z <= LandingSurfaceCm)
+				{
+					if (CurrentState.Velocity.Z < -100.0f || CurrentState.Velocity.Size2D() > 50.0f)
+						TriggerCrash();
+					else
+					{
+						// 单侧接触约束仅阻止穿透地面，不改变平面位置。
+						CurrentState.Position.Z = LandingSurfaceCm;
+						CurrentState.Velocity.Z = FMath::Max(0.0,CurrentState.Velocity.Z);
+                        const float GroundSpeed=CurrentState.Velocity.Size2D();
+                        if(GroundSpeed>0)
+                        {
+                            const float Scale=FMath::Max(0.0f,1-LandingFrictionCoefficient*980*Step/GroundSpeed);
+                            CurrentState.Velocity.X*=Scale;CurrentState.Velocity.Y*=Scale;
+                        }
+						bGroundContact = true;
+					}
+				}
 			}
 
 			// 碰撞检测
@@ -358,6 +397,17 @@ void AUAVPawn::Tick(float DeltaTime)
 			}
 		}
 	}
+
+}
+
+void AUAVPawn::Tick(float DeltaTime)
+{
+    // 外部固定步调度拥有飞行控制权，蓝图 ReceiveTick 不能同时改写控制目标。
+    if(!bExternallyDriven) Super::Tick(DeltaTime);
+
+	SCOPE_CYCLE_COUNTER(STAT_UAVPawnTick);
+
+    if(!bExternallyDriven) AdvanceFlightSimulation(DeltaTime);
 
 	// 更新仿真指标
 	if (FlightState != EFlightState::Crashed)
@@ -830,7 +880,21 @@ FVector AUAVPawn::PrepareTrajectoryAcceleration(const FVector& NMPCAcceleration)
 
 	float YError = DesiredPos.Y - CurrentState.Position.Y;
 	float ZError = DesiredPos.Z - CurrentState.Position.Z;
-	float CrossTrackDev = FMath::Sqrt(YError * YError + ZError * ZError);
+	// 横向误差取到参考折线的距离，避免把沿航路滞后误当成横向偏离。
+    float CrossTrackDev = FVector::Dist(DesiredPos, CurrentState.Position);
+    const auto& Points=TrajectoryTrackerComponent->GetTrajectory().Points;
+    if (Points.Num()>1)
+    {
+        double MinDistanceSquared=MAX_dbl;
+        for (int32 I=1;I<Points.Num();++I)
+        {
+            const FVector A=Points[I-1].Position, B=Points[I].Position;
+            const FVector Segment=B-A;
+            const double T=FMath::Clamp(FVector::DotProduct(CurrentState.Position-A,Segment)/FMath::Max(Segment.SizeSquared(),1.e-12),0.0,1.0);
+            MinDistanceSquared=FMath::Min(MinDistanceSquared,FVector::DistSquared(CurrentState.Position,A+T*Segment));
+        }
+        CrossTrackDev=FMath::Sqrt(MinDistanceSquared);
+    }
 
 	// 持久化横向偏差用于指标统计
 	MetricsCurrentCrossTrackDev = CrossTrackDev;
@@ -896,14 +960,7 @@ void AUAVPawn::ExecutePositionHold()
 			CurrentState, HoldTarget, FVector::ZeroVector, DesiredAttitude, DesiredThrust, 0.02f);
 
 		FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
-			CurrentState, DesiredAttitude, 0.02f);
-
-		float HoverThrust = AttitudeControllerComponent->HoverThrust;
-		for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
-		{
-			MotorOutput.Thrusts[i] = FMath::Clamp(
-				DesiredThrust + (MotorOutput.Thrusts[i] - HoverThrust), 0.0f, 1.0f);
-		}
+			CurrentState, DesiredAttitude, 0.02f, DesiredThrust);
 
 		if (DynamicsComponent)
 		{
@@ -928,13 +985,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			}
 
 			// 轨迹完成检查：IsComplete() 为 true 且速度足够低时才切换到位置保持
-			const bool bTrajectoryDone = TrajectoryTrackerComponent->IsComplete();
-			const float CurrentSpeed = CurrentState.Velocity.Size();
-			if (bTrajectoryDone && CurrentSpeed < 150.0f)
-			{
-				ExecutePositionHold();
-				break;
-			}
+            // 轨迹末段继续使用终点参考和同一 NMPC/CBF 链路，避免速度阈值引起控制器来回切换。
 
 			// NMPC 求解
 			if (ShouldSolveNMPC(DeltaTime))
@@ -945,6 +996,14 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			// 平滑和执行约束已包含在预测优化中，不在安全滤波前叠加启发式控制。
 			SmoothedNMPCAcceleration = CachedNMPCAcceleration;
 			FVector EffectiveAccel = PrepareTrajectoryAcceleration(CachedNMPCAcceleration);
+            if (auto* GM = Cast<AMultiAgentGameMode>(GetWorld()->GetAuthGameMode()))
+                if (GM->KeepsDemoOpen())
+                {
+                    FVector JointAccel;
+                    const bool bJoint=GM->GetJointNMPCCache(AgentID, JointAccel);
+                    if (bJoint) EffectiveAccel = JointAccel;
+                    UE_LOG_THROTTLE(2.0,LogUAVMultiAgent,Log,TEXT("[ControlSource] Agent=%d joint=%d acceleration=(%.1f,%.1f,%.1f) z=%.1f vz=%.1f referenceZ=%.1f referenceVz=%.1f"),AgentID,bJoint,EffectiveAccel.X,EffectiveAccel.Y,EffectiveAccel.Z,CurrentState.Position.Z,CurrentState.Velocity.Z,TrajectoryTrackerComponent->GetDesiredState(TrajectoryTrackerComponent->GetCurrentTime()).Position.Z,TrajectoryTrackerComponent->GetDesiredState(TrajectoryTrackerComponent->GetCurrentTime()).Velocity.Z);
+                }
 
 				// ---- CBF-QP 统一安全滤波 ----
 				bMetricsCBFActiveThisFrame = false;
@@ -1069,14 +1128,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 				EffectiveAccel, CurrentState.Rotation.Yaw, DesiredAttitude, DesiredThrust);
 
 			FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControlWithFeedforward(
-				CurrentState, DesiredAttitude, DesiredAngularAccel, DeltaTime);
-
-			float HoverThrust = AttitudeControllerComponent->HoverThrust;
-			for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
-			{
-				MotorOutput.Thrusts[i] = FMath::Clamp(
-					DesiredThrust + (MotorOutput.Thrusts[i] - HoverThrust), 0.0f, 1.0f);
-			}
+				CurrentState, DesiredAttitude, DesiredAngularAccel, DeltaTime, DesiredThrust);
 
 			if (DynamicsComponent)
 			{
@@ -1095,27 +1147,16 @@ void AUAVPawn::UpdateController(float DeltaTime)
 
 				PositionControllerComponent->ComputeControl(
 					CurrentState, TargetPosition, FVector::ZeroVector, DesiredAttitude, DesiredThrust, DeltaTime);
+                UE_LOG_THROTTLE(5.0, LogUAVActor, Log,
+                    TEXT("[PositionHold] Agent=%d Target=(%.1f,%.1f,%.1f) Position=(%.1f,%.1f,%.1f) Velocity=(%.1f,%.1f,%.1f) Mass=%.2f Thrust=%.4f"),
+                    AgentID,TargetPosition.X,TargetPosition.Y,TargetPosition.Z,CurrentState.Position.X,CurrentState.Position.Y,CurrentState.Position.Z,
+                    CurrentState.Velocity.X,CurrentState.Velocity.Y,CurrentState.Velocity.Z,PositionControllerComponent->UAVMass,DesiredThrust);
 
 				if (AttitudeControllerComponent)
 				{
 					FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControl(
-						CurrentState, DesiredAttitude, DeltaTime);
+						CurrentState, DesiredAttitude, DeltaTime, DesiredThrust);
 
-					float HoverThrust = AttitudeControllerComponent->HoverThrust;
-
-					// UE_LOG(LogUAVActor, Log, TEXT("AttCtrl Raw: [%.3f, %.3f, %.3f, %.3f] | Hover: %.3f | DesThrust: %.3f"),
-					// 	MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3],
-					// 	HoverThrust, DesiredThrust);
-
-					for (int32 i = 0; i < MotorOutput.Thrusts.Num(); i++)
-					{
-						float ControlDelta = MotorOutput.Thrusts[i] - HoverThrust;
-						MotorOutput.Thrusts[i] = DesiredThrust + ControlDelta;
-						MotorOutput.Thrusts[i] = FMath::Clamp(MotorOutput.Thrusts[i], 0.0f, 1.0f);
-					}
-
-					// UE_LOG(LogUAVActor, Log, TEXT("Final Motors: [%.3f, %.3f, %.3f, %.3f]"),
-					// 	MotorOutput.Thrusts[0], MotorOutput.Thrusts[1], MotorOutput.Thrusts[2], MotorOutput.Thrusts[3]);
 
 					if (DynamicsComponent)
 					{
@@ -1242,6 +1283,28 @@ void AUAVPawn::SyncStateFromWreck()
 
 	CurrentState = ActiveWreckActor->GetWreckState();
 	SetActorLocationAndRotation(CurrentState.Position, CurrentState.Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+}
+
+void AUAVPawn::ConfigureLandingSurface(float HeightCm)
+{
+    LandingSurfaceCm=HeightCm;
+    bGroundContact=FMath::IsNearlyEqual(CurrentState.Position.Z,HeightCm,0.1f)
+        && CurrentState.Velocity.Size()<=20;
+}
+
+bool AUAVPawn::ParkOnSurface()
+{
+	if (!bGroundContact || CurrentState.Velocity.Size()>20 || IsCrashed()) return false;
+	StopTrajectoryTracking();
+	DynamicsComponent->EmergencyStopMotors();
+	bParked=true;
+	return true;
+}
+
+void AUAVPawn::ReleaseFromSurface()
+{
+	bParked=false; bGroundContact=false;
+	DynamicsComponent->ResumeMotors();
 }
 
 void AUAVPawn::CheckCollision()

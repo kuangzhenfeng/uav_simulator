@@ -15,6 +15,8 @@ AUAVPlayerController::AUAVPlayerController()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = true;
+    PrimaryActorTick.bTickEvenWhenPaused = true;
+    bShouldPerformFullTickWhenPaused = true;
 }
 
 void AUAVPlayerController::BeginPlay()
@@ -48,6 +50,8 @@ void AUAVPlayerController::BeginPlay()
 void AUAVPlayerController::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+	// 暂停时显式刷新观察视角，飞行与服务时钟仍保持冻结。
+	if (UGameplayStatics::IsGamePaused(this)) UpdateCameraManager(0.0f);
 
 	// 定期刷新无人机列表
 	UIRefreshAccumulator += DeltaTime;
@@ -76,7 +80,7 @@ void AUAVPlayerController::SwitchView(int32 AgentID)
 		// 全局视角：切回默认 Pawn
 		if (DefaultViewTarget)
 		{
-			SetViewTargetWithBlend(DefaultViewTarget, 0.5f);
+			SetViewTargetWithBlend(DefaultViewTarget, UGameplayStatics::IsGamePaused(this) ? 0.0f : 0.5f);
 			CurrentViewAgentID = -1;
 			UE_LOG(LogUAVCamera, Log, TEXT("[CameraSwitcher] Switched to Global View"));
 		}
@@ -87,7 +91,7 @@ void AUAVPlayerController::SwitchView(int32 AgentID)
 		AUAVPawn* DronePawn = GetDroneByAgentID(AgentID);
 		if (DronePawn)
 		{
-			SetViewTargetWithBlend(DronePawn, 0.5f);
+			SetViewTargetWithBlend(DronePawn, UGameplayStatics::IsGamePaused(this) ? 0.0f : 0.5f);
 			CurrentViewAgentID = AgentID;
 			UE_LOG(LogUAVCamera, Log, TEXT("[CameraSwitcher] Switched to UAV #%d"), AgentID);
 		}

@@ -21,17 +21,17 @@ void UAttitudeController::TickComponent(float DeltaTime, ELevelTick TickType, FA
 	SCOPE_CYCLE_COUNTER(STAT_AttitudeController);
 }
 
-FMotorOutput UAttitudeController::ComputeControl(const FUAVState& CurrentState, const FRotator& TargetAttitude, float DeltaTime)
+FMotorOutput UAttitudeController::ComputeControl(const FUAVState& CurrentState, const FRotator& TargetAttitude, float DeltaTime, float CollectiveThrust)
 {
 	// 向后兼容：调用带前馈的方法，前馈参数设为零
-	return ComputeControlWithFeedforward(CurrentState, TargetAttitude, FRotator::ZeroRotator, DeltaTime);
+	return ComputeControlWithFeedforward(CurrentState, TargetAttitude, FRotator::ZeroRotator, DeltaTime, CollectiveThrust);
 }
 
 FMotorOutput UAttitudeController::ComputeControlWithFeedforward(
 	const FUAVState& CurrentState,
 	const FRotator& TargetAttitude,
 	const FRotator& DesiredAngularAcceleration,
-	float DeltaTime)
+	float DeltaTime, float CollectiveThrust)
 {
 	FMotorOutput Output;
 
@@ -160,17 +160,9 @@ FMotorOutput UAttitudeController::ComputeControlWithFeedforward(
 	//       |
 	//     2(CW)
 
-	// 基础推力 + Roll控制 + Pitch控制 + Yaw控制
-	Output.Thrusts[0] = HoverThrust - RollControl - PitchControl + YawControl;
-	Output.Thrusts[1] = HoverThrust + RollControl - PitchControl - YawControl;
-	Output.Thrusts[2] = HoverThrust + RollControl + PitchControl + YawControl;
-	Output.Thrusts[3] = HoverThrust - RollControl + PitchControl - YawControl;
-
-	// 限制推力范围 [0, 1]
-	for (float& Thrust : Output.Thrusts)
-	{
-		Thrust = FMath::Clamp(Thrust, 0.0f, 1.0f);
-	}
+    Output=AllocateCollective(CollectiveThrust<0 ? HoverThrust : CollectiveThrust,
+        {-RollControl-PitchControl+YawControl,RollControl-PitchControl-YawControl,
+         RollControl+PitchControl+YawControl,-RollControl+PitchControl-YawControl});
 
 	if (bShouldLogStartup)
 	{
@@ -179,6 +171,24 @@ FMotorOutput UAttitudeController::ComputeControlWithFeedforward(
 	}
 
 	return Output;
+}
+
+FMotorOutput UAttitudeController::AllocateCollective(float Collective,const TArray<float>& Deltas)
+{
+    FMotorOutput Result;
+    if(Deltas.Num()!=4) return Result;
+    Collective=FMath::Clamp(Collective,0.0f,1.0f);
+    float Mean=0;for(float D:Deltas) Mean+=D/4;
+    float Scale=1;
+    for(float D:Deltas)
+    {
+        D-=Mean;
+        if(D>0) Scale=FMath::Min(Scale,(1-Collective)/D);
+        else if(D<0) Scale=FMath::Min(Scale,Collective/-D);
+    }
+    // 饱和时同比例缩小力矩，保持总推力，避免逐电机裁剪引入升力偏置。
+    for(int32 I=0;I<4;++I) Result.Thrusts[I]=FMath::Clamp(Collective+Scale*(Deltas[I]-Mean),0.0f,1.0f);
+    return Result;
 }
 
 void UAttitudeController::ResetController()
@@ -235,9 +245,9 @@ FRotator UAttitudeController::ComputeFeedforwardTorque(const FRotator& DesiredAn
 	constexpr float DegToRad = PI / 180.0f;
 
 	FRotator FeedforwardTorque;
-	FeedforwardTorque.Roll = ControlConfig.MomentOfInertia.X * DesiredAngularAcceleration.Roll * DegToRad;
-	FeedforwardTorque.Pitch = ControlConfig.MomentOfInertia.Y * DesiredAngularAcceleration.Pitch * DegToRad;
-	FeedforwardTorque.Yaw = ControlConfig.MomentOfInertia.Z * DesiredAngularAcceleration.Yaw * DegToRad;
+	FeedforwardTorque.Roll = ControlConfig.MomentOfInertia.X * DesiredAngularAcceleration.Roll * DegToRad / FMath::Max(0.001f,float(ControlConfig.TorquePerNormalizedControl.X));
+	FeedforwardTorque.Pitch = ControlConfig.MomentOfInertia.Y * DesiredAngularAcceleration.Pitch * DegToRad / FMath::Max(0.001f,float(ControlConfig.TorquePerNormalizedControl.Y));
+	FeedforwardTorque.Yaw = ControlConfig.MomentOfInertia.Z * DesiredAngularAcceleration.Yaw * DegToRad / FMath::Max(0.001f,float(ControlConfig.TorquePerNormalizedControl.Z));
 	return FeedforwardTorque;
 }
 

@@ -202,7 +202,7 @@ bool FMILPRoundSolutionTest::RunTest(const FString& Parameters)
 }
 
 // ==================== Solve 不等式约束二值优化测试 ====================
-// 注意: 投影梯度法 LP 松弛不支持等式约束投影，仅使用不等式约束
+// 约束覆盖：变量界、不等式、等式及整数分支。
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMILPSolveBinaryAssignmentTest,
 	"UAVSimulator.MultiAgent.MILPSolver.Solve_BinaryAssignment",
@@ -220,7 +220,7 @@ bool FMILPSolveBinaryAssignmentTest::RunTest(const FString& Parameters)
 	AIneq.Add({1.0f, 1.0f, 1.0f});
 	TArray<float> BIneq = {2.0f};
 
-	// 不使用等式约束（投影梯度法无法处理）
+	// 此例仅需不等式约束。
 	TArray<TArray<float>> AEq;
 	TArray<float> BEq;
 
@@ -252,6 +252,20 @@ bool FMILPSolveBinaryAssignmentTest::RunTest(const FString& Parameters)
 	}
 
 	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMILPEqualityRegressionTest,
+    "UAVSimulator.MultiAgent.MILPSolver.EqualityRegression", UAV_TEST_FLAGS)
+bool FMILPEqualityRegressionTest::RunTest(const FString& Parameters)
+{
+    auto* Solver=NewObject<UMILPSolver>();
+    FMILPSolverConfig Config;
+    const auto R=Solver->Solve({-4,-3},{{2,2}},{3},{{1,1}},{1},{0,0},{1,1},{0,1},Config);
+    TestTrue(TEXT("Equality constrained binary assignment feasible"),R.bIsFeasible);
+    if(R.Solution.Num()==2) { TestEqual(TEXT("Unique assignment"),R.Solution[0]+R.Solution[1],1.f); TestEqual(TEXT("Negative objective optimum"),R.ObjectiveValue,-4.f); }
+    const auto I=Solver->SolveLP({1}, {}, {}, {{1}}, {2}, {0}, {1}, Config);
+    TestFalse(TEXT("Inconsistent equality rejected"),I.bIsFeasible);
+    return true;
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

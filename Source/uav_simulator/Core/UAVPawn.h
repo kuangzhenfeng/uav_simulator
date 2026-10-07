@@ -49,6 +49,8 @@ class UAV_SIMULATOR_API AUAVPawn : public APawn
 	GENERATED_BODY()
 
 public:
+    void SetExternallyDriven(bool Enabled) { bExternallyDriven=Enabled; }
+    void AdvanceFlightSimulation(float DeltaTime);
 	AUAVPawn();
 
 protected:
@@ -57,6 +59,7 @@ protected:
 
 public:
 	virtual void Tick(float DeltaTime) override;
+	virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
 
 	// 获取当前无人机状态
 	UFUNCTION(BlueprintCallable, Category = "UAV")
@@ -236,6 +239,15 @@ public:
 		const FUAVModelSpec Spec = FUAVProductManager::GetModelSpec(ModelID);
 		return Spec.ArmLength * 100.0f * 2.5f;
 	}
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Landing")
+	float LandingFrictionCoefficient=0.5f;
+	void ConfigureLandingSurface(float HeightCm);
+	void UpdatePayloadMass(float MassKg) { SetPayloadMass(MassKg); }
+	bool IsGroundContact() const { return bGroundContact; }
+	bool IsParked() const { return bParked; }
+	bool ParkOnSurface();
+	void ReleaseFromSurface();
 
 	// ---- 多机协同接口 ----
 
@@ -425,11 +437,15 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UAV Model")
 	float CurrentPayloadMass = 0.0f;	// kg，运行时可变
+	float LandingSurfaceCm = -MAX_FLT;
+	bool bGroundContact = false;
+	bool bParked = false;
 
 private:
 	bool bNMPCStuck = false;
 
 	// 控制与动力学共用固定步长，帧间保留未积分的时间。
+	bool bExternallyDriven=false;
 	double PhysicsStepAccumulator = 0.0;
 
 	// NMPC 调用节流：缓存上次结果，避免每个子步都调用

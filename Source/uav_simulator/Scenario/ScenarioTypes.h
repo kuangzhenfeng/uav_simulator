@@ -9,6 +9,9 @@
 #include "../Mission/MissionTypes.h"   // FMissionWaypoint, EMissionMode
 #include "../Core/UAVProductTypes.h"   // EUAVModelID
 #include "../Planning/NMPCAvoidance.h" // EMPCType
+#include "../MultiAgent/TaskAllocationTypes.h"
+#include "../MultiAgent/MultiAgentTypes.h"
+#include "../MultiAgent/AgricultureTypes.h"
 #include "ScenarioTypes.generated.h"
 
 class AUAVPawn;
@@ -43,6 +46,10 @@ struct FScenarioObstacleEntry
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Obstacle")
 	EObstacleType Type = EObstacleType::Box;
+
+	/** Level 已提供布景时，可隐藏逻辑障碍代理，仍保留碰撞与规划几何。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Obstacle")
+	bool bVisible = true;
 
 	/** 中心位置（世界坐标系，cm） */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Obstacle")
@@ -256,6 +263,8 @@ class UAV_SIMULATOR_API UScenario : public UDataAsset
 	GENERATED_BODY()
 
 public:
+	UScenario() { Formation.Type = EFormationType::None; }
+
 	/** 场景可读名称 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario")
 	FString Name;
@@ -287,4 +296,23 @@ public:
 	/** 可选算法覆盖 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario")
 	FScenarioAlgorithmOverride AlgorithmOverride;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Cooperation")
+	FFormationConfig Formation;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Cooperation")
+	TArray<FTaskDescriptor> Tasks;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Cooperation")
+	int32 RandomSeed = 12013;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Cooperation")
+	bool bCooperationDemo = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Agriculture")
+	FAgricultureConfig Agriculture;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Agriculture")
+	TArray<FSupplyAirportConfig> SupplyAirports;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scenario|Agriculture")
+	TArray<FAgriculturePlot> Plots;
 };

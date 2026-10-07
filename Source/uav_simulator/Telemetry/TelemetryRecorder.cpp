@@ -1,6 +1,10 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TelemetryRecorder.h"
+#include "../MultiAgent/AgentManager.h"
+#include "../MultiAgent/CooperationGameMode.h"
+#include "../MultiAgent/AgricultureCoordinator.h"
+#include "../MultiAgent/TaskMonitor.h"
 #include "../uav_simulator.h"
 #include "../Core/UAVPawn.h"
 #include "../Core/UAVProductManager.h"
@@ -457,6 +461,27 @@ void UTelemetryRecorder::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 	{
 		MetricsAccum = 0.0f;
 		WriteMetrics(SimTime);
+        if(auto* GM=Cast<AMultiAgentGameMode>(GetOwner()))
+        {
+            if(GM->KeepsDemoOpen() && GM->GetTaskMonitor())
+            {
+                float Separation=MAX_FLT; const auto States=GM->GetAllAgentStates();
+                for(int32 I=0;I<States.Num();++I) for(int32 J=I+1;J<States.Num();++J)
+                    Separation=FMath::Min(Separation,float(FVector::Dist(States[I].State.Position,States[J].State.Position)));
+                const auto* Demo=Cast<ACooperationGameMode>(GM);
+                const auto* Farm=Demo && Demo->GetAgriculture()->IsEnabled() ? Demo->GetAgriculture() : nullptr;
+                if(Farm) WriteLine(Farm->GetTelemetryJson());
+                WriteLine(FString::Printf(TEXT("{\"type\":\"cooperation\",\"t\":%.3f,\"completed\":%d,\"total\":%d,\"minSeparationCm\":%.2f,\"safeDistanceCm\":%.2f,\"formationErrorCm\":%.2f,\"jointControlCount\":%d,\"feasible\":%s,\"reason\":\"%s\"}"),
+                    SimTime,Farm ? Farm->CompletedCount() : GM->GetTaskMonitor()->GetCompletedTaskCount(),Farm ? Farm->PlotCount() : GM->GetTaskPool().Num(),Separation,GM->DefaultCBFQPConfig.DSafe,Demo ? Demo->GetFormationErrorCm() : 0,GM->GetJointControlCount(),
+                    (Farm ? !Farm->HasFailed() : GM->GetCurrentTaskAllocation().bIsFeasible) ? TEXT("true"):TEXT("false"),*JsonEscape(Farm ? Farm->GetLastReason() : GM->GetLastReplanReason())));
+                for(const auto& T:GM->GetTaskPool())
+                {
+                    int32 Assigned=GM->GetAssignedAgent(T.TaskID);
+                    WriteLine(FString::Printf(TEXT("{\"type\":\"task\",\"t\":%.3f,\"taskId\":%d,\"agentId\":%d,\"status\":%d,\"progress\":%.3f}"),
+                        SimTime,T.TaskID,Assigned,int32(GM->GetTaskMonitor()->GetTaskStatus(T.TaskID)),GM->GetTaskMonitor()->GetTaskProgress(T.TaskID)));
+                }
+            }
+        }
 	}
 
 	// 未来轨迹采样：低于帧率的节拍（默认 5Hz），避免 ndjson 体积失控

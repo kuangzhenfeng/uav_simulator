@@ -51,6 +51,10 @@ struct FScenarioMetrics
 	/** 是否发生过碰撞 */
 	UPROPERTY(BlueprintReadOnly, Category = "Scenario|Metrics")
 	bool bCollided = false;
+	UPROPERTY(BlueprintReadOnly, Category = "Scenario|Metrics")
+	float MinAgentSeparationCm = FLT_MAX;
+	UPROPERTY(BlueprintReadOnly, Category = "Scenario|Metrics")
+	float AgentSafeDistanceCm = 0.0f;
 };
 
 /**
@@ -142,6 +146,7 @@ public:
 
 	/** 注入遥测记录器，使周期/最终判决同步落 telemetry.ndjson */
 	void SetTelemetryRecorder(UTelemetryRecorder* InRecorder);
+	void InvalidateFinalResult() { bFinalFlushed = false; }
 
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 

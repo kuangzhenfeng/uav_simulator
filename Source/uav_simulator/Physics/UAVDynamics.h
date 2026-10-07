@@ -40,6 +40,7 @@ public:
 	// 是否已停桨
 	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")
 	bool AreMotorsStopped() const { return bMotorsStopped; }
+	void ResumeMotors() { bMotorsStopped=false; }
 
 	// 获取当前电机推力
 	UFUNCTION(BlueprintCallable, Category = "UAV Dynamics")

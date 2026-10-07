@@ -45,128 +45,122 @@ FMILPResult UMILPSolver::Solve(
 	return Result;
 }
 
-FLPResult UMILPSolver::SolveLP(
-	const TArray<float>& c,
-	const TArray<TArray<float>>& AIneq,
-	const TArray<float>& bIneq,
-	const TArray<TArray<float>>& AEq,
-	const TArray<float>& bEq,
-	const TArray<float>& LB,
-	const TArray<float>& UB,
-	const FMILPSolverConfig& Config)
+namespace
 {
-	FLPResult Result;
+// 两阶段单纯形：第一阶段消除人工变量，第二阶段优化真实目标。
+class FSimplexTableau
+{
+public:
+    int32 M, N, Iterations = 0, MaxIterations;
+    TArray<TArray<double>> D;
+    TArray<int32> Basis, NonBasis;
+    static constexpr double Eps = 1e-8;
+    FSimplexTableau(const TArray<TArray<double>>& A, const TArray<double>& B,
+        const TArray<float>& C, int32 Limit) : M(B.Num()), N(C.Num()), MaxIterations(Limit)
+    {
+        D.SetNum(M+2); for(auto& Row:D) Row.Init(0.0,N+2);
+        Basis.SetNum(M); NonBasis.SetNum(N+1);
+        for(int32 I=0;I<M;++I)
+        {
+            for(int32 J=0;J<N;++J) D[I][J]=A[I][J];
+            Basis[I]=N+I; D[I][N]=-1; D[I][N+1]=B[I];
+        }
+        for(int32 J=0;J<N;++J) {NonBasis[J]=J;D[M][J]=C[J];}
+        NonBasis[N]=-1; D[M+1][N]=1;
+    }
+    void Pivot(int32 R,int32 S)
+    {
+        const double Inv=1.0/D[R][S];
+        for(int32 I=0;I<M+2;++I) if(I!=R)
+            for(int32 J=0;J<N+2;++J) if(J!=S) D[I][J]-=D[R][J]*D[I][S]*Inv;
+        for(int32 J=0;J<N+2;++J) if(J!=S) D[R][J]*=Inv;
+        for(int32 I=0;I<M+2;++I) if(I!=R) D[I][S]*=-Inv;
+        D[R][S]=Inv; Swap(Basis[R],NonBasis[S]);
+    }
+    bool Optimize(int32 Phase)
+    {
+        const int32 Obj=Phase==1 ? M+1 : M;
+        while(++Iterations<=MaxIterations)
+        {
+            int32 S=INDEX_NONE;
+            for(int32 J=0;J<=N;++J)
+            {
+                if(Phase==2 && NonBasis[J]==-1) continue;
+                if(S==INDEX_NONE || D[Obj][J]<D[Obj][S]-Eps ||
+                    (FMath::Abs(D[Obj][J]-D[Obj][S])<=Eps && NonBasis[J]<NonBasis[S])) S=J;
+            }
+            if(S==INDEX_NONE || D[Obj][S]>=-Eps) return true;
+            int32 R=INDEX_NONE;
+            for(int32 I=0;I<M;++I)
+            {
+                if(D[I][S]<=Eps) continue;
+                const double Ratio=D[I][N+1]/D[I][S];
+                const double Best=R==INDEX_NONE ? MAX_dbl : D[R][N+1]/D[R][S];
+                if(R==INDEX_NONE || Ratio<Best-Eps || (FMath::Abs(Ratio-Best)<=Eps && Basis[I]<Basis[R])) R=I;
+            }
+            if(R==INDEX_NONE) return false;
+            Pivot(R,S);
+        }
+        return false;
+    }
+    bool Solve(TArray<float>& X)
+    {
+        int32 R=INDEX_NONE;
+        for(int32 I=0;I<M;++I) if(R==INDEX_NONE || D[I][N+1]<D[R][N+1]) R=I;
+        if(R!=INDEX_NONE && D[R][N+1]<-Eps)
+        {
+            Pivot(R,N);
+            if(!Optimize(1) || FMath::Abs(D[M+1][N+1])>Eps) return false;
+            for(int32 I=0;I<M;++I) if(Basis[I]==-1)
+            {
+                int32 S=INDEX_NONE;
+                for(int32 J=0;J<N;++J) if(FMath::Abs(D[I][J])>Eps &&
+                    (S==INDEX_NONE || NonBasis[J]<NonBasis[S])) S=J;
+                if(S!=INDEX_NONE) Pivot(I,S);
+            }
+        }
+        if(!Optimize(2)) return false;
+        X.Init(0.0f,N);
+        for(int32 I=0;I<M;++I) if(Basis[I]>=0 && Basis[I]<N) X[Basis[I]]=float(D[I][N+1]);
+        return true;
+    }
+};
+}
 
-	int32 NumVars = c.Num();
-	if (NumVars == 0)
-	{
-		return Result;
-	}
-
-	// 构造标准形式 LP:
-	// min c^T x  s.t.  A_ineq * x <= b_ineq,  lb <= x <= ub
-	// 使用投影梯度法求解简化版 LP
-	// 对于小规模问题（< 200 变量），投影梯度法足够高效
-
-	// 初始化为可行域中点
-	TArray<float> X;
-	X.SetNum(NumVars);
-	for (int32 i = 0; i < NumVars; ++i)
-	{
-		float Lower = (i < LB.Num()) ? LB[i] : 0.0f;
-		float Upper = (i < UB.Num()) ? UB[i] : 1.0f;
-		X[i] = (Lower + Upper) * 0.5f;
-	}
-
-	float StepSize = 0.1f;
-	float PrevObj = MAX_FLT;
-
-	for (int32 Iter = 0; Iter < Config.LPMaxIterations; ++Iter)
-	{
-		// 计算目标函数梯度 (c 本身)
-		// 梯度下降步
-		for (int32 i = 0; i < NumVars; ++i)
-		{
-			X[i] -= StepSize * c[i];
-		}
-
-		// 投影到可行域：先投影到变量界
-		for (int32 i = 0; i < NumVars; ++i)
-		{
-			float Lower = (i < LB.Num()) ? LB[i] : 0.0f;
-			float Upper = (i < UB.Num()) ? UB[i] : 1.0f;
-			X[i] = FMath::Clamp(X[i], Lower, Upper);
-		}
-
-		// 投影到不等式约束（逐个投影）
-		for (int32 Row = 0; Row < AIneq.Num() && Row < bIneq.Num(); ++Row)
-		{
-			// 计算 AIneq[Row] * X
-			float Violation = -bIneq[Row];
-			const TArray<float>& RowCoeffs = AIneq[Row];
-			for (int32 i = 0; i < RowCoeffs.Num() && i < NumVars; ++i)
-			{
-				Violation += RowCoeffs[i] * X[i];
-			}
-
-			// 如果约束违反 (Violation > 0)，投影到约束面
-			if (Violation > Config.LPConvergenceTolerance)
-			{
-				float NormSq = 0.0f;
-				for (int32 i = 0; i < RowCoeffs.Num() && i < NumVars; ++i)
-				{
-					NormSq += RowCoeffs[i] * RowCoeffs[i];
-				}
-				if (NormSq > KINDA_SMALL_NUMBER)
-				{
-					float Scale = Violation / NormSq;
-					for (int32 i = 0; i < RowCoeffs.Num() && i < NumVars; ++i)
-					{
-						X[i] -= Scale * RowCoeffs[i];
-					}
-				}
-			}
-		}
-
-		// 再次投影到变量界
-		for (int32 i = 0; i < NumVars; ++i)
-		{
-			float Lower = (i < LB.Num()) ? LB[i] : 0.0f;
-			float Upper = (i < UB.Num()) ? UB[i] : 1.0f;
-			X[i] = FMath::Clamp(X[i], Lower, Upper);
-		}
-
-		// 计算目标函数值
-		float Obj = 0.0f;
-		for (int32 i = 0; i < NumVars; ++i)
-		{
-			Obj += c[i] * X[i];
-		}
-
-		// 收敛检查
-		if (FMath::Abs(Obj - PrevObj) < Config.LPConvergenceTolerance)
-		{
-			Result.ObjectiveValue = Obj;
-			break;
-		}
-		PrevObj = Obj;
-
-		// 自适应步长
-		StepSize *= 0.95f;
-		StepSize = FMath::Max(StepSize, 1e-6f);
-	}
-
-	// 计算最终目标函数值
-	float FinalObj = 0.0f;
-	for (int32 i = 0; i < NumVars; ++i)
-	{
-		FinalObj += c[i] * X[i];
-	}
-
-	Result.Solution = X;
-	Result.ObjectiveValue = FinalObj;
-	Result.bIsFeasible = IsFeasible(X, AIneq, bIneq, AEq, bEq, LB, UB, 0.01f);
-	return Result;
+FLPResult UMILPSolver::SolveLP(
+    const TArray<float>& c, const TArray<TArray<float>>& AIneq, const TArray<float>& bIneq,
+    const TArray<TArray<float>>& AEq, const TArray<float>& bEq,
+    const TArray<float>& LB, const TArray<float>& UB, const FMILPSolverConfig& Config)
+{
+    FLPResult Result;
+    const int32 N=c.Num(); if(N==0) return Result;
+    TArray<double> Lower; Lower.Init(0.0,N);
+    for(int32 J=0;J<N;++J) if(LB.IsValidIndex(J)) Lower[J]=LB[J];
+    TArray<TArray<double>> Rows; TArray<double> Bounds;
+    auto AddRow=[&](const TArray<float>& Coeff,float Bound,double Sign)
+    {
+        TArray<double> Row;Row.Init(0.0,N);double B=Sign*Bound;
+        for(int32 J=0;J<N;++J) if(Coeff.IsValidIndex(J)) {Row[J]=Sign*Coeff[J];B-=Row[J]*Lower[J];}
+        Rows.Add(Row);Bounds.Add(B);
+    };
+    for(int32 I=0;I<AIneq.Num() && I<bIneq.Num();++I) AddRow(AIneq[I],bIneq[I],1);
+    for(int32 I=0;I<AEq.Num() && I<bEq.Num();++I)
+    { AddRow(AEq[I],bEq[I],1); AddRow(AEq[I],bEq[I],-1); }
+    for(int32 J=0;J<N;++J) if(UB.IsValidIndex(J))
+    {
+        if(UB[J]<Lower[J]-1e-8) return Result;
+        TArray<double> Row;Row.Init(0.0,N);Row[J]=1;Rows.Add(Row);Bounds.Add(UB[J]-Lower[J]);
+    }
+    FSimplexTableau LP(Rows,Bounds,c,Config.LPMaxIterations);
+    if(!LP.Solve(Result.Solution)) return Result;
+    Result.ObjectiveValue=0;
+    for(int32 J=0;J<N;++J)
+    {
+        Result.Solution[J]+=float(Lower[J]);
+        Result.ObjectiveValue+=c[J]*Result.Solution[J];
+    }
+    Result.bIsFeasible=IsFeasible(Result.Solution,AIneq,bIneq,AEq,bEq,LB,UB,Config.LPConvergenceTolerance*10);
+    return Result;
 }
 
 FMILPResult UMILPSolver::BranchAndBound(
@@ -225,7 +219,7 @@ FMILPResult UMILPSolver::BranchAndBound(
 		}
 
 		// 剪枝：LP 下界 >= 当前最优（定界）
-		if (bHasIncumbent && LPResult.ObjectiveValue >= IncumbentObjective * (1.0f - Config.MIPGap))
+		if (bHasIncumbent && LPResult.ObjectiveValue >= IncumbentObjective - FMath::Abs(IncumbentObjective) * Config.MIPGap)
 		{
 			continue;
 		}

@@ -2,6 +2,7 @@
 
 #include "BTTask_ExitSimulation.h"
 #include "AIController.h"
+#include "../../MultiAgent/AgentManager.h"
 #include "Misc/App.h"
 #include "GenericPlatform/GenericPlatformMisc.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
@@ -19,6 +20,9 @@ UBTTask_ExitSimulation::UBTTask_ExitSimulation()
 EBTNodeResult::Type UBTTask_ExitSimulation::ExecuteTask(
 	UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
 {
+	if (auto* AI = OwnerComp.GetAIOwner())
+		if (auto* GM = Cast<AMultiAgentGameMode>(AI->GetWorld()->GetAuthGameMode()))
+			if (GM->KeepsDemoOpen()) return EBTNodeResult::Succeeded;
 	// 非无头模式下直接返回成功，不做任何操作
 	if (!FApp::IsUnattended())
 	{

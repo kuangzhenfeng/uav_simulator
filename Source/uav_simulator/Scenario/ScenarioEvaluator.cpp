@@ -3,6 +3,10 @@
 #include "ScenarioEvaluator.h"
 #include "../uav_simulator.h"
 #include "../Core/UAVPawn.h"
+#include "../MultiAgent/AgentManager.h"
+#include "../MultiAgent/CooperationGameMode.h"
+#include "../MultiAgent/AgricultureCoordinator.h"
+#include "../MultiAgent/TaskMonitor.h"
 #include "../Mission/MissionComponent.h"
 #include "../Planning/ObstacleManager.h"
 #include "../Telemetry/TelemetryRecorder.h"
@@ -41,6 +45,9 @@ FScenarioVerdict UScenarioEvaluator::Evaluate(const FScenarioMetrics& Metrics, c
 	{
 		Verdict.Failures.Add(TEXT("Collision"));
 	}
+
+	if (Metrics.AgentSafeDistanceCm > 0 && Metrics.MinAgentSeparationCm < Metrics.AgentSafeDistanceCm)
+		Verdict.Failures.Add(TEXT("AgentSeparationViolation"));
 
 	// 2. 航点到达
 	if (Criteria->bRequireAllWaypoints && Metrics.WaypointsTotal > 0)
@@ -101,7 +108,7 @@ bool UScenarioEvaluator::WriteResultJson(const FString& ScenarioName,
 		? FString::Join(FailureLines, TEXT(",\n"))
 		: TEXT("");
 
-	const FString Json = FString::Printf(TEXT(
+	FString Json = FString::Printf(TEXT(
 		"{\n"
 		"  \"scenario\": \"%s\",\n"
 		"  \"verdict\": \"%s\",\n"
@@ -127,7 +134,8 @@ bool UScenarioEvaluator::WriteResultJson(const FString& ScenarioName,
 		Verdict.Metrics.bCollided ? TEXT("true") : TEXT("false"),
 		*FailuresBlock);
 
-	// 确保目录存在
+	Json.ReplaceInline(TEXT("\"collided\":"), *FString::Printf(TEXT("\"minAgentSeparationCm\": %.2f,\n    \"agentSafeDistanceCm\": %.2f,\n    \"collided\":"), Verdict.Metrics.MinAgentSeparationCm,Verdict.Metrics.AgentSafeDistanceCm));
+    // 确保目录存在
 	FPlatformFileManager::Get().GetPlatformFile().CreateDirectoryTree(*FPaths::GetPath(Path));
 
 	const bool bOk = FFileHelper::SaveStringToFile(Json, *Path);
@@ -188,8 +196,11 @@ void UScenarioEvaluatorComponent::Initialize(UScenario* InScenario, AUAVPawn* In
 	{
 		if (UMissionComponent* Mission = LeadUAV->FindComponentByClass<UMissionComponent>())
 		{
-			Mission->OnMissionCompleted.AddDynamic(this, &UScenarioEvaluatorComponent::HandleMissionCompleted);
-			Mission->OnMissionFailed.AddDynamic(this, &UScenarioEvaluatorComponent::HandleMissionFailed);
+			if (!Scenario || !Scenario->bCooperationDemo)
+            {
+                Mission->OnMissionCompleted.AddDynamic(this, &UScenarioEvaluatorComponent::HandleMissionCompleted);
+                Mission->OnMissionFailed.AddDynamic(this, &UScenarioEvaluatorComponent::HandleMissionFailed);
+            }
 
 			if (Criteria)
 			{
@@ -259,7 +270,49 @@ FScenarioMetrics UScenarioEvaluatorComponent::CollectMetrics() const
 		}
 	}
 
-	return M;
+    if (Scenario && Scenario->bCooperationDemo)
+    {
+        if (auto* GM = Cast<AMultiAgentGameMode>(GetOwner()))
+        {
+            M.WaypointsReached = 0; M.WaypointsTotal = 0;
+            const auto Fleet = GM->GetScenarioFleet();
+            for (int32 I=0; I<Fleet.Num(); ++I)
+            {
+                AUAVPawn* P = Fleet[I]; if (!P) continue;
+                M.bCollided |= P->IsCrashed();
+                M.MaxLateralDeviationCm = FMath::Max(M.MaxLateralDeviationCm,P->GetMaxCrossTrackDev());
+                if (auto* Obs = P->GetObstacleManager())
+                {
+                    FObstacleInfo Nearest;
+                    M.MinClearanceCm = FMath::Min(M.MinClearanceCm,Obs->GetDistanceToNearestObstacle(P->GetActorLocation(),Nearest));
+                }
+                for (int32 J=I+1;J<Fleet.Num();++J)
+                    if(Fleet[J]) M.MinAgentSeparationCm=FMath::Min(M.MinAgentSeparationCm,float(FVector::Dist(P->GetActorLocation(),Fleet[J]->GetActorLocation())));
+                if(Scenario->Tasks.IsEmpty() && (Scenario->Formation.Type==EFormationType::None || GM->IsLeader(P->GetAgentID())))
+                {
+                    auto* Mission=P->GetMissionComponent();
+                    M.WaypointsTotal+=Mission->GetWaypointCount();
+                    M.WaypointsReached+=Mission->IsMissionCompleted() ? Mission->GetWaypointCount() : Mission->GetCurrentWaypointIndex();
+                }
+            }
+            M.AgentSafeDistanceCm=GM->DefaultCBFQPConfig.DSafe;
+            if(auto* Demo=Cast<ACooperationGameMode>(GM))
+                if(auto* Agriculture=Demo->GetAgriculture(); Agriculture && Agriculture->IsEnabled())
+                {
+                    M.WaypointsTotal=Agriculture->PlotCount();
+                    M.WaypointsReached=Agriculture->CompletedCount();
+                    if(M.WaypointsReached==M.WaypointsTotal && !Agriculture->ReadyToFinish()) ++M.WaypointsTotal;
+                    if(Agriculture->HasFailed()) M.WaypointsTotal=FMath::Max(M.WaypointsTotal,M.WaypointsReached+1);
+                }
+            if(!Scenario->Tasks.IsEmpty() && GM->GetTaskMonitor())
+            {
+                M.WaypointsTotal=GM->GetTaskPool().Num();
+                M.WaypointsReached=GM->GetTaskMonitor()->GetCompletedTaskCount();
+                if(!GM->GetCurrentTaskAllocation().bIsFeasible) M.WaypointsTotal=FMath::Max(M.WaypointsTotal,M.WaypointsReached+1);
+            }
+        }
+    }
+    return M;
 }
 
 void UScenarioEvaluatorComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -272,6 +325,9 @@ void UScenarioEvaluatorComponent::TickComponent(float DeltaTime, ELevelTick Tick
 	}
 
 	ElapsedTime += DeltaTime;
+    if(const auto* Demo=Cast<ACooperationGameMode>(GetWorld()->GetAuthGameMode()))
+        if(const auto* Agriculture=Demo->GetAgriculture();Agriculture && Agriculture->IsEnabled())
+            ElapsedTime=Agriculture->GetElapsedSeconds();
 
 	// 更新累积指标
 	FScenarioMetrics Current = CollectMetrics();
@@ -280,8 +336,14 @@ void UScenarioEvaluatorComponent::TickComponent(float DeltaTime, ELevelTick Tick
 	Accumulated.WaypointsReached = Current.WaypointsReached;
 	Accumulated.WaypointsTotal = Current.WaypointsTotal;
 	Accumulated.bCollided |= Current.bCollided;
+	Accumulated.MinAgentSeparationCm = Current.MinAgentSeparationCm;
+	Accumulated.AgentSafeDistanceCm = Current.AgentSafeDistanceCm;
 
-	if (Accumulated.bCollided || (Criteria && Criteria->TimeoutSeconds > 0.0f && ElapsedTime >= Criteria->TimeoutSeconds))
+	if (Scenario->bCooperationDemo && Accumulated.WaypointsTotal>0 && Accumulated.WaypointsReached==Accumulated.WaypointsTotal)
+    {
+        FlushFinalResult(); return;
+    }
+    if (Accumulated.bCollided || (Criteria && Criteria->TimeoutSeconds > 0.0f && ElapsedTime >= Criteria->TimeoutSeconds))
 	{
 		FlushFinalResult();
 		return;

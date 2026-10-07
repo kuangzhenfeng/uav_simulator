@@ -10,6 +10,7 @@ UTaskAllocator::UTaskAllocator()
 void UTaskAllocator::Reset()
 {
 	CurrentAllocation = FTaskAllocationResult();
+	CurrentTasks.Empty();
 	bHasValidAllocation = false;
 }
 
@@ -55,6 +56,7 @@ FTaskAllocationResult UTaskAllocator::Allocate(
 	Result = ParseMILPSolution(MILPResult, Tasks, UAVCapabilities);
 	Result.SolveTimeSeconds = MILPResult.SolveTimeSeconds;
 
+	CurrentTasks = Tasks;
 	// 保存当前分配
 	CurrentAllocation = Result;
 	bHasValidAllocation = true;
@@ -74,46 +76,16 @@ FTaskAllocationResult UTaskAllocator::Reallocate(
 	const TArray<FUAVCapability>& UAVCapabilities,
 	const FTaskAllocationConfig& Config)
 {
-	// 从之前的分配中排除失败 Agent 的任务
-	TArray<FTaskDescriptor> RemainingTasks;
-
-	// 收集未完成且未分配给失败 Agent 的任务
-	TSet<int32> FailedSet;
-	for (int32 ID : FailedAgentIDs)
-	{
-		FailedSet.Add(ID);
-	}
-
-	// 添加之前分配中未完成的任务（排除失败的）
-	for (const FTaskAssignment& Assignment : PreviousAllocation.Assignments)
-	{
-		if (!FailedSet.Contains(Assignment.AgentID))
-		{
-			// 仍在执行的 Agent，保留其分配
-			continue;
-		}
-		// 失败 Agent 的任务需要重新分配
-		// 这里简化处理：将原任务重新加入任务池
-	}
-
-	// 添加新任务
-	for (const FTaskDescriptor& Task : NewTasks)
-	{
-		RemainingTasks.Add(Task);
-	}
-
-	// 过滤掉失败的 Agent
-	TArray<FUAVCapability> AvailableAgents;
-	for (const FUAVCapability& Cap : UAVCapabilities)
-	{
-		if (!FailedSet.Contains(Cap.AgentID))
-		{
-			AvailableAgents.Add(Cap);
-		}
-	}
-
-	// 重新分配
-	return Allocate(RemainingTasks, AvailableAgents, Config);
+    TArray<FTaskDescriptor> RemainingTasks = CurrentTasks;
+    for (const FTaskDescriptor& Task : NewTasks)
+    {
+        RemainingTasks.RemoveAll([&Task](const FTaskDescriptor& T){return T.TaskID == Task.TaskID;});
+        RemainingTasks.Add(Task);
+    }
+    TArray<FUAVCapability> AvailableAgents;
+    for (const FUAVCapability& Cap : UAVCapabilities)
+        if (!FailedAgentIDs.Contains(Cap.AgentID)) AvailableAgents.Add(Cap);
+    return Allocate(RemainingTasks, AvailableAgents, Config);
 }
 
 void UTaskAllocator::BuildMILPModel(

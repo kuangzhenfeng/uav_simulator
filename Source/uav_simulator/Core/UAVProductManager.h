@@ -55,6 +55,20 @@ public:
 			break;
 
 		// ---- 测绘系列 ----
+		case EUAVModelID::Agri_X100Demo:
+        {
+			S=GetModelSpec(EUAVModelID::Agri_AG60);
+			S.ModelName=TEXT("X100-inspired engineering model");
+			S.MaxPayloadKg=50; S.SprayWidthM=6;
+            // 根据工程模型的惯量及力矩增益配置 8 rad/s、阻尼比 0.9 的姿态闭环。
+            const float Gain=4*S.MaxThrust*S.ArmLength*0.707f;
+            S.RollPID=FPIDParams(S.MomentOfInertia.X*64/Gain*PI/180,0,2*.9f*S.MomentOfInertia.X*8/Gain*PI/180);
+            S.PitchPID=S.RollPID;
+			S.PayloadDescription=TEXT("50L农业作业工程模型，未标定厂家动力学");
+			break;
+        }
+
+		// ---- 测绘系列 ----
 		case EUAVModelID::Map_SVPro:
 			S.ProductType = EUAVProductType::Mapping; S.ModelName = TEXT("SV-Pro");
 			S.Mass = 3.2f;  S.MaxThrust = 18.0f; S.ArmLength = 0.28f;

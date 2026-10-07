@@ -403,4 +403,18 @@ bool FPositionControllerAccelerationToControlSafetyTiltRateTest::RunTest(const F
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPositionYawFrameTest,
+    "UAVSimulator.Control.PositionController.YawFrameConsistency",UAV_TEST_FLAGS)
+bool FPositionYawFrameTest::RunTest(const FString&)
+{
+    auto* A=NewObject<UPositionController>();auto* B=NewObject<UPositionController>();
+    A->Kd_Position=B->Kd_Position=0;A->Kd_Velocity=B->Kd_Velocity=0;
+    FUAVState S;S.Position=FVector(0,0,1500);S.Rotation=FRotator(0,90,0);
+    FRotator Plain,Feedforward;float TP,TF;
+    A->ComputeControl(S,FVector(100,0,1500),FVector::ZeroVector,Plain,TP,0.02f);
+    B->ComputeControlWithAcceleration(S,FVector(100,0,1500),FVector::ZeroVector,FVector::ZeroVector,Feedforward,TF,0.02f);
+    TestTrue(TEXT("World +X at yaw 90 uses body roll"),Plain.Roll<0 && FMath::Abs(Plain.Pitch)<0.01);
+    TestTrue(TEXT("Feedforward path uses same yaw frame"),Feedforward.Roll<0 && FMath::Abs(Feedforward.Pitch)<0.01);
+    return true;
+}
 #endif // WITH_DEV_AUTOMATION_TESTS

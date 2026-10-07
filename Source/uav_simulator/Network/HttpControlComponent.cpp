@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HttpControlComponent.h"
+#include "../MultiAgent/CooperationGameMode.h"
 #include "HttpServerModule.h"
 #include "IHttpRouter.h"
 #include "HttpPath.h"
@@ -367,7 +368,28 @@ bool UHttpControlComponent::HandleRequest(const FHttpServerRequest& Request, con
 
 TSharedPtr<FJsonObject> UHttpControlComponent::DispatchCommand(const FString& Path, const TSharedPtr<FJsonObject>& Body)
 {
-	if (Path.EndsWith(TEXT("reload")))
+	if (Path.EndsWith(TEXT("cooperation")))
+    {
+        auto Resp=MakeShared<FJsonObject>();
+        auto* GM=Cast<ACooperationGameMode>(GetOwningGameMode());
+        double Command=-1, Preset=-1;
+        if (!GM) {Resp->SetBoolField(TEXT("ok"),false);Resp->SetStringField(TEXT("error"),TEXT("Cooperation map required"));return Resp;}
+        const bool bPreset=Body->HasField(TEXT("preset")), bCommand=Body->HasField(TEXT("command"));
+        if ((bPreset && (!Body->TryGetNumberField(TEXT("preset"),Preset) || Preset<0 || Preset>=4 || Preset!=FMath::FloorToDouble(Preset))) ||
+            (bCommand && (!Body->TryGetNumberField(TEXT("command"),Command) || Command<0 || Command>=14 || Command!=FMath::FloorToDouble(Command))))
+        { Resp->SetBoolField(TEXT("ok"),false);Resp->SetStringField(TEXT("error"),TEXT("Invalid preset or command"));return Resp; }
+        double Action=-1,Target=-1;
+        const bool bAgriculture=Body->HasField(TEXT("agricultureCommand"));
+        if(bAgriculture && (!Body->TryGetNumberField(TEXT("agricultureCommand"),Action) || !Body->TryGetNumberField(TEXT("targetId"),Target) ||
+            Action<0 || Action>5 || Action!=FMath::FloorToDouble(Action) || Target<0 || Target!=FMath::FloorToDouble(Target)))
+        {Resp->SetBoolField(TEXT("ok"),false);Resp->SetStringField(TEXT("error"),TEXT("Invalid agriculture command"));return Resp;}
+        if (bPreset) GM->SelectPreset(int32(Preset));
+        if (bCommand) GM->DemoCommand(int32(Command));
+        if (bAgriculture) GM->AgricultureCommand(int32(Action),int32(Target));
+        Resp->SetBoolField(TEXT("ok"),true);Resp->SetStringField(TEXT("status"),GM->GetDemoStatus().ToString());
+        return Resp;
+    }
+    if (Path.EndsWith(TEXT("reload")))
 	{
 		return HandleReload(Body);
 	}

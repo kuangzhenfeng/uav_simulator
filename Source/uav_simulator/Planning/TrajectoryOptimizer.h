@@ -51,6 +51,7 @@ class UAV_SIMULATOR_API UTrajectoryOptimizer : public UActorComponent
 
 public:
 	UTrajectoryOptimizer();
+	void SetStartVelocity(const FVector& Velocity) { StartVelocity = Velocity; }
 
 protected:
 	virtual void BeginPlay() override;

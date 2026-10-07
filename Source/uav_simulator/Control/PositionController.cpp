@@ -81,7 +81,7 @@ void UPositionController::ComputeControl(const FUAVState& CurrentState, const FV
 	float DesiredRoll = 0.0f;
 	if (!ThrustVector.IsNearlyZero())
 	{
-		FVector ThrustDirection = ThrustVector.GetSafeNormal();
+		FVector ThrustDirection = FRotator(0,CurrentState.Rotation.Yaw,0).UnrotateVector(ThrustVector.GetSafeNormal());
 		DesiredPitch = FMath::Asin(-ThrustDirection.X) * (180.0f / PI);
 		DesiredRoll = FMath::Asin(ThrustDirection.Y / FMath::Cos(DesiredPitch * PI / 180.0f)) * (180.0f / PI);
 		DesiredPitch = FMath::Clamp(DesiredPitch, -MaxTiltAngle, MaxTiltAngle);
@@ -240,7 +240,7 @@ void UPositionController::AccelerationToControl(const FVector& DesiredAccelerati
 	float DesiredRoll = 0.0f;
 	if (!ThrustVector.IsNearlyZero())
 	{
-		FVector ThrustDirection = ThrustVector.GetSafeNormal();
+		FVector ThrustDirection = FRotator(0,CurrentState.Rotation.Yaw,0).UnrotateVector(ThrustVector.GetSafeNormal());
 		DesiredPitch = FMath::Asin(-ThrustDirection.X) * (180.0f / PI);
 		DesiredRoll = FMath::Asin(ThrustDirection.Y / FMath::Cos(DesiredPitch * PI / 180.0f)) * (180.0f / PI);
 		DesiredPitch = FMath::Clamp(DesiredPitch, -MaxTiltAngle, MaxTiltAngle);

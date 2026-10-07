@@ -36,6 +36,9 @@ struct FAttitudeControlConfig
 {
 	GENERATED_BODY()
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Feedforward")
+	FVector TorquePerNormalizedControl=FVector(1);
+
 	// 前馈控制开关
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Feedforward")
 	bool bEnableFeedforward = true;
@@ -100,7 +103,7 @@ public:
 
 	// 计算控制输出
 	UFUNCTION(BlueprintCallable, Category = "Attitude Controller")
-	FMotorOutput ComputeControl(const FUAVState& CurrentState, const FRotator& TargetAttitude, float DeltaTime);
+	FMotorOutput ComputeControl(const FUAVState& CurrentState, const FRotator& TargetAttitude, float DeltaTime, float CollectiveThrust = -1.0f);
 
 	// 带前馈的控制计算
 	UFUNCTION(BlueprintCallable, Category = "Attitude Controller")
@@ -108,7 +111,9 @@ public:
 		const FUAVState& CurrentState,
 		const FRotator& TargetAttitude,
 		const FRotator& DesiredAngularAcceleration,
-		float DeltaTime);
+		float DeltaTime, float CollectiveThrust = -1.0f);
+
+	static FMotorOutput AllocateCollective(float Collective, const TArray<float>& Deltas);
 
 	// 重置控制器状态
 	UFUNCTION(BlueprintCallable, Category = "Attitude Controller")

@@ -348,4 +348,19 @@ bool FTrajectoryOptimizerSmoothnessTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrajectoryOptimizerLongRouteLimitsTest,
+    "UAVSimulator.Planning.TrajectoryOptimizer.LongRouteLimits",UAV_TEST_FLAGS)
+bool FTrajectoryOptimizerLongRouteLimitsTest::RunTest(const FString& Parameters)
+{
+    auto* Optimizer=NewObject<UTrajectoryOptimizer>();
+    const auto Trajectory=Optimizer->OptimizeTrajectory({FVector(0,0,1500),FVector(31000,0,1500)},600,150);
+    TestTrue(TEXT("Long route is feasible"),Trajectory.bIsValid);
+    for(const auto& Point:Trajectory.Points)
+    {
+        if(Point.Velocity.Size()>601 || Point.Acceleration.Size()>151)
+        {AddError(TEXT("Long route exceeds physical derivative limits"));break;}
+    }
+    return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

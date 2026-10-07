@@ -23,6 +23,7 @@ enum class EUAVModelID : uint8
 	Agri_AG100		UMETA(DisplayName = "AG-100 (100L)"),
 	Map_SVPro		UMETA(DisplayName = "SV-Pro (RGB)"),
 	Map_SVLiDAR		UMETA(DisplayName = "SV-LiDAR"),
+	Agri_X100Demo UMETA(DisplayName = "X100-inspired (engineering model)"),
 };
 
 /** 型号参数预设（对应各组件的 UPROPERTY 字段） */

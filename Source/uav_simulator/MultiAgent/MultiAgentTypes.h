@@ -226,7 +226,7 @@ struct FJointNMPCConfig
 {
 	GENERATED_BODY()
 
-	// 联合求解器仍使用有限差分；单机求解器使用解析伴随梯度。
+	// 数值梯度校验用的扰动尺度。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "JointNMPC|Solver")
 	float FiniteDiffEpsilon = 20.0f;
 

@@ -129,10 +129,12 @@ int32 UScenarioLoader::AssembleFleetAndMission(
 		FActorSpawnParameters SpawnParams;
 		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		FRotator SpawnRot(0.0f, Entry.InitialYaw, 0.0f);
-		AUAVPawn* UAV = World->SpawnActor<AUAVPawn>(ClassToSpawn, Entry.InitialPosition, SpawnRot, SpawnParams);
+		const FTransform SpawnTransform(SpawnRot,Entry.InitialPosition);
+		AUAVPawn* UAV = World->SpawnActorDeferred<AUAVPawn>(ClassToSpawn,SpawnTransform,nullptr,nullptr,ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 		if (UAV)
 		{
 			UAV->SetModelID(Entry.ModelID);
+			UAV->FinishSpawning(SpawnTransform);
 			UAV->SetActorLocation(Entry.InitialPosition, false, nullptr, ETeleportType::ResetPhysics);
 			UAV->SetActorRotation(SpawnRot, ETeleportType::ResetPhysics);
 			OutFleet.Add(UAV);

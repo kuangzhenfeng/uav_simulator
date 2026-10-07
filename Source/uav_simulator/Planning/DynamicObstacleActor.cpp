@@ -27,6 +27,7 @@ void ADynamicObstacleActor::BeginPlay()
 void ADynamicObstacleActor::Configure(const FScenarioObstacleEntry& Entry)
 {
 	Definition = Entry;
+	SetActorHiddenInGame(!Entry.bVisible);
 	const TCHAR* MeshPath = TEXT("/Engine/BasicShapes/Cube.Cube");
 	FVector Size = Entry.Extents * 2.0f;
 	if (Entry.Type == EObstacleType::Sphere)

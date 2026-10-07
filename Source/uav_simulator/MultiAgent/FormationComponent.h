@@ -30,6 +30,7 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "MultiAgent|Formation")
 	void SetTargetOffset(const FVector& NewOffset);
+	void InitializeOffset(const FVector& Offset) { CurrentFormationOffset=TargetFormationOffset=Offset; bIsTransitioning=false; }
 
 	/**
 	 * 获取当前插值后的编队偏移量
