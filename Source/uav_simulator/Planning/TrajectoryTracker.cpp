@@ -6,6 +6,7 @@
 #include "uav_simulator/Core/UAVPawn.h"
 #include "uav_simulator/Mission/MissionComponent.h"
 #include "uav_simulator/Utility/Filter.h"
+#include "Algo/BinarySearch.h"
 
 static float GetUAVSpeed(AActor* Owner)
 {
@@ -150,12 +151,10 @@ void UTrajectoryTracker::AdvanceTracking(float DeltaTime)
 		}
 	}
 
-	// 自适应时间缩放：UAV落后时减速/暂停TrackingTime推进
-	// 用前向投影误差（沿轨迹方向的落后量），忽略避障造成的横向偏移
-	float EffectiveTimeScale = TimeScale;
+	// 沿向滞后与横向偏差共同限制轨迹时钟，参考导数使用相同缩放。
+	float TargetTimeScale = TimeScale;
 	if (bEnableAdaptiveTimeScale)
 	{
-		const float ClampedMinScale = FMath::Clamp(MinAdaptiveTimeScale, 0.01f, 1.0f);
 		FVector CurrentPos = GetOwner()->GetActorLocation();
 		FTrajectoryPoint DesiredState = InterpolateTrajectory(TrackingTime);
 		FVector ErrorVec = DesiredState.Position - CurrentPos;
@@ -165,33 +164,13 @@ void UTrajectoryTracker::AdvanceTracking(float DeltaTime)
 			? ErrorVec.Size()
 			: FVector::DotProduct(ErrorVec, Forward);
 
-		if (ForwardError > ErrorPauseThreshold)
-		{
-			EffectiveTimeScale = TimeScale * ClampedMinScale;
-		}
-		else if (ForwardError > ErrorSlowdownStart)
-		{
-			float Alpha = (ForwardError - ErrorSlowdownStart) / (ErrorPauseThreshold - ErrorSlowdownStart);
-			float AdaptiveScale = FMath::Lerp(1.0f, ClampedMinScale, Alpha);
-			EffectiveTimeScale = TimeScale * AdaptiveScale;
-		}
-		else if (ForwardError < -ErrorSlowdownStart)
-		{
-			// UAV 超前：加速轨迹时间追上 UAV，减少位置误差和大俯仰角修正
-			// 上限 4.0 允许最高 5x 加速，防止障碍物区耗时后轨迹时间提前耗尽
-			float Alpha = FMath::Min(4.0f, (-ForwardError - ErrorSlowdownStart) / (ErrorPauseThreshold - ErrorSlowdownStart));
-			EffectiveTimeScale = TimeScale * (1.0f + Alpha);
-		}
-
-		EffectiveTimeScale = FMath::Max(EffectiveTimeScale, TimeScale * ClampedMinScale);
-
-		// 应用速度缩放（基于障碍物距离的主动减速）
-		EffectiveTimeScale *= SpeedScale;
+		const FVector LateralError=Forward.IsNearlyZero() ? FVector::ZeroVector : ErrorVec-Forward*ForwardError;
+		TargetTimeScale=TimeScale*CalculateAdaptiveTimeScale(ForwardError,LateralError.Size())*SpeedScale;
 
 		// 轨迹级卡死检测：UAV 长时间低速且轨迹进度停滞，强制推进轨迹时间
 		// 防止自适应时间缩放崩溃导致 UAV 永远无法到达终点
 		float Speed = GetUAVSpeed(GetOwner());
-		if (Speed < 50.0f && TrackingTime > CurrentTrajectory.TotalDuration * 0.1f)
+		if (Speed < 50.0f && TrackingTime > CurrentTrajectory.TotalDuration * 0.1f && TargetTimeScale>=TimeScale*0.9f && TrafficScale>=0.9f)
 		{
 			LowSpeedStuckAccumulator += DeltaTime;
 			if (LowSpeedStuckAccumulator > 3.0f)
@@ -213,9 +192,15 @@ void UTrajectoryTracker::AdvanceTracking(float DeltaTime)
 			LowSpeedStuckAccumulator = 0.0f;
 		}
 	}
+	else TargetTimeScale=TimeScale*SpeedScale;
+
+	if (TrafficScale < 1.0f) TargetTimeScale = FMath::Min(TargetTimeScale, TimeScale * TrafficScale);
+	const float PreviousTimeScale=CurrentEffectiveTimeScale;
+	CurrentEffectiveTimeScale=FMath::FInterpConstantTo(CurrentEffectiveTimeScale,TargetTimeScale,DeltaTime,MaxAdaptiveScaleRate);
+	EffectiveTimeScaleRate=DeltaTime>SMALL_NUMBER ? (CurrentEffectiveTimeScale-PreviousTimeScale)/DeltaTime : 0.0f;
 
 	// 更新跟踪时间
-	TrackingTime += DeltaTime * EffectiveTimeScale;
+	TrackingTime += DeltaTime * CurrentEffectiveTimeScale;
 
 	// 检查是否完成
 	if (TrackingTime >= CurrentTrajectory.TotalDuration)
@@ -270,6 +255,8 @@ void UTrajectoryTracker::StartTracking()
 	bIsComplete = false;
 	bIsTimedOut = false;
 	TrackingTime = 0.0f;
+	CurrentEffectiveTimeScale=TimeScale*SpeedScale;
+	EffectiveTimeScaleRate=0.0f;
 	LastProgressUpdateTime = 0.0f;
 	LastProgress = 0.0f;
 }
@@ -299,6 +286,8 @@ void UTrajectoryTracker::ResumeTracking()
 void UTrajectoryTracker::Reset()
 {
 	TrackingTime = 0.0f;
+	CurrentEffectiveTimeScale=TimeScale*SpeedScale;
+	EffectiveTimeScaleRate=0.0f;
 	bIsTracking = false;
 	bIsPaused = false;
 	bIsComplete = false;
@@ -312,10 +301,45 @@ FTrajectoryPoint UTrajectoryTracker::GetDesiredState(float CurrentTime) const
 {
 	if (CurrentTime < 0.0f)
 		CurrentTime = TrackingTime;
-	return InterpolateTrajectory(CurrentTime);
+	FTrajectoryPoint State=InterpolateTrajectory(CurrentTime);
+	if(bIsTracking)
+	{
+		State.Acceleration=State.Acceleration*FMath::Square(CurrentEffectiveTimeScale)+State.Velocity*EffectiveTimeScaleRate;
+		State.Velocity*=CurrentEffectiveTimeScale;
+	}
+	return State;
 }
 
-// 计算跟踪进度 [0, 1]
+FTrajectoryPoint UTrajectoryTracker::GetPredictionState(float FutureSeconds) const
+{
+	const float Scale = bIsTracking ? CurrentEffectiveTimeScale : 1.0f;
+	return GetDesiredState(TrackingTime + FMath::Max(0.0f, FutureSeconds) * Scale);
+}
+
+float UTrajectoryTracker::CalculateAdaptiveTimeScale(float ForwardErrorCm,float LateralErrorCm) const
+{
+	const float MinForward=FMath::Clamp(MinAdaptiveTimeScale,0.01f,1.0f);
+	float ForwardScale=1.0f;
+	if(ForwardErrorCm>ErrorPauseThreshold) ForwardScale=MinForward;
+	else if(ForwardErrorCm>ErrorSlowdownStart)
+	{
+		const float Range=FMath::Max(1.0f,ErrorPauseThreshold-ErrorSlowdownStart);
+		ForwardScale=FMath::Lerp(1.0f,MinForward,FMath::Clamp((ForwardErrorCm-ErrorSlowdownStart)/Range,0.0f,1.0f));
+	}
+	else if(ForwardErrorCm < -ErrorSlowdownStart)
+	{
+		const float Range=FMath::Max(1.0f,ErrorPauseThreshold-ErrorSlowdownStart);
+		ForwardScale=1.0f+FMath::Min(4.0f,(-ForwardErrorCm-ErrorSlowdownStart)/Range);
+	}
+
+	const float LateralStart=FMath::Max(0.0f,LateralErrorSlowdownStart);
+	const float LateralRange=FMath::Max(1.0f,LateralErrorPauseThreshold-LateralStart);
+	const float Alpha=FMath::Clamp((LateralErrorCm-LateralStart)/LateralRange,0.0f,1.0f);
+	const float SmoothAlpha=Alpha*Alpha*(3.0f-2.0f*Alpha);
+	const float LateralScale=FMath::Lerp(1.0f,FMath::Clamp(MinLateralTimeScale,0.01f,1.0f),SmoothAlpha);
+	return Alpha > 0.0f ? FMath::Min(ForwardScale,LateralScale) : ForwardScale;
+}
+
 // 计算跟踪进度 [0, 1]
 float UTrajectoryTracker::GetProgress() const
 {
@@ -354,21 +378,9 @@ FTrajectoryPoint UTrajectoryTracker::InterpolateTrajectory(float Time) const
 	Time = FMath::Clamp(Time, 0.0f, CurrentTrajectory.TotalDuration);
 
 	// 找到包含该时间的两个相邻采样点
-	int32 LowIdx = 0;
-	int32 HighIdx = 0;
-
-	for (int32 i = 0; i < CurrentTrajectory.Points.Num() - 1; ++i)
-	{
-		if (CurrentTrajectory.Points[i].TimeStamp <= Time &&
-			CurrentTrajectory.Points[i + 1].TimeStamp >= Time)
-		{
-			LowIdx = i;
-			HighIdx = i + 1;
-			break;
-		}
-		LowIdx = i;
-		HighIdx = i;
-	}
+	const int32 HighIdx=FMath::Clamp(Algo::UpperBoundBy(CurrentTrajectory.Points,Time,
+		[](const FTrajectoryPoint& Point){return Point.TimeStamp;}),1,CurrentTrajectory.Points.Num()-1);
+	const int32 LowIdx=HighIdx-1;
 
 	// 处理边界情况
 	if (Time <= CurrentTrajectory.Points[0].TimeStamp)

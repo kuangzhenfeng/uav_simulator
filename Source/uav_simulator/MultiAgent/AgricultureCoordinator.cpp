@@ -8,6 +8,7 @@
 #include "../Planning/AStarPathPlanner.h"
 #include "../Planning/ObstacleManager.h"
 #include "../Planning/TrajectoryTracker.h"
+#include "../Planning/CoveragePlanner.h"
 #include "DrawDebugHelpers.h"
 #include "Json.h"
 #include "Engine/StaticMeshActor.h"
@@ -50,8 +51,11 @@ bool UAgricultureCoordinator::BuildStrips(const FAgriculturePlot& P, float Heigh
     return !Out.IsEmpty();
 }
 
-FVector UAgricultureCoordinator::FindEmergencyLandingSite(const FVector& Position,const TArray<FAgriculturePlotState>& Fields,float ClearanceCm)
+FVector UAgricultureCoordinator::FindEmergencyLandingSite(const FVector& Position,const TArray<FAgriculturePlotState>& Fields,float ClearanceCm,
+    const TArray<FObstacleInfo>& Obstacles,float CollisionRadius)
 {
+    auto* Planner=NewObject<UAStarPathPlanner>();
+    Planner->SetObstacles(Obstacles);
     const auto Clear=[&](const FVector& Point)
     {
         for(const auto& Field:Fields)
@@ -59,7 +63,8 @@ FVector UAgricultureCoordinator::FindEmergencyLandingSite(const FVector& Positio
             const FBox Bounds(Field.Config.Boundary);
             if(Bounds.IsValid && Bounds.ComputeSquaredDistanceToPoint(FVector(Point.X,Point.Y,0))<FMath::Square(ClearanceCm)-.1f) return false;
         }
-        return true;
+        // 使用与执行路线相同的安全壳检查完整下降柱，而非仅检查落点或农田边界。
+        return !Planner->CheckLineCollision(Point,FVector(Point.X,Point.Y,120),CollisionRadius);
     };
     if(Clear(Position)) return Position;
     FVector Best=Position;double Distance=DBL_MAX;
@@ -70,6 +75,16 @@ FVector UAgricultureCoordinator::FindEmergencyLandingSite(const FVector& Positio
         const float Y=FMath::Clamp(Position.Y,Bounds.Min.Y,Bounds.Max.Y);
         const FVector Candidates[]={FVector(Bounds.Min.X-ClearanceCm,Y,Position.Z),FVector(Bounds.Max.X+ClearanceCm,Y,Position.Z),
             FVector(X,Bounds.Min.Y-ClearanceCm,Position.Z),FVector(X,Bounds.Max.Y+ClearanceCm,Position.Z)};
+        for(const FVector& Candidate:Candidates) if(Clear(Candidate) && FVector::DistSquared(Position,Candidate)<Distance)
+        {Best=Candidate;Distance=FVector::DistSquared(Position,Candidate);}
+    }
+    for(const auto& Obstacle:Obstacles)
+    {
+        const FVector Padding=Obstacle.Extents+FVector(Obstacle.SafetyMargin+ClearanceCm);
+        const float X=FMath::Clamp(Position.X,Obstacle.Center.X-Padding.X,Obstacle.Center.X+Padding.X);
+        const float Y=FMath::Clamp(Position.Y,Obstacle.Center.Y-Padding.Y,Obstacle.Center.Y+Padding.Y);
+        const FVector Candidates[]={FVector(Obstacle.Center.X-Padding.X,Y,Position.Z),FVector(Obstacle.Center.X+Padding.X,Y,Position.Z),
+            FVector(X,Obstacle.Center.Y-Padding.Y,Position.Z),FVector(X,Obstacle.Center.Y+Padding.Y,Position.Z)};
         for(const FVector& Candidate:Candidates) if(Clear(Candidate) && FVector::DistSquared(Position,Candidate)<Distance)
         {Best=Candidate;Distance=FVector::DistSquared(Position,Candidate);}
     }
@@ -177,10 +192,11 @@ void UAgricultureCoordinator::ChangePhase(FAgricultureAgentState& A,EAgriculture
     UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] Agent=%d Phase=%s Plot=%d Airport=%d Battery=%.3f Liquid=%.2f"),
         A.AgentID,*UEnum::GetValueAsString(Phase),A.PlotID,A.AirportID,A.Battery,A.LiquidLitres);
     A.Phase=Phase; A.PhaseSeconds=0; A.DockStableSeconds=0; A.bRouteActive=false;A.RouteRetries=0;A.TransitStage=0;
+    A.bWorkRouteActive=false;A.WorkStripEndTimes.Empty();A.WorkStartTime=0;
     if(Phase==EAgriculturePhase::Servicing) A.bCleaned=false;
 }
 
-bool UAgricultureCoordinator::FlyTo(FAgricultureAgentState& A,const FVector& Target,float Speed)
+bool UAgricultureCoordinator::FlyTo(FAgricultureAgentState& A,const FVector& Target,float Speed,const FVector& EndVelocity)
 {
     AUAVPawn* P=Pawn(A.AgentID);
     if(!P) return false;
@@ -192,12 +208,52 @@ bool UAgricultureCoordinator::FlyTo(FAgricultureAgentState& A,const FVector& Tar
     }
     A.Target=Target;
     P->GetTrajectoryTracker()->SetCompletionCriteria(A.Phase==EAgriculturePhase::Landing ? Config.DockRadiusCm : Config.ArrivalRadiusCm,
-        A.Phase==EAgriculturePhase::Landing ? Config.DockSpeedCm : 50);
+        A.Phase==EAgriculturePhase::Landing ? Config.DockSpeedCm : FMath::Max(50.0f,float(EndVelocity.Size())+50));
     if(P->GetMissionComponent()->GetMissionState()==EMissionState::Failed)
         P->GetMissionComponent()->ResetMission();
-    if(!Manager->StartRoute(P,Target,Speed,Manager->TaskExecutionAccelerationCm))
+    if(!Manager->StartRoute(P,Target,Speed,Manager->TaskExecutionAccelerationCm,EndVelocity))
     { Fail(A,TEXT("Route infeasible")); return false; }
     A.bRouteActive=true; return true;
+}
+
+bool UAgricultureCoordinator::StartWorkRoute(FAgricultureAgentState& A,FAgriculturePlotState& Field)
+{
+    auto* P=Pawn(A.AgentID);
+    if(!P) return false;
+    const int32 FirstEnd=Field.NextPoint%2==0 ? Field.NextPoint+1 : Field.NextPoint;
+    if(!Field.StripPoints.IsValidIndex(FirstEnd)) return false;
+    const FVector Direction=(Field.StripPoints[FirstEnd]-Field.StripPoints[FirstEnd-1]).GetSafeNormal();
+    const float Headland=FCoveragePlanner::HeadlandDistance(Config.SpraySpeedCm,Manager->TaskExecutionAccelerationCm);
+    const FVector Entry=Field.StripPoints[FirstEnd-1]+Direction*(Field.StripCoveredCm-Headland);
+    TArray<FVector> Targets;
+    const FVector Position=P->GetUAVState().Position;
+    if(FVector::Dist2D(Position,Entry)>2000 || Position.Z>Entry.Z+200)
+    {
+        // 在当前航向前方完成爬升，避免长距离转场的平滑曲线贴地跨越障碍。
+        FVector Departure=Position+P->GetUAVState().Velocity.GetSafeNormal2D()*Headland;
+        Departure.Z=Config.TransitHeightCm;
+        Targets.Add(Departure);
+        FVector Cruise=Entry;Cruise.Z=Config.TransitHeightCm;Targets.Add(Cruise);
+    }
+    Targets.Add(Entry);
+    FTrajectory Approach,Work;
+    TMap<int32,float> EndTimes;
+    const float EntrySpeed=FMath::Min(Config.SpraySpeedCm,100.0f);
+    if(!Manager->PlanRoute(P,Targets,FMath::Min(Config.TransitSpeedCm,400.0f),Manager->TaskExecutionAccelerationCm,Direction*EntrySpeed,Approach))
+    {Fail(A,TEXT("Coverage approach infeasible"));return false;}
+    if(!FCoveragePlanner::Build(Field.StripPoints,FirstEnd,Field.StripCoveredCm,Approach,Config.SpraySpeedCm,Manager->TaskExecutionAccelerationCm,Work,EndTimes))
+    {Fail(A,TEXT("Coverage profile infeasible"));return false;}
+    if(!Manager->IsRouteClear(P,Work))
+    {Fail(A,TEXT("Coverage clearance infeasible"));return false;}
+    Field.NextPoint=FirstEnd;Field.ResumePosition=FVector::ZeroVector;
+    A.bWorkRouteActive=true;A.bRouteActive=true;A.WorkStartTime=Approach.TotalDuration;
+    A.WorkStripEndTimes=MoveTemp(EndTimes);A.Target=Work.Points.Last().Position;
+    P->GetTrajectoryTracker()->SetCompletionCriteria(Config.ArrivalRadiusCm,50);
+    if(P->GetMissionComponent()->GetMissionState()==EMissionState::Failed) P->GetMissionComponent()->ResetMission();
+    P->SetTrajectory(Work);P->StartTrajectoryTracking();
+    UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] CoveragePlan Agent=%d Plot=%d FirstEnd=%d Strips=%d Duration=%.2f Approach=%.2f Samples=%d"),
+        A.AgentID,A.PlotID,FirstEnd,A.WorkStripEndTimes.Num(),Work.TotalDuration,A.WorkStartTime,Work.Points.Num());
+    return true;
 }
 
 bool UAgricultureCoordinator::CanService(const FSupplyAirportState& S) const
@@ -569,7 +625,13 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
             int32 NextStage=A.TransitStage;float Speed=30;
             if(A.TransitStage==0)
             {
-                Target=FindEmergencyLandingSite(Target,Plots,Manager->DefaultCBFQPConfig.DSafe+2*P->GetCollisionRadius()+Config.ArrivalRadiusCm);
+                auto Obstacles=P->GetObstacleManager()->GetAllObstacles();
+                Obstacles.RemoveAll([](const FObstacleInfo& O){
+                    const auto* Other=Cast<AUAVPawn>(O.LinkedActor.Get());
+                    return Other && !Other->IsParked() && !Other->IsCrashed();
+                });
+                Target=FindEmergencyLandingSite(Target,Plots,Manager->DefaultCBFQPConfig.DSafe+2*P->GetCollisionRadius()+Config.ArrivalRadiusCm,
+                    Obstacles,P->GetCollisionRadius());
                 if(FVector::Dist2D(Target,P->GetUAVState().Position)>30) {NextStage=1;Speed=150;}
                 else if(Target.Z>480) {Target.Z=450;NextStage=2;Speed=60;}
                 else {Target.Z=120;NextStage=3;}
@@ -629,7 +691,10 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
             ReturnSeconds=FMath::Min(ReturnSeconds,Travel+EstimateWaitSeconds(Airports[I],FMath::Max(0.0f,Travel-Config.AirportApproachSeconds)));
         }
         float WorkSeconds=0;
-        if(A.Phase==EAgriculturePhase::Spraying)
+        if(A.bWorkRouteActive)
+            WorkSeconds=FMath::Max(0.0f,A.WorkStripEndTimes.FindRef(Field->NextPoint)-P->GetTrajectoryTracker()->GetCurrentTime())/
+                FMath::Max(0.01f,P->GetTrajectoryTracker()->MinAdaptiveTimeScale);
+        else if(A.Phase==EAgriculturePhase::Spraying)
         {
             const float Length=FVector::Dist(Field->StripPoints[Field->NextPoint-1],Field->StripPoints[Field->NextPoint]);
             WorkSeconds=Config.CruiseTimeFactor*FMath::Max(0.0f,Length-Field->StripCoveredCm)/Config.SpraySpeedCm;
@@ -640,7 +705,8 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
             const float Speed=A.TransitStage==1 ? 100 : FMath::Min(Config.TransitSpeedCm,400.0f);
             WorkSeconds=Config.CruiseTimeFactor*FVector::Dist(Position,Target)/Speed;
         }
-        const float ReturnFraction=(ReturnSeconds+WorkSeconds+Config.SupplyTimeBufferSeconds)/Config.BatteryFlightSeconds+Config.BatteryReserveFraction;
+        // 触发返供必须早于预约接纳的硬储备边界，覆盖预测刷新和调度决策期间的耗电。
+        const float ReturnFraction=(ReturnSeconds+WorkSeconds+Config.SupplyTimeBufferSeconds+Config.RouteArrivalAllowanceSeconds)/Config.BatteryFlightSeconds+Config.BatteryReserveFraction;
         if(A.Recipe!=Field->Config.Recipe || A.LiquidLitres<1 || A.Battery<ReturnFraction)
         {
             const bool RecipeChanged=A.Recipe!=Field->Config.Recipe;const bool LiquidLow=A.LiquidLitres<1;RequestSupply(A);
@@ -651,23 +717,10 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
     if(A.Phase==EAgriculturePhase::Transit)
     {
         if(!Field) {ChangePhase(A,EAgriculturePhase::Idle);return;}
-        FVector Target=Field->ResumePosition.IsNearlyZero() ? Field->StripPoints[Field->NextPoint] : Field->ResumePosition;
-        if(Field->NextPoint%2==0)
-            Target-=(Field->StripPoints[Field->NextPoint+1]-Field->StripPoints[Field->NextPoint]).GetSafeNormal()*Config.ArrivalRadiusCm*1.5f;
-        if(A.TransitStage==0 && ((A.bRouteActive && FMath::IsNearlyEqual(float(A.Target.Z),Config.TransitHeightCm,1.0f)) || FVector::Dist2D(Position,Target)>2000 || Position.Z>Target.Z+200))
-        {
-            FVector Cruise=Target;Cruise.Z=Config.TransitHeightCm;
-            if(!FlyTo(A,Cruise,FMath::Min(Config.TransitSpeedCm,400.0f))) return;
-            if(Arrived(Config.ArrivalRadiusCm)) {A.TransitStage=1;A.bRouteActive=false;}
-            return;
-        }
-        if(!FlyTo(A,Target,A.TransitStage==1 ? 100 : Config.SpraySpeedCm)) return;
-        if(Arrived(FMath::Min(Config.ArrivalRadiusCm,30.0f)))
-        {
-            if(Field->NextPoint%2==0) ++Field->NextPoint;
-            Field->ResumePosition=FVector::ZeroVector;
-            ChangePhase(A,EAgriculturePhase::Spraying);
-        }
+        if(!A.bWorkRouteActive && !StartWorkRoute(A,*Field)) return;
+        // 阶段只描述作业状态，不重新启动或清空整条轨迹。
+        if(P->GetTrajectoryTracker()->GetCurrentTime()>=A.WorkStartTime)
+        {A.Phase=EAgriculturePhase::Spraying;A.PhaseSeconds=0;}
         return;
     }
     if(A.Phase==EAgriculturePhase::Spraying && Field)
@@ -676,25 +729,33 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
         const FVector Start=Field->StripPoints[Field->NextPoint-1];
         const FVector Direction=(End-Start).GetSafeNormal();
         const float Length=FVector::Dist(Start,End);
+        if(P->GetTrajectoryTracker()->IsTimedOut())
+        {
+            Field->ResumePosition=Start+Direction*Field->StripCoveredCm;
+            ChangePhase(A,EAgriculturePhase::Transit);return;
+        }
         if(!RecordSpraySegment(*Field,A.LiquidLitres,Previous,Position,Config.ArrivalRadiusCm))
         {
             Field->ResumePosition=Start+Direction*FMath::Max(-Config.ArrivalRadiusCm*1.5f,Field->StripCoveredCm-Config.ArrivalRadiusCm*1.5f);
             LastReason=TEXT("回飞未施用的连续断点");ChangePhase(A,EAgriculturePhase::Transit);return;
         }
         P->UpdatePayloadMass(A.LiquidLitres);
-        if(!FlyTo(A,End+Direction*Config.ArrivalRadiusCm*1.5f,Config.SpraySpeedCm)) return;
         DrawDebugLine(GetWorld(),Start,Position,FColor::Green,false,Dt*2,0,30);
-        if(Arrived(Config.ArrivalRadiusCm) && Field->StripCoveredCm>=Length-1)
+        const bool HasNext=Field->StripPoints.IsValidIndex(Field->NextPoint+2);
+        // 实机越过条带边界后再切覆盖游标，避免地头两行的同一纵向平面被误判为漏喷。
+        const float ExitMargin=FMath::Min(Config.ArrivalRadiusCm*1.5f,
+            FCoveragePlanner::HeadlandDistance(Config.SpraySpeedCm,Manager->TaskExecutionAccelerationCm)*0.5f);
+        const bool ExitedStrip=FVector::DotProduct(Position-End,Direction)>=ExitMargin;
+        if(Field->StripCoveredCm>=Length-1 && (!HasNext || ExitedStrip))
         {
             Field->StripCoveredCm=0;
-            ++Field->NextPoint;
+            Field->NextPoint+=2;
             if(Field->NextPoint>=Field->StripPoints.Num())
             {
                 Field->bCompleted=true;Field->AgentID=INDEX_NONE;A.PlotID=INDEX_NONE;
                 UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] Plot=%d Completed Area=%.2f Liquid=%.2f"),Field->Config.Task.TaskID,Field->CoveredSquareMetres,Field->AppliedLitres);
                 ChangePhase(A,EAgriculturePhase::Idle);
             }
-            else ChangePhase(A,EAgriculturePhase::Transit);
         }
         return;
     }

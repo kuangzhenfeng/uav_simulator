@@ -578,11 +578,10 @@ void AUAVPawn::PrepareReferencePoints(TArray<FVector>& OutReferencePoints)
 {
 	const int32 N = NMPCComponent->Config.Solver.PredictionSteps;
 	const float Dt = NMPCComponent->Config.GetDt();
-	const float CurrentTime = TrajectoryTrackerComponent->GetCurrentTime();
 
 	for (int32 i = 0; i <= N; ++i)
 	{
-		OutReferencePoints.Add(TrajectoryTrackerComponent->GetDesiredState(CurrentTime + i * Dt).Position);
+		OutReferencePoints.Add(TrajectoryTrackerComponent->GetPredictionState(i * Dt).Position);
 	}
 
 }

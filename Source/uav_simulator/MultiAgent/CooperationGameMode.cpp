@@ -146,7 +146,7 @@ void ACooperationGameMode::Tick(float DeltaTime)
             {
                 const float T=K*0.2f;
                 FTrajectoryPoint Point;
-                if(Tracker && Tracker->IsTracking()) Point=Tracker->GetDesiredState(Tracker->GetCurrentTime()+T);
+                if(Tracker && Tracker->IsTracking()) Point=Tracker->GetPredictionState(T);
                 else {Point.Position=Leader->GetUAVState().Position;Point.Velocity=FVector::ZeroVector;}
                 Point.TimeStamp=T;Point.Position+=Offset;Reference.Points.Add(Point);
             }

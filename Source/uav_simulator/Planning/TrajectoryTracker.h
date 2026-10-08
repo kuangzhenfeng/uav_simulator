@@ -76,6 +76,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
 	FTrajectoryPoint GetDesiredState(float CurrentTime = -1.0f) const;
 
+	/** 按物理时间预测未来状态，使控制器与轨迹时钟使用相同的时间缩放。 */
+	FTrajectoryPoint GetPredictionState(float FutureSeconds) const;
+
 	/**
 	 * 获取跟踪进度 (0.0 - 1.0)
 	 */
@@ -111,12 +114,15 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
 	float GetCurrentTime() const { return TrackingTime; }
+	float CalculateAdaptiveTimeScale(float ForwardErrorCm,float LateralErrorCm) const;
 
 	/**
 	 * 设置速度缩放因子 (用于主动减速)
 	 * @param InSpeedScale 速度缩放因子 (0.0-1.0)
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Trajectory Tracking")
+	void SetTrafficScale(float InScale) { TrafficScale = FMath::Clamp(InScale, 0.0f, 1.0f); }
+
 	void SetSpeedScale(float InSpeedScale) { SpeedScale = FMath::Clamp(InSpeedScale, 0.0f, 1.0f); }
 
 	/**
@@ -149,6 +155,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
 	float ErrorPauseThreshold = 1500.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
+	float LateralErrorSlowdownStart = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking")
+	float LateralErrorPauseThreshold = 400.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking", meta = (ClampMin = "0.01", ClampMax = "1.0"))
+	float MinLateralTimeScale = 0.4f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking", meta = (ClampMin = "0.01"))
+	float MaxAdaptiveScaleRate = 0.25f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adaptive Tracking", meta = (ClampMin = "0.01", ClampMax = "1.0"))
 	float MinAdaptiveTimeScale = 0.9f;
 
@@ -160,6 +178,9 @@ protected:
 	// 跟踪时间
 	UPROPERTY(BlueprintReadOnly, Category = "Trajectory Tracking")
 	float TrackingTime;
+	float CurrentEffectiveTimeScale = 1.0f;
+	float EffectiveTimeScaleRate = 0.0f;
+	float TrafficScale = 1.0f;
 
 	// 是否正在跟踪
 	UPROPERTY(BlueprintReadOnly, Category = "Trajectory Tracking")

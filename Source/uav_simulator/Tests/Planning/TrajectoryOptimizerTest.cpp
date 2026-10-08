@@ -6,6 +6,52 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrajectoryUnequalTimingContinuityTest,
+    "UAVSimulator.Planning.TrajectoryOptimizer.UnequalTimingContinuity",UAV_TEST_FLAGS)
+bool FTrajectoryUnequalTimingContinuityTest::RunTest(const FString&)
+{
+    auto* Optimizer=NewObject<UTrajectoryOptimizer>();
+    const FTrajectory Route=Optimizer->OptimizeTrajectoryWithTiming(
+        {FVector(0,0,0),FVector(1000,0,0),FVector(1000,1000,0)},{10,5});
+    TestTrue(TEXT("Unequal-duration route is feasible"),Route.bIsValid);
+    const auto Before=Optimizer->SampleTrajectory(Route,9.999f);
+    const auto After=Optimizer->SampleTrajectory(Route,10.001f);
+    UAV_TEST_VECTOR_EQUAL(Before.Position,After.Position,1.0f);
+    UAV_TEST_VECTOR_EQUAL(Before.Velocity,After.Velocity,1.0f);
+    UAV_TEST_VECTOR_EQUAL(Before.Acceleration,After.Acceleration,1.0f);
+    UAV_TEST_VECTOR_EQUAL(Before.Velocity,FVector(1000.0/15,1000.0/15,0),1.0f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrajectoryFlyThroughTest,
+    "UAVSimulator.Planning.TrajectoryOptimizer.FlyThrough", UAV_TEST_FLAGS)
+bool FTrajectoryFlyThroughTest::RunTest(const FString&)
+{
+    auto* Optimizer=NewObject<UTrajectoryOptimizer>();
+    Optimizer->SetStartVelocity(FVector(100,0,0));
+    Optimizer->SetEndVelocity(FVector(125,0,0));
+    const FTrajectory Strip=Optimizer->OptimizeTrajectory({FVector(0,0,400),FVector(6300,0,400)},300,150);
+    TestTrue(TEXT("Moving strip is feasible"),Strip.bIsValid);
+    if(!Strip.bIsValid) return false;
+    TestEqual(TEXT("Exact terminal timestamp"),Strip.Points.Last().TimeStamp,Strip.TotalDuration);
+    UAV_TEST_VECTOR_EQUAL(Strip.Points.Last().Position,FVector(6300,0,400),1.0f);
+    UAV_TEST_VECTOR_EQUAL(Strip.Points.Last().Velocity,FVector(125,0,0),1.0f);
+    Optimizer->SetStartVelocity(Strip.Points.Last().Velocity);
+    Optimizer->SetStartAcceleration(Strip.Points.Last().Acceleration);
+    Optimizer->SetEndVelocity(FVector(-125,0,0));
+    const FTrajectory Turn=Optimizer->OptimizeTrajectory({Strip.Points.Last().Position,FVector(6300,600,400)},300,150);
+    TestTrue(TEXT("Headland turn is feasible"),Turn.bIsValid);
+    if(!Turn.bIsValid) return false;
+    UAV_TEST_VECTOR_EQUAL(Turn.Points[0].Velocity,Strip.Points.Last().Velocity,1.0f);
+    UAV_TEST_VECTOR_EQUAL(Turn.Points[0].Acceleration,Strip.Points.Last().Acceleration,1.0f);
+    for(const auto& Point:Turn.Points)
+    {
+        if(Point.Velocity.Size()<10 || Point.Velocity.Size()>301 || Point.Acceleration.Size()>151 || Point.Position.X<6299)
+        { AddError(TEXT("Turn must remain moving outside the field and respect derivative limits")); return false; }
+    }
+    return true;
+}
+
 // ==================== 时间分配测试 ====================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrajectoryOptimizerTimeAllocationTest,

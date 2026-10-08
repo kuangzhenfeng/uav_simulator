@@ -100,6 +100,9 @@ struct FAgricultureAgentState
     float SupplyForecastTime = -1;
     TArray<float> SupplyPathLengths;
     TArray<float> SupplyTravelSeconds;
+    bool bWorkRouteActive = false;
+    float WorkStartTime = 0;
+    TMap<int32,float> WorkStripEndTimes;
 };
 
 struct FAgriculturePlotState

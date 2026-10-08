@@ -3,6 +3,7 @@
 #include "../../MultiAgent/AgricultureCoordinator.h"
 #include "../../MultiAgent/TaskMonitor.h"
 #include "../../Control/AttitudeController.h"
+#include "../../Planning/AStarPathPlanner.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgricultureStripTest,"UAVSimulator.MultiAgent.Agriculture.Strips",UAV_TEST_FLAGS)
@@ -178,6 +179,12 @@ bool FAgricultureEmergencySiteTest::RunTest(const FString&)
     const FVector Outside(500,-700,400);
     TestEqual(TEXT("Already clear location needs no lateral diversion"),UAgricultureCoordinator::FindEmergencyLandingSite(Outside,Fields,600),Outside);
     TestEqual(TEXT("No fields retain actual location"),UAgricultureCoordinator::FindEmergencyLandingSite(Outside,{},600),Outside);
+    FObstacleInfo Building;Building.Center=FVector(-15500,-9600,445);Building.Extents=FVector(250,250,425);Building.SafetyMargin=200;
+    const FVector Blocked(-14943.978,-9548.711,1500);
+    const FVector Safe=UAgricultureCoordinator::FindEmergencyLandingSite(Blocked,{},950,{Building},150);
+    auto* Planner=NewObject<UAStarPathPlanner>();Planner->SetObstacles({Building});
+    TestFalse(TEXT("Emergency descent clears building safety envelope"),Planner->CheckLineCollision(Safe,FVector(Safe.X,Safe.Y,120),150));
+    TestTrue(TEXT("Unsafe descent requires a lateral diversion"),FVector::Dist2D(Blocked,Safe)>30);
     return true;
 }
 #endif

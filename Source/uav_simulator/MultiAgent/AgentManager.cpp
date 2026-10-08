@@ -377,6 +377,7 @@ void AMultiAgentGameMode::Tick(float DeltaTime)
 		if (JointNMPCSolveAccumulator >= SolveInterval)
 		{
 			JointNMPCSolveAccumulator = 0.0f;
+			UpdateTrafficScales();
 			SolveJointNMPC();
 		}
 	}
@@ -626,6 +627,52 @@ void AMultiAgentGameMode::RefreshStateCache()
 	}
 }
 
+void AMultiAgentGameMode::UpdateTrafficScales()
+{
+    TArray<int32> IDs;
+    AgentRegistry.GenerateKeyArray(IDs);
+    IDs.Sort();
+    // 在完整航迹上预判交会，按稳定次序让行，避免两机同时横向逃逸。
+    for (int32 ID : IDs)
+    {
+        AUAVPawn* Pawn = AgentRegistry[ID].Get();
+        if (!Pawn) continue;
+        auto* Tracker = Pawn->GetTrajectoryTracker();
+        Tracker->SetTrafficScale(1.0f);
+        if (FormationConfig.Type != EFormationType::None || !Tracker->IsTracking() || Pawn->IsParked() || Pawn->IsCrashed()) continue;
+        for (int32 OtherID : IDs)
+        {
+            if (OtherID >= ID) break;
+            AUAVPawn* Other = AgentRegistry[OtherID].Get();
+            if (!Other || Other->IsParked() || Other->IsCrashed()) continue;
+            auto* OtherTracker = Other->GetTrajectoryTracker();
+            if (!OtherTracker->IsTracking()) continue;
+            const float Clearance = JointNMPCConfig.InterAgentSafeDistance
+                + Pawn->GetCollisionRadius() + Other->GetCollisionRadius() + 300.0f;
+            FVector PrevA = Pawn->GetUAVState().Position;
+            FVector PrevB = Other->GetUAVState().Position;
+            bool bConflict = false;
+            for (int32 K = 1; K <= 24; ++K)
+            {
+                const float T = K * 0.5f;
+                const FVector A = Tracker->GetDesiredState(Tracker->GetCurrentTime() + T).Position;
+                const FVector B = OtherTracker->GetDesiredState(OtherTracker->GetCurrentTime() + T).Position;
+                const FVector R = PrevA - PrevB;
+                const FVector D = (A-B)-R;
+                const float Alpha = FMath::Clamp(-FVector::DotProduct(R,D)/FMath::Max(D.SizeSquared(),1.e-6),0.0,1.0);
+                if ((R+D*Alpha).SizeSquared() < FMath::Square(Clearance)) { bConflict=true; break; }
+                PrevA=A; PrevB=B;
+            }
+            if (bConflict)
+            {
+                Tracker->SetTrafficScale(0.2f);
+                UE_LOG_THROTTLE(2.0,LogUAVMultiAgent,Log,TEXT("[Traffic] Agent=%d yields to=%d clearance=%.0f"),ID,OtherID,Clearance);
+                break;
+            }
+        }
+    }
+}
+
 void AMultiAgentGameMode::SolveJointNMPC()
 {
 	if (!JointNMPCSolverInstance || AgentRegistry.Num() < 2)
@@ -666,17 +713,16 @@ void AMultiAgentGameMode::SolveJointNMPC()
                 const FVector Offset=FormationTarget-(Leader ? Leader->GetUAVState().Position : FVector::ZeroVector);
                 for(int32 K=0;K<=JointNMPCConfig.BaseConfig.Solver.PredictionSteps;++K)
                     RefPoints.Add(LeaderTracker && LeaderTracker->IsTracking()
-                        ? LeaderTracker->GetDesiredState(LeaderTracker->GetCurrentTime()+K*JointNMPCConfig.BaseConfig.GetDt()).Position+Offset
+                        ? LeaderTracker->GetPredictionState(K*JointNMPCConfig.BaseConfig.GetDt()).Position+Offset
                         : FormationTarget);
 			}
 			else if (Tracker && (Tracker->IsTracking() || Tracker->IsComplete()))
 			{
 				int32 N = JointNMPCConfig.BaseConfig.Solver.PredictionSteps;
 				float Dt = JointNMPCConfig.BaseConfig.GetDt();
-				float CurrentTime = Tracker->GetCurrentTime();
 				for (int32 i = 0; i <= N; ++i)
 				{
-					RefPoints.Add(Tracker->GetDesiredState(CurrentTime + i * Dt).Position);
+					RefPoints.Add(Tracker->GetPredictionState(i * Dt).Position);
 				}
 			}
 			else
@@ -820,11 +866,22 @@ void AMultiAgentGameMode::ApplyTaskAllocation(const FTaskAllocationResult& Resul
     }
 }
 
-bool AMultiAgentGameMode::StartRoute(AUAVPawn* Pawn, const FVector& Target, float Speed, float Acceleration)
+bool AMultiAgentGameMode::StartRoute(AUAVPawn* Pawn, const FVector& Target, float Speed, float Acceleration, const FVector& EndVelocity)
 {
     if(!Pawn || Target.ContainsNaN()) return false;
     const FVector Start=Pawn->GetUAVState().Position;
     if(Start.Equals(Target,1)) {Pawn->StopTrajectoryTracking();Pawn->SetTargetPosition(Target);return true;}
+    FTrajectory Trajectory;
+    if(!PlanRoute(Pawn,{Target},Speed,Acceleration,EndVelocity,Trajectory)) return false;
+    Pawn->SetTrajectory(Trajectory);
+    Pawn->StartTrajectoryTracking();
+    return true;
+}
+
+bool AMultiAgentGameMode::PlanRoute(AUAVPawn* Pawn,const TArray<FVector>& Targets,float Speed,float Acceleration,const FVector& EndVelocity,FTrajectory& Out)
+{
+    Out=FTrajectory();
+    if(!Pawn || Targets.IsEmpty()) return false;
     UAStarPathPlanner* Planner = NewObject<UAStarPathPlanner>(Pawn);
     TArray<FObstacleInfo> RouteObstacles=Pawn->GetObstacleManager()->GetAllObstacles();
     RouteObstacles.RemoveAll([](const FObstacleInfo& O){
@@ -832,20 +889,56 @@ bool AMultiAgentGameMode::StartRoute(AUAVPawn* Pawn, const FVector& Target, floa
         return Other && !Other->IsParked() && !Other->IsCrashed();
     });
     Planner->SetObstacles(RouteObstacles);
-    TArray<FVector> Path;
-    if(!Planner->CheckLineCollision(Start,Target,Pawn->GetCollisionRadius())) Path={Start,Target};
-    else if (!Planner->PlanPath(Start,Target,Path)) return false;
-    if(Path.Num()<2)
+    TArray<FVector> Path={Pawn->GetUAVState().Position};
+    for(const FVector& Target:Targets)
     {
-        if(Planner->CheckLineCollision(Start,Target,Pawn->GetCollisionRadius())) return false;
-        Path={Start,Target};
+        if(Target.ContainsNaN()) return false;
+        const FVector Start=Path.Last();
+        if(Start.Equals(Target,1)) continue;
+        TArray<FVector> Leg;
+        if(!Planner->CheckLineCollision(Start,Target,Pawn->GetCollisionRadius())) Leg={Start,Target};
+        else if(!Planner->PlanPath(Start,Target,Leg) || Leg.Num()<2) return false;
+        for(int32 I=1;I<Leg.Num();++I) Path.Add(Leg[I]);
     }
+    if(Path.Num()<2) return false;
     UTrajectoryOptimizer* Optimizer = NewObject<UTrajectoryOptimizer>(Pawn);
     Optimizer->SetStartVelocity(Pawn->GetUAVState().Velocity);
-    const FTrajectory Trajectory=Optimizer->OptimizeTrajectory(Path,Speed,Acceleration);
-    if(!Trajectory.bIsValid || Trajectory.Points.Num()<2) return false;
-    Pawn->SetTrajectory(Trajectory);
-    Pawn->StartTrajectoryTracking();
+    Optimizer->SetEndVelocity(EndVelocity);
+    if(Pawn->GetTrajectoryTracker()->IsTracking())
+        Optimizer->SetStartAcceleration(Pawn->GetTrajectoryTracker()->GetDesiredState().Acceleration);
+    Out=Optimizer->OptimizeTrajectory(Path,Speed,Acceleration);
+    return Out.bIsValid && Out.Points.Num()>=2 && IsRouteClear(Pawn,Out);
+}
+
+bool AMultiAgentGameMode::IsRouteClear(AUAVPawn* Pawn,const FTrajectory& Trajectory) const
+{
+    if(!Pawn || !Trajectory.bIsValid || Trajectory.Points.Num()<2) return false;
+    UAStarPathPlanner* Planner=NewObject<UAStarPathPlanner>(Pawn);
+    auto Obstacles=Pawn->GetObstacleManager()->GetAllObstacles();
+    Obstacles.RemoveAll([](const FObstacleInfo& O){
+        const auto* Other=Cast<AUAVPawn>(O.LinkedActor.Get());
+        return Other && !Other->IsParked() && !Other->IsCrashed();
+    });
+    Planner->SetObstacles(Obstacles);
+    // 多项式转弯可能偏离规划折线，必须检查实际执行曲线的净空。
+    for(int32 I=1;I<Trajectory.Points.Num();++I)
+        if(Planner->CheckLineCollision(Trajectory.Points[I-1].Position,Trajectory.Points[I].Position,Pawn->GetCollisionRadius()))
+        {
+            UE_LOG(LogUAVPlanning,Warning,TEXT("[Route] Clearance rejected Agent=%d Time=%.3f From=%s To=%s Radius=%.1f"),
+                Pawn->GetAgentID(),Trajectory.Points[I].TimeStamp,*Trajectory.Points[I-1].Position.ToString(),
+                *Trajectory.Points[I].Position.ToString(),Pawn->GetCollisionRadius());
+            for(const auto& Obstacle:Obstacles)
+            {
+                Planner->SetObstacles({Obstacle});
+                if(Planner->CheckLineCollision(Trajectory.Points[I-1].Position,Trajectory.Points[I].Position,Pawn->GetCollisionRadius()))
+                {
+                    UE_LOG(LogUAVPlanning,Warning,TEXT("[Route] Blocking obstacle Center=%s Extents=%s Margin=%.1f Actor=%s"),
+                        *Obstacle.Center.ToString(),*Obstacle.Extents.ToString(),Obstacle.SafetyMargin,*GetNameSafe(Obstacle.LinkedActor.Get()));
+                    break;
+                }
+            }
+            return false;
+        }
     return true;
 }
 

@@ -84,7 +84,7 @@ FTrajectory UTrajectoryOptimizer::OptimizeTrajectoryWithTiming(const TArray<FVec
 
 	// 直接从段采样生成轨迹
 	float CurrentTime = 0.0f;
-	while (CurrentTime <= TotalDuration)
+	while (true)
 	{
 		FTrajectoryPoint Point;
 		Point.TimeStamp = CurrentTime;
@@ -108,7 +108,8 @@ FTrajectory UTrajectoryOptimizer::OptimizeTrajectoryWithTiming(const TArray<FVec
 		}
 
 		Result.AddPoint(Point);
-		CurrentTime += DefaultSampleInterval;
+		if(CurrentTime>=TotalDuration) break;
+		CurrentTime = FMath::Min(CurrentTime + DefaultSampleInterval, TotalDuration);
 	}
 
 	Result.TotalDuration = TotalDuration;
@@ -364,8 +365,8 @@ TArray<float> UTrajectoryOptimizer::SolveSingleAxis(const TArray<float>& Positio
 		{
 			// 中间段：平滑过渡到下一段
 			float SegmentRatio = SegmentTimes[i] / (SegmentTimes[i] + SegmentTimes[i + 1]);
-			V1 = (Positions[i + 1] - Positions[i]) / SegmentTimes[i] * (1.0f - SegmentRatio) +
-				 (Positions[i + 2] - Positions[i + 1]) / SegmentTimes[i + 1] * SegmentRatio;
+			V1 = (Positions[i + 1] - Positions[i]) / SegmentTimes[i] * SegmentRatio +
+				 (Positions[i + 2] - Positions[i + 1]) / SegmentTimes[i + 1] * (1.0f - SegmentRatio);
 			A1 = 0.0f;
 			J1 = 0.0f;
 		}

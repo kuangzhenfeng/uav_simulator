@@ -297,7 +297,9 @@ protected:
 	TArray<TObjectPtr<AUAVPawn>> ScenarioFleet;
 
 public:
-	bool StartRoute(AUAVPawn* Pawn, const FVector& Target, float Speed, float Acceleration);
+	bool StartRoute(AUAVPawn* Pawn, const FVector& Target, float Speed, float Acceleration, const FVector& EndVelocity = FVector::ZeroVector);
+	bool PlanRoute(AUAVPawn* Pawn,const TArray<FVector>& Targets,float Speed,float Acceleration,const FVector& EndVelocity,FTrajectory& OutTrajectory);
+	bool IsRouteClear(AUAVPawn* Pawn,const FTrajectory& Trajectory) const;
 private:
 	TArray<FTaskDescriptor> TaskPool;
 	TMap<int32, TArray<int32>> TaskQueues;
@@ -374,4 +376,5 @@ private:
 	 * 联合 NMPC 求解（仅 Leader 调用）
 	 */
 	void SolveJointNMPC();
+	void UpdateTrafficScales();
 };

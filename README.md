@@ -9,7 +9,7 @@
 - `UavSimulatorMap` 包含约 4×4 km 原生 Landscape 山地（最高约 650 m）、贯穿谷道和原点半径 100 m 平缓起降区，使用坡度/高度混合草地与岩石材质；高度图可通过 `Script/generate_mountain_heightmap.py` 重建。
 - 日光场景采用缓存预曝光 8（安全范围约 -4～16 EV），自动曝光使用默认范围，支持明暗环境适应。
 
-- 默认关卡 `UavCooperationMap` 农业协同作业场：4 架 X100 参照工程模型、4 个共享补给机场、地块喷洒与断点续作、机场预约及充电/配液/加液/清洗、紧急任务与故障恢复；见[操作与验收说明](Docs/UavCooperationMap.md)。
+- 默认关卡 `UavCooperationMap` 农业协同作业场：4 架 X100 参照工程模型、4 个共享补给机场、地块喷洒与断点续作、完整剩余航线统一规划与连续飞行（条带匀速、地头平滑转弯、预测控制与轨迹减速一致、交会提前让行）、机场预约及充电/配液/加液/清洗、紧急任务与故障恢复；见[操作与验收说明](Docs/UavCooperationMap.md)。
 
 ### 物理仿真
 - 六自由度动力学模型（牛顿-欧拉方程）
@@ -373,7 +373,7 @@ FNMPCAvoidanceResult Result = NMPCAvoidance->ComputeAvoidance(
 | Planning.NMPCBaseline | 1 | 基准回归场景集（8 个子场景） |
 | Planning.ObstacleManager | 11 | 障碍物注册、碰撞检测、动态追踪 |
 | Planning.TrajectoryOptimizer | 9 | Minimum Snap 轨迹优化 |
-| Planning.TrajectoryTracker | 10 | 轨迹跟踪、自适应时间尺度、完成检测 |
+| Planning.TrajectoryTracker | 11 | 轨迹跟踪、自适应时间尺度与预测一致性、完成检测 |
 | MultiAgent.CBFQPFilter | 19 | CBF h/hdot、HOCBF、Active-Set QP、slack、多约束 |
 | MultiAgent.JointNMPCSolver | 7 | 联合 NMPC 求解、编队代价 |
 | MultiAgent.MILPSolver | 8 | MILP Branch & Bound、LP 松弛 |

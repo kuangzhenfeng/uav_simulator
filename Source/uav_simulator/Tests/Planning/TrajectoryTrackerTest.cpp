@@ -339,6 +339,12 @@ bool FTrajectoryTrackerTimeScaleTest::RunTest(const FString& Parameters)
 	Tracker->SetTrajectory(Trajectory);
 	Tracker->StartTracking();
 
+	Tracker->SetSpeedScale(0.5f);
+	Tracker->StartTracking();
+	const FTrajectoryPoint Prediction = Tracker->GetPredictionState(2.0f);
+	TestTrue(TEXT("Prediction position follows scaled physical time"), FMath::IsNearlyEqual(Prediction.Position.X, 100.0f, 1.0f));
+	TestTrue(TEXT("Prediction velocity matches position horizon"), FMath::IsNearlyEqual(Prediction.Velocity.X, 50.0f, 1.0f));
+
 	// 测试正常时间的状态
 	FTrajectoryPoint NormalState = Tracker->GetDesiredState(5.0f);
 
@@ -346,6 +352,23 @@ bool FTrajectoryTrackerTimeScaleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Normal state should be around midpoint"),
 		NormalState.Position.X > 400.0f && NormalState.Position.X < 600.0f);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrajectoryTrackerLateralAvoidanceTest,
+	"UAVSimulator.Planning.TrajectoryTracker.LateralAvoidanceScale",
+	UAV_TEST_FLAGS)
+
+bool FTrajectoryTrackerLateralAvoidanceTest::RunTest(const FString&)
+{
+	auto* Tracker=NewObject<UTrajectoryTracker>();
+	TestEqual(TEXT("No tracking error preserves cruise time"),Tracker->CalculateAdaptiveTimeScale(0,0),1.0f);
+	const float Moderate=Tracker->CalculateAdaptiveTimeScale(0,250);
+	TestTrue(TEXT("Growing lateral avoidance error slows reference progress smoothly"),Moderate>0.4f && Moderate<1.0f);
+	TestTrue(TEXT("Severe lateral avoidance error gives the aircraft time to rejoin"),
+		FMath::IsNearlyEqual(Tracker->CalculateAdaptiveTimeScale(0,400),0.4f,0.001f));
+	TestTrue(TEXT("Lateral safety response limits an ahead-of-reference time boost"),
+		Tracker->CalculateAdaptiveTimeScale(-3000,400)<=0.4f);
 	return true;
 }
 

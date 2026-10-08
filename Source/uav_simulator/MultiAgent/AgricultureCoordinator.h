@@ -36,7 +36,8 @@ public:
     const TArray<FSupplyAirportState>& GetAirports() const { return Airports; }
     const TArray<FAgriculturePlotState>& GetPlots() const { return Plots; }
     static bool BuildStrips(const FAgriculturePlot& Plot, float Height, TArray<FVector>& OutPoints);
-    static FVector FindEmergencyLandingSite(const FVector& Position,const TArray<FAgriculturePlotState>& Fields,float ClearanceCm);
+    static FVector FindEmergencyLandingSite(const FVector& Position,const TArray<FAgriculturePlotState>& Fields,float ClearanceCm,
+        const TArray<FObstacleInfo>& Obstacles={},float CollisionRadius=0);
     static int32 ChooseNearestAirport(const TArray<FSupplyAirportState>& Candidates,
         const TArray<float>& PathLengths, float AvailableFlightSeconds, float SpeedCm, float ReserveSeconds,const TArray<float>& TravelSeconds={},const TArray<float>& WaitingSeconds={});
     static bool RecordSpraySegment(FAgriculturePlotState& Plot,float& Liquid,const FVector& Previous,const FVector& Position,float BandCm);
@@ -64,7 +65,8 @@ private:
     FAgriculturePlotState* Plot(int32 ID);
     FSupplyAirportState* Airport(int32 ID);
     void ChangePhase(FAgricultureAgentState& Agent, EAgriculturePhase Phase);
-    bool FlyTo(FAgricultureAgentState& Agent, const FVector& Target, float Speed);
+    bool FlyTo(FAgricultureAgentState& Agent, const FVector& Target, float Speed, const FVector& EndVelocity = FVector::ZeroVector);
+    bool StartWorkRoute(FAgricultureAgentState& Agent,FAgriculturePlotState& Field);
     bool CanService(const FSupplyAirportState& Station) const;
     float EstimateWaitSeconds(const FSupplyAirportState& Station,float ArrivalSeconds,int32 WaitingAgentID=INDEX_NONE) const;
     FString ServiceStage(const FAgricultureAgentState& Agent) const;
