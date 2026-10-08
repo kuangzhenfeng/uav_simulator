@@ -53,6 +53,7 @@ public:
 private:
     friend class FAgricultureBerthQueueTest;
     friend class FAgricultureSectionStateTest;
+    friend class FAgricultureEfficiencyTest;
     UPROPERTY(Transient) TObjectPtr<AMultiAgentGameMode> Manager;
     UPROPERTY(Transient) TObjectPtr<UAStarPathPlanner> SupplyPlanner;
     UPROPERTY(Transient) TMap<int32,TObjectPtr<UMaterialInstanceDynamic>> StatusMaterials;
@@ -82,6 +83,8 @@ private:
     float EstimateWaitSeconds(const FSupplyAirportState& Station,float ArrivalSeconds,int32 WaitingAgentID=INDEX_NONE) const;
     FString ServiceStage(const FAgricultureAgentState& Agent) const;
     void AssignPlots();
+    double EstimateSectionCost(const FAgricultureAgentState& Agent,const FVector& Position,const FAgriculturePlotState& Part) const;
+    double RemainingWorkSeconds(const FAgriculturePlotState& Part,double& LiquidLitres) const;
     void RequestSupply(FAgricultureAgentState& Agent,int32 ExcludedAirportID=INDEX_NONE);
     bool RedirectSupplyReservation(FAgricultureAgentState& Agent,int32 ExcludedAirportID);
     void RefreshSupplyRoutes(FAgricultureAgentState& Agent,bool Force=false);

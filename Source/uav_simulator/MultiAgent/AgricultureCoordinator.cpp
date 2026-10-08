@@ -437,39 +437,103 @@ FString UAgricultureCoordinator::ServiceStage(const FAgricultureAgentState& A) c
     return A.Battery<.999f ? TEXT("充电") : TEXT("服务完成");
 }
 
+double UAgricultureCoordinator::RemainingWorkSeconds(const FAgriculturePlotState& Part,double& Liquid) const
+{
+    const int32 FirstEnd=Part.NextPoint%2==0 ? Part.NextPoint+1 : Part.NextPoint;
+    double Length=0,Turns=0;
+    for(int32 I=FirstEnd;I<Part.StripPoints.Num();I+=2)
+    {
+        Length+=FMath::Max(0.0,FVector::Dist(Part.StripPoints[I-1],Part.StripPoints[I])-(I==FirstEnd ? Part.StripCoveredCm : 0));
+        if(I+2<Part.StripPoints.Num()) ++Turns;
+    }
+    const double Width=FBox(Part.Config.Boundary).GetSize().Y/FMath::Max(1,Part.StripPoints.Num()/2);
+    Liquid=Length*Width/10000*Part.Config.ApplicationLitresPerHa/10000;
+    const double Headland=FCoveragePlanner::HeadlandDistance(Config.SpraySpeedCm,Manager ? Manager->TaskExecutionAccelerationCm : 150);
+    return Length/FMath::Max(1.f,Config.SpraySpeedCm)+Turns*(2*Headland/FMath::Max(1.f,Config.SpraySpeedCm)+PI*Width/FMath::Max(1.f,Config.SpraySpeedCm));
+}
+
+double UAgricultureCoordinator::EstimateSectionCost(const FAgricultureAgentState& A,const FVector& Position,const FAgriculturePlotState& Part) const
+{
+    if(Part.Config.Task.RequiredCapabilities!=0 || Part.Config.Task.RequiredPayload>Config.TankCapacityLitres) return DBL_MAX;
+    const int32 FirstEnd=Part.NextPoint%2==0 ? Part.NextPoint+1 : Part.NextPoint;
+    if(!Part.StripPoints.IsValidIndex(FirstEnd)) return DBL_MAX;
+    const FVector Direction=(Part.StripPoints[FirstEnd]-Part.StripPoints[FirstEnd-1]).GetSafeNormal();
+    const FVector Entry=Part.StripPoints[FirstEnd-1]+Direction*Part.StripCoveredCm;
+    const FVector End=Part.StripPoints.Last();
+    double Liquid=0;const double Work=RemainingWorkSeconds(Part,Liquid);
+    const double Cruise=Config.CruiseTimeFactor/FMath::Max(1.f,FMath::Min(Config.TransitSpeedCm,400.f));
+    const double Travel=FVector::Dist(Position,Entry)*Cruise;
+    double Return=DBL_MAX;
+    for(const auto& Station:Airports) if(CanService(Station) || Station.OccupantID==A.AgentID)
+        if(Station.Config.bEnabled && Station.Config.WaterLitres>0 && Station.Config.ConcentrateLitres>0 && Station.WasteLitres<Station.Config.WasteCapacityLitres)
+            Return=FMath::Min(Return,FVector::Dist(End,Station.Config.DockPosition)*Cruise+Config.AirportApproachSeconds);
+    if(Return==DBL_MAX) return DBL_MAX;
+    const double Reserve=Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds;
+    const bool NeedsSupply=A.Recipe!=Part.Config.Recipe || A.LiquidLitres<FMath::Min(double(Config.TankCapacityLitres),Liquid+1) ||
+        A.Battery*Config.BatteryFlightSeconds<Travel+Work+Return+Reserve;
+    double Cost=Travel+Work;
+    if(NeedsSupply)
+    {
+        double ViaSupply=DBL_MAX;
+        for(const auto& Station:Airports)
+        {
+            const bool AtOwnBerth=Station.OccupantID==A.AgentID && A.AirportID==Station.Config.AirportID;
+            if((!CanService(Station) && !AtOwnBerth) || !Station.Config.bEnabled || Station.Config.WaterLitres<=0 || Station.Config.ConcentrateLitres<=0 || Station.WasteLitres>=Station.Config.WasteCapacityLitres) continue;
+            const double ToSupply=AtOwnBerth ? 0 : FVector::Dist(Position,Station.Config.DockPosition)*Cruise+Config.AirportApproachSeconds;
+            const double Wait=AtOwnBerth ? 0 : EstimateWaitSeconds(Station,FMath::Max(0.0,ToSupply-Config.AirportApproachSeconds));
+            if(!AtOwnBerth && ToSupply+Wait+Reserve>A.Battery*Config.BatteryFlightSeconds) continue;
+            const bool Cleaning=A.Recipe!=Part.Config.Recipe;
+            const double Fill=Config.TankCapacityLitres-(Cleaning ? 0 : A.LiquidLitres);
+            const double LiquidTime=Station.Config.MixSeconds+(Cleaning ? Station.Config.CleanSeconds : 0)+Fill/FMath::Max(.001f,Station.Config.RefillLitresPerMinute/60);
+            const double Charge=FMath::Min(1.0,1-A.Battery+ToSupply/Config.BatteryFlightSeconds)*Station.Config.ChargeSeconds;
+            ViaSupply=FMath::Min(ViaSupply,ToSupply+Wait+FMath::Max(LiquidTime,Charge)+FVector::Dist(Station.Config.DockPosition,Entry)*Cruise+Work);
+        }
+        Cost=ViaSupply;
+    }
+    const double StartDelay=FMath::Max(0.0,double(Part.Config.Task.EarliestStart)-ElapsedSeconds);
+    return Cost<DBL_MAX && ElapsedSeconds+StartDelay+Cost<=FMath::Min(Part.Config.Task.Deadline,Part.Config.Task.LatestFinish) ? StartDelay+Cost : DBL_MAX;
+}
+
 void UAgricultureCoordinator::AssignPlots()
 {
-    TArray<int32> Order;
-    for(int32 I=0;I<Sections.Num();++I)
-        if(!Sections[I].bCompleted && !Sections[I].bFailed && Sections[I].AgentID==INDEX_NONE) Order.Add(I);
-    Order.Sort([this](int32 L,int32 R){
-        const auto& A=Sections[L].Config.Task; const auto& B=Sections[R].Config.Task;
-        return A.Priority==B.Priority ? (A.TaskID==B.TaskID ? L<R : A.TaskID<B.TaskID) : A.Priority>B.Priority;
-    });
-    for(int32 I:Order)
+    TArray<FAgricultureAgentState*> Available;
+    for(auto& A:Agents) if((A.Phase==EAgriculturePhase::Idle || A.Phase==EAgriculturePhase::Completed) && A.PlotID==INDEX_NONE && Pawn(A.AgentID)) Available.Add(&A);
+    if(Available.IsEmpty()) return;
+    TArray<int32> Candidates;
+    for(int32 I=0;I<Sections.Num();++I) if(!Sections[I].bCompleted && !Sections[I].bFailed && Sections[I].AgentID==INDEX_NONE) Candidates.Add(I);
+    if(Candidates.IsEmpty()) return;
+    Candidates.Sort([this](int32 L,int32 R){return Sections[L].Config.Task.Priority>Sections[R].Config.Task.Priority;});
+    const auto Cutoff=Sections[Candidates[FMath::Min(Available.Num(),Candidates.Num())-1]].Config.Task.Priority;
+    Candidates.RemoveAll([&](int32 I){return Sections[I].Config.Task.Priority<Cutoff;});
+    TArray<TArray<double>> Costs;double Maximum=1;
+    for(const auto* A:Available)
     {
-        auto& P=Sections[I]; FAgricultureAgentState* Best=nullptr;
-        TArray<FUAVCapability> Capabilities;
-        for(auto& A:Agents) if((A.Phase==EAgriculturePhase::Idle || A.Phase==EAgriculturePhase::Completed) && A.PlotID==INDEX_NONE)
-            if(AUAVPawn* UAV=Pawn(A.AgentID))
-            {
-                FUAVCapability C;C.AgentID=A.AgentID;C.MaxPayloadKg=Config.TankCapacityLitres;
-                C.MaxSpeed=Config.TransitSpeedCm;C.CurrentPosition=UAV->GetUAVState().Position;
-                C.RemainingFlightTime=FMath::Max(0.0f,P.Config.Task.LatestFinish-ElapsedSeconds);
-                Capabilities.Add(C);
-            }
-        if(Capabilities.IsEmpty()) break;
-        FTaskDescriptor Task=P.Config.Task;Task.TargetLocation=P.StripPoints[P.NextPoint];
-        Task.EstimatedDuration=(P.StripPoints.Num()-P.NextPoint)*10;
-        Task.Deadline-=ElapsedSeconds;Task.LatestFinish-=ElapsedSeconds;
-        const auto Result=Manager->GetTaskAllocator()->Allocate({Task},Capabilities,Manager->TaskAllocationConfig);
-        if(!Result.bIsFeasible || Result.Assignments.IsEmpty()) {P.bFailed=true;LastReason=TEXT("地块任务不可行");continue;}
-        const int32 Assigned=Result.Assignments[0].AgentID;
-        Best=Agents.FindByPredicate([Assigned](const auto& A){return A.AgentID==Assigned;});
-        if(!Best) break;
-        P.AgentID=Best->AgentID; Best->PlotID=P.Config.Task.TaskID;Best->SectionID=I;
-        UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] SectionAssigned Plot=%d Section=%d Agent=%d"),Best->PlotID,I,Best->AgentID);
-        ChangePhase(*Best,Pawn(Best->AgentID)->IsParked() ? EAgriculturePhase::TakingOff : EAgriculturePhase::Transit);
+        TArray<double> Row;
+        for(int32 I:Candidates)
+        {
+            const double Cost=EstimateSectionCost(*A,Pawn(A->AgentID)->GetUAVState().Position,Sections[I]);
+            Row.Add(Cost);if(Cost<DBL_MAX) Maximum=FMath::Max(Maximum,Cost);
+        }
+        Costs.Add(MoveTemp(Row));
+    }
+    // 优先级是硬调度顺序；同级分区通过联合匹配减少总转场、作业和服务耗时。
+    const double PriorityPenalty=(2*Available.Num()+1)*Maximum;
+    for(auto& Row:Costs) for(int32 J=0;J<Candidates.Num();++J) if(Row[J]<DBL_MAX)
+        Row[J]+=PriorityPenalty*(int32(ETaskPriority::Critical)-int32(Sections[Candidates[J]].Config.Task.Priority));
+    const auto Assigned=UTaskAllocator::MatchMinimumCost(Costs);
+    for(int32 I=0;I<Available.Num();++I) if(Assigned[I]!=INDEX_NONE)
+    {
+        auto& A=*Available[I];const int32 SectionIndex=Candidates[Assigned[I]];auto& Part=Sections[SectionIndex];
+        Part.AgentID=A.AgentID;A.PlotID=Part.Config.Task.TaskID;A.SectionID=SectionIndex;
+        UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] SectionAssigned Plot=%d Section=%d Agent=%d EstimatedSeconds=%.2f"),A.PlotID,SectionIndex,A.AgentID,
+            Costs[I][Assigned[I]]-PriorityPenalty*(int32(ETaskPriority::Critical)-int32(Part.Config.Task.Priority)));
+        auto* P=Pawn(A.AgentID);auto* Station=Airport(A.AirportID);double Liquid=0;
+        const double Work=RemainingWorkSeconds(Part,Liquid);
+        const bool SupplyFirst=A.Recipe!=Part.Config.Recipe || A.LiquidLitres<FMath::Min(double(Config.TankCapacityLitres),Liquid+1) ||
+            A.Battery*Config.BatteryFlightSeconds<Work+Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds;
+        if(P->IsParked() && Station && Station->OccupantID==A.AgentID && Station->Config.bEnabled && Station->Config.WaterLitres>0 && Station->Config.ConcentrateLitres>0 && SupplyFirst)
+            ChangePhase(A,EAgriculturePhase::Servicing);
+        else ChangePhase(A,P->IsParked() ? EAgriculturePhase::TakingOff : EAgriculturePhase::Transit);
     }
 }
 
@@ -931,26 +995,23 @@ void UAgricultureCoordinator::PlanSupplyAssignments()
     }
     if(Workers.IsEmpty()) return;
     // 联合预分配将正在作业的飞机纳入泊位竞争，避免各机都依赖同一空闲机场。
-    TArray<int32> Current,Best;Current.Init(INDEX_NONE,Workers.Num());
-    TSet<int32> Used;float BestCost=MAX_FLT;
-    TFunction<void(int32,float)> Search=[&](int32 Index,float Cost)
+    TArray<TArray<double>> Costs;
+    for(const auto* A:Workers)
     {
-        if(Cost>=BestCost) return;
-        if(Index==Workers.Num()) {BestCost=Cost;Best=Current;return;}
-        const auto& A=*Workers[Index];
+        TArray<double> Row;Row.Init(DBL_MAX,Airports.Num());
         for(int32 I=0;I<Airports.Num();++I)
         {
-            if(Used.Contains(I) || !CanService(Airports[I])) continue;
-            const float Travel=A.SupplyTravelSeconds[I];
+            if(!CanService(Airports[I])) continue;
+            const float Travel=A->SupplyTravelSeconds[I];
             const float Wait=EstimateWaitSeconds(Airports[I],FMath::Max(0.0f,Travel-Config.AirportApproachSeconds));
             const float Required=Travel+Wait+Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds;
-            if(!FMath::IsFinite(Required) || Required>A.Battery*Config.BatteryFlightSeconds) continue;
-            Current[Index]=I;Used.Add(I);Search(Index+1,Cost+Travel+Wait);Used.Remove(I);
+            if(FMath::IsFinite(Required) && Required<=A->Battery*Config.BatteryFlightSeconds) Row[I]=Travel+Wait;
         }
-    };
-    Search(0,0);
-    if(Best.Num()==Workers.Num())
-        for(int32 I=0;I<Workers.Num();++I) Workers[I]->PlannedSupplyAirportID=Airports[Best[I]].Config.AirportID;
+        Costs.Add(MoveTemp(Row));
+    }
+    const auto Assigned=UTaskAllocator::MatchMinimumCost(Costs);
+    if(!Assigned.Contains(INDEX_NONE))
+        for(int32 I=0;I<Workers.Num();++I) Workers[I]->PlannedSupplyAirportID=Airports[Assigned[I]].Config.AirportID;
     else
     {
         // 无独立泊位匹配时先集中返供，保留各区断点并交由现有队列调度。

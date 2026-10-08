@@ -6,6 +6,25 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaskAllocMatchingTest,"UAVSimulator.MultiAgent.TaskAllocator.GlobalMinimumCost",UAV_TEST_FLAGS)
+bool FTaskAllocMatchingTest::RunTest(const FString&)
+{
+    const auto Global=UTaskAllocator::MatchMinimumCost({{1,2,50},{1.1,100,60}});
+    TestEqual(TEXT("First agent leaves scarce nearby task for second agent"),Global[0],1);
+    TestEqual(TEXT("Joint assignment beats task-order greedy assignment"),Global[1],0);
+    const auto Sparse=UTaskAllocator::MatchMinimumCost({{DBL_MAX,2},{1,DBL_MAX},{DBL_MAX,DBL_MAX}});
+    TestEqual(TEXT("Feasible tasks assigned when one agent has no candidate"),Sparse[0],1);
+    TestEqual(TEXT("Independent feasible task assigned"),Sparse[1],0);
+    TestEqual(TEXT("Unreachable agent remains idle"),Sparse[2],INDEX_NONE);
+    const auto Scarce=UTaskAllocator::MatchMinimumCost({{4},{1},{3}});
+    TestEqual(TEXT("More agents than tasks selects cheapest agent"),Scarce[1],0);
+    TestEqual(TEXT("Unique task cannot be double assigned"),Scarce[0],INDEX_NONE);
+    TestTrue(TEXT("Empty matrix accepted"),UTaskAllocator::MatchMinimumCost({}).IsEmpty());
+    const auto Negative=UTaskAllocator::MatchMinimumCost({{-5,-2},{-4,-1}});
+    TestTrue(TEXT("Negative costs keep unique assignments"),Negative[0]!=Negative[1] && Negative[0]!=INDEX_NONE && Negative[1]!=INDEX_NONE);
+    return true;
+}
+
 // ==================== EstimateTravelCost 测试 ====================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaskAllocTravelCostBasicTest,

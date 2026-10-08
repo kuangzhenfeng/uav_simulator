@@ -23,6 +23,9 @@ class UAV_SIMULATOR_API UTaskAllocator : public UObject
 public:
 	UTaskAllocator();
 
+	/** 矩形匈牙利匹配：先最大化有效分配数量，再最小化总代价；无穷代价表示不可行。 */
+	static TArray<int32> MatchMinimumCost(const TArray<TArray<double>>& Costs);
+
 	/**
 	 * 一次性任务分配
 	 * @param Tasks 待分配任务列表

@@ -104,6 +104,31 @@ bool FAgricultureDepartureTest::RunTest(const FString&)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgricultureEfficiencyTest,"UAVSimulator.MultiAgent.Agriculture.EfficiencyCosts",UAV_TEST_FLAGS)
+bool FAgricultureEfficiencyTest::RunTest(const FString&)
+{
+    auto* C=NewObject<UAgricultureCoordinator>();FSupplyAirportState Station;Station.Config.AirportID=1;
+    Station.Config.DockPosition=FVector(0,0,0);C->Airports.Add(Station);
+    FAgriculturePlotState Near;Near.Config.Task.Deadline=3600;Near.Config.Task.LatestFinish=3600;
+    Near.Config.Boundary={FVector(1000,0,0),FVector(3000,0,0),FVector(3000,1200,0),FVector(1000,1200,0)};
+    UAgricultureCoordinator::BuildStrips(Near.Config,400,Near.StripPoints);
+    FAgricultureAgentState Agent;Agent.AgentID=0;Agent.Battery=1;Agent.LiquidLitres=50;Agent.Recipe=Near.Config.Recipe;
+    const double Compatible=C->EstimateSectionCost(Agent,FVector::ZeroVector,Near);
+    const double Distant=C->EstimateSectionCost(Agent,FVector(-10000,0,0),Near);
+    TestTrue(TEXT("Transfer distance changes assignment cost"),Compatible<Distant);
+    Agent.Recipe=TEXT("Different");const double Changed=C->EstimateSectionCost(Agent,FVector::ZeroVector,Near);
+    TestTrue(TEXT("Cleaning and supply are included in efficiency cost"),Changed>Compatible);
+    Agent.Recipe=Near.Config.Recipe;Agent.LiquidLitres=0;
+    TestTrue(TEXT("Empty tank includes supply cost"),C->EstimateSectionCost(Agent,FVector::ZeroVector,Near)>Compatible);
+    double BeforeLiquid=0,AfterLiquid=0;const double Before=C->RemainingWorkSeconds(Near,BeforeLiquid);
+    Near.NextPoint=1;Near.StripCoveredCm=1000;
+    TestTrue(TEXT("Partial work reduces estimated duration"),C->RemainingWorkSeconds(Near,AfterLiquid)<Before);
+    TestTrue(TEXT("Partial work reduces refill requirement"),AfterLiquid<BeforeLiquid);
+    C->Airports[0].Config.bEnabled=false;
+    TestEqual(TEXT("No healthy supply airport is not schedulable"),C->EstimateSectionCost(Agent,FVector::ZeroVector,Near),DBL_MAX);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgricultureAirportTest,"UAVSimulator.MultiAgent.Agriculture.NearestReachable",UAV_TEST_FLAGS)
 bool FAgricultureAirportTest::RunTest(const FString&)
 {

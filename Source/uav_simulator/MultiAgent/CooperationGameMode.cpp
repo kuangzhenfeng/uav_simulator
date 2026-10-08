@@ -39,7 +39,7 @@ void ACooperationGameMode::BeginPlay()
             PC->PrimaryActorTick.bTickEvenWhenPaused=true;
             PC->bShowMouseCursor = true;
             PC->SetInputMode(FInputModeGameAndUI());
-            DemoCommand(12);
+            DemoCommand(13);
             UGameplayStatics::SetGamePaused(this,true);
         }
     }
@@ -56,7 +56,7 @@ void ACooperationGameMode::SelectPreset(int32 Index)
     ScenarioStatus=TEXT("就绪");
     ReloadScenario(S);
     Agriculture->Initialize(ActiveScenario,this);
-    DemoCommand(12);
+    DemoCommand(13);
     UGameplayStatics::SetGamePaused(this,true);
 }
 

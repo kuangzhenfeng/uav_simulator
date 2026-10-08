@@ -7,6 +7,57 @@ UTaskAllocator::UTaskAllocator()
 {
 }
 
+TArray<int32> UTaskAllocator::MatchMinimumCost(const TArray<TArray<double>>& Costs)
+{
+    const int32 Rows=Costs.Num(),Columns=Rows>0 ? Costs[0].Num() : 0;
+    TArray<int32> Result;Result.Init(INDEX_NONE,Rows);
+    if(Rows==0 || Columns==0) return Result;
+    double Scale=1;
+    for(const auto& Row:Costs)
+    {
+        if(Row.Num()!=Columns) return Result;
+        for(double Cost:Row) if(FMath::IsFinite(Cost) && FMath::Abs(Cost)<1e100) Scale=FMath::Max(Scale,FMath::Abs(Cost));
+    }
+    // 虚拟列允许部分匹配，惩罚大于所有有效边的代价差之和，优先保留可执行任务。
+    const double IdleCost=(2*Rows+1)*Scale,ForbiddenCost=(Rows+1)*IdleCost;
+    const int32 Width=Columns+Rows;
+    TArray<double> RowPotential,ColumnPotential;RowPotential.Init(0,Rows+1);ColumnPotential.Init(0,Width+1);
+    TArray<int32> Owner,Previous;Owner.Init(0,Width+1);Previous.Init(0,Width+1);
+    const auto CostAt=[&](int32 Row,int32 Column)
+    {
+        if(Column>Columns) return IdleCost;
+        const double Cost=Costs[Row-1][Column-1];
+        return FMath::IsFinite(Cost) && FMath::Abs(Cost)<1e100 ? Cost : ForbiddenCost;
+    };
+    for(int32 Row=1;Row<=Rows;++Row)
+    {
+        Owner[0]=Row;int32 Column=0;
+        TArray<double> Slack;Slack.Init(DBL_MAX,Width+1);
+        TArray<bool> Visited;Visited.Init(false,Width+1);
+        do
+        {
+            Visited[Column]=true;const int32 ActiveRow=Owner[Column];
+            double Delta=DBL_MAX;int32 Next=0;
+            for(int32 J=1;J<=Width;++J) if(!Visited[J])
+            {
+                const double Reduced=CostAt(ActiveRow,J)-RowPotential[ActiveRow]-ColumnPotential[J];
+                if(Reduced<Slack[J]) {Slack[J]=Reduced;Previous[J]=Column;}
+                if(Slack[J]<Delta) {Delta=Slack[J];Next=J;}
+            }
+            for(int32 J=0;J<=Width;++J)
+            {
+                if(Visited[J]) {RowPotential[Owner[J]]+=Delta;ColumnPotential[J]-=Delta;}
+                else Slack[J]-=Delta;
+            }
+            Column=Next;
+        } while(Owner[Column]!=0);
+        do {const int32 Parent=Previous[Column];Owner[Column]=Owner[Parent];Column=Parent;} while(Column!=0);
+    }
+    for(int32 J=1;J<=Columns;++J) if(Owner[J]!=0 && CostAt(Owner[J],J)<IdleCost)
+        Result[Owner[J]-1]=J-1;
+    return Result;
+}
+
 void UTaskAllocator::Reset()
 {
 	CurrentAllocation = FTaskAllocationResult();
