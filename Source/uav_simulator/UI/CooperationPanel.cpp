@@ -5,6 +5,9 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SSlider.h"
+#include "Engine/World.h"
+#include "GameFramework/WorldSettings.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Styling/CoreStyle.h"
@@ -13,6 +16,21 @@ TSharedRef<SWidget> UCooperationPanel::RebuildWidget()
 {
 	TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
 	Box->AddSlot().AutoHeight().Padding(6)[SNew(STextBlock).Text(FText::FromString(TEXT("X SERIES / 农业协同作业场")))];
+	const auto GetSpeed = [this]()
+	{
+		const UWorld* World = IsValid(Manager) ? Manager->GetWorld() : nullptr;
+		const AWorldSettings* Settings = World ? World->GetWorldSettings() : nullptr;
+		return Settings ? Settings->GetEffectiveTimeDilation() : 1.0f;
+	};
+	Box->AddSlot().AutoHeight().Padding(6)[SNew(STextBlock)
+		.Text_Lambda([GetSpeed]() { return FText::FromString(FString::Printf(TEXT("仿真倍率：%.2f×"), GetSpeed())); })];
+	Box->AddSlot().AutoHeight().Padding(6)[SNew(SSlider)
+		.MinValue(0.25f).MaxValue(8.0f).StepSize(0.25f).MouseUsesStep(true)
+		.Value_Lambda(GetSpeed)
+		.IsEnabled_Lambda([this]() { return IsValid(Manager); })
+		.OnValueChanged_Lambda([this](float Value) { if (IsValid(Manager)) Manager->SetSlomo(Value); })];
+	Box->AddSlot().AutoHeight().Padding(3)[SNew(SButton).Text(FText::FromString(TEXT("恢复 1×")))
+		.OnClicked_Lambda([this]() { if (IsValid(Manager)) Manager->SetSlomo(1.0f); return FReply::Handled(); })];
 	const TCHAR* Labels[] = {TEXT("协同植保"), TEXT("最近机场补给"), TEXT("优先级调度"), TEXT("故障恢复")};
 	for (int32 I=0; I<4; ++I)
 		Box->AddSlot().AutoHeight().Padding(3)[SNew(SButton).Text(FText::FromString(Labels[I]))
