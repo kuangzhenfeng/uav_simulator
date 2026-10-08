@@ -10,6 +10,7 @@ class AUAVPawn;
 class UScenario;
 class UMaterialInstanceDynamic;
 class UAStarPathPlanner;
+struct FTrajectory;
 
 /** 地块进度与共享机场的唯一运行状态源。 */
 UCLASS()
@@ -36,6 +37,10 @@ public:
     const TArray<FSupplyAirportState>& GetAirports() const { return Airports; }
     const TArray<FAgriculturePlotState>& GetPlots() const { return Plots; }
     const FAgricultureConfig& GetConfig() const { return Config; }
+    const TArray<FAgriculturePlotState>& GetSections() const { return Sections; }
+    static TArray<FAgriculturePlotState> PartitionPlot(const FAgriculturePlotState& Plot, int32 MaxSections);
+    static bool BuildSupplyDeparture(const FVector& Position,const FVector& Velocity,float Height,float Acceleration,FTrajectory& Out);
+    static FVector SupplyDepartureTarget(const FVector& Position,const FVector& Velocity,float Height,float Acceleration);
     static bool BuildStrips(const FAgriculturePlot& Plot, float Height, TArray<FVector>& OutPoints);
     static FVector FindEmergencyLandingSite(const FVector& Position,const TArray<FAgriculturePlotState>& Fields,float ClearanceCm,
         const TArray<FObstacleInfo>& Obstacles={},float CollisionRadius=0);
@@ -47,6 +52,7 @@ public:
         float RequestedLitres,float CapacityLitres,float ConcentrateFraction);
 private:
     friend class FAgricultureBerthQueueTest;
+    friend class FAgricultureSectionStateTest;
     UPROPERTY(Transient) TObjectPtr<AMultiAgentGameMode> Manager;
     UPROPERTY(Transient) TObjectPtr<UAStarPathPlanner> SupplyPlanner;
     UPROPERTY(Transient) TMap<int32,TObjectPtr<UMaterialInstanceDynamic>> StatusMaterials;
@@ -54,6 +60,9 @@ private:
     TArray<FAgricultureAgentState> Agents;
     TArray<FSupplyAirportState> Airports;
     TArray<FAgriculturePlotState> Plots;
+    TArray<FAgriculturePlotState> Sections;
+    FAgriculturePlotState* Section(const FAgricultureAgentState& Agent);
+    void RefreshPlots();
     TMap<int32,FVector> PreviousPositions;
     FString LastReason;
     float ElapsedSeconds = 0;
@@ -62,11 +71,12 @@ private:
     bool bCollectSupplyRequests = false;
     TMap<int32,int32> PendingSupplyRequests;
     void ResolveSupplyRequests();
+    void PlanSupplyAssignments();
     AUAVPawn* Pawn(int32 ID) const;
-    FAgriculturePlotState* Plot(int32 ID);
     FSupplyAirportState* Airport(int32 ID);
     void ChangePhase(FAgricultureAgentState& Agent, EAgriculturePhase Phase);
     bool FlyTo(FAgricultureAgentState& Agent, const FVector& Target, float Speed, const FVector& EndVelocity = FVector::ZeroVector);
+    bool StartSupplyDeparture(FAgricultureAgentState& Agent);
     bool StartWorkRoute(FAgricultureAgentState& Agent,FAgriculturePlotState& Field);
     bool CanService(const FSupplyAirportState& Station) const;
     float EstimateWaitSeconds(const FSupplyAirportState& Station,float ArrivalSeconds,int32 WaitingAgentID=INDEX_NONE) const;

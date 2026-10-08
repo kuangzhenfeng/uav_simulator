@@ -19,7 +19,12 @@ struct FCooperationAgentView
 struct FCooperationPlotView
 {
     int32 ID = INDEX_NONE;
-    int32 AgentID = INDEX_NONE;
+    TArray<int32> AgentIDs;
+    FString AgentLabel() const
+    {
+        TArray<FString> Labels;for(int32 AgentID:AgentIDs) Labels.Add(FString::Printf(TEXT("%d"),AgentID));
+        return Labels.IsEmpty() ? TEXT("—") : FString::Join(Labels,TEXT(", "));
+    }
     FBox Bounds = FBox(ForceInit);
     double Area = 0;
     double Covered = 0;

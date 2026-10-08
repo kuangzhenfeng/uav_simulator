@@ -9,6 +9,7 @@
 #include "../Planning/ObstacleManager.h"
 #include "../Planning/TrajectoryTracker.h"
 #include "../Planning/CoveragePlanner.h"
+#include "../Planning/TrajectoryOptimizer.h"
 #include "DrawDebugHelpers.h"
 #include "Json.h"
 #include "Engine/StaticMeshActor.h"
@@ -26,7 +27,7 @@ UAgricultureCoordinator::UAgricultureCoordinator()
 void UAgricultureCoordinator::Reset()
 {
     bCollectSupplyRequests=false;PendingSupplyRequests.Empty();
-    Agents.Empty(); Airports.Empty(); Plots.Empty(); PreviousPositions.Empty();StatusMaterials.Empty();VisualSeconds=0;
+    Agents.Empty(); Airports.Empty(); Plots.Empty(); Sections.Empty(); PreviousPositions.Empty();StatusMaterials.Empty();VisualSeconds=0;
     Config = FAgricultureConfig(); ElapsedSeconds = 0; LogSeconds = 0; LastReason.Empty();
 }
 
@@ -49,6 +50,104 @@ bool UAgricultureCoordinator::BuildStrips(const FAgriculturePlot& P, float Heigh
         Out.Add(FVector(X0,Y,Height)); Out.Add(FVector(X1,Y,Height));
     }
     return !Out.IsEmpty();
+}
+
+FVector UAgricultureCoordinator::SupplyDepartureTarget(const FVector& Position,const FVector& Velocity,float Height,float Acceleration)
+{
+    const float Duration=1.9f*Velocity.Size()/FMath::Max(1.0f,Acceleration);
+    FVector Target=Position+Velocity*(Duration*.5f);Target.Z=Height;return Target;
+}
+
+bool UAgricultureCoordinator::BuildSupplyDeparture(const FVector& Position,const FVector& Velocity,float Height,float Acceleration,FTrajectory& Out)
+{
+    Out=FTrajectory();
+    if(Acceleration<=0) return false;
+    auto* Optimizer=NewObject<UTrajectoryOptimizer>();
+    FVector Stop=Position;
+    // 按当前三维速度制动至零，再从静止状态爬升；两段保持位置、速度、加速度连续。
+    if(Velocity.Size()>1)
+    {
+        const float Duration=1.9f*Velocity.Size()/Acceleration;
+        Stop=Position+Velocity*(Duration*.5f);
+        Optimizer->SetStartVelocity(Velocity);
+        Out=Optimizer->OptimizeTrajectoryWithTiming({Position,Stop},{Duration});
+        if(!Out.bIsValid) return false;
+    }
+    const FVector Lift(Stop.X,Stop.Y,Height);
+    if(!Stop.Equals(Lift,1))
+    {
+        Optimizer->SetStartVelocity(FVector::ZeroVector);
+        const auto Climb=Optimizer->OptimizeTrajectory({Stop,Lift},150,Acceleration);
+        if(!Climb.bIsValid) return false;
+        if(Out.Points.IsEmpty()) Out=Climb;
+        else
+        {
+            for(int32 I=1;I<Climb.Points.Num();++I)
+            {auto Point=Climb.Points[I];Point.TimeStamp+=Out.TotalDuration;Out.Points.Add(Point);}
+            Out.TotalDuration+=Climb.TotalDuration;
+        }
+    }
+    return Out.bIsValid && Out.Points.Num()>=2;
+}
+
+bool UAgricultureCoordinator::StartSupplyDeparture(FAgricultureAgentState& A)
+{
+    auto* P=Pawn(A.AgentID);if(!P) return false;
+    FTrajectory Route;
+    if(!BuildSupplyDeparture(P->GetUAVState().Position,P->GetUAVState().Velocity,Config.TransitHeightCm,Manager->TaskExecutionAccelerationCm,Route) ||
+       !Manager->IsRouteClear(P,Route))
+    {Fail(A,TEXT("Supply departure infeasible"));return false;}
+    A.Target=Route.Points.Last().Position;A.bRouteActive=true;
+    P->GetTrajectoryTracker()->SetCompletionCriteria(Config.ArrivalRadiusCm,50);
+    P->SetTrajectory(Route);P->StartTrajectoryTracking();return true;
+}
+
+TArray<FAgriculturePlotState> UAgricultureCoordinator::PartitionPlot(const FAgriculturePlotState& P,int32 MaxSections)
+{
+    TArray<FAgriculturePlotState> Result;
+    const int32 Strips=P.StripPoints.Num()/2;
+    if(P.bFailed || Strips==0 || MaxSections<=0) return Result;
+    const int32 Count=FMath::Min(MaxSections,FMath::Max(1,Strips/2));
+    const FBox Bounds(P.Config.Boundary);
+    const double Width=Bounds.GetSize().Y/Strips;
+    // 连续条带分区保留原航向，边界与有效喷幅一致，覆盖面积互不重叠。
+    for(int32 I=0;I<Count;++I)
+    {
+        const int32 Begin=I*Strips/Count,End=(I+1)*Strips/Count;
+        FAgriculturePlotState Part;Part.Config=P.Config;
+        const double Y0=Bounds.Min.Y+Begin*Width,Y1=Bounds.Min.Y+End*Width;
+        Part.Config.Boundary={FVector(Bounds.Min.X,Y0,Bounds.Min.Z),FVector(Bounds.Max.X,Y0,Bounds.Min.Z),
+            FVector(Bounds.Max.X,Y1,Bounds.Min.Z),FVector(Bounds.Min.X,Y1,Bounds.Min.Z)};
+        Part.StripPoints.Append(P.StripPoints.GetData()+Begin*2,(End-Begin)*2);
+        Result.Add(MoveTemp(Part));
+    }
+    return Result;
+}
+
+FAgriculturePlotState* UAgricultureCoordinator::Section(const FAgricultureAgentState& A)
+{
+    if(!Sections.IsValidIndex(A.SectionID)) return nullptr;
+    auto& S=Sections[A.SectionID];
+    return S.Config.Task.TaskID==A.PlotID && S.AgentID==A.AgentID ? &S : nullptr;
+}
+
+void UAgricultureCoordinator::RefreshPlots()
+{
+    for(auto& P:Plots)
+    {
+        P.CoveredSquareMetres=0;P.AppliedLitres=0;P.AgentIDs.Empty();
+        bool Complete=true,Found=false;
+        for(const auto& S:Sections) if(S.Config.Task.TaskID==P.Config.Task.TaskID)
+        {
+            Found=true;Complete&=S.bCompleted;P.bFailed|=S.bFailed;
+            P.CoveredSquareMetres+=S.CoveredSquareMetres;P.AppliedLitres+=S.AppliedLitres;
+            if(S.AgentID!=INDEX_NONE) P.AgentIDs.AddUnique(S.AgentID);
+        }
+        P.AgentIDs.Sort();
+        if(!P.bCompleted && Found && Complete)
+            UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] Plot=%d Completed Area=%.2f Liquid=%.2f"),P.Config.Task.TaskID,P.CoveredSquareMetres,P.AppliedLitres);
+        P.bCompleted=Found && Complete;
+    }
 }
 
 FVector UAgricultureCoordinator::FindEmergencyLandingSite(const FVector& Position,const TArray<FAgriculturePlotState>& Fields,float ClearanceCm,
@@ -140,6 +239,8 @@ void UAgricultureCoordinator::Initialize(UScenario* S,AMultiAgentGameMode* GM)
         PreviousPositions.Add(A.AgentID,P->GetUAVState().Position);
         P->UpdatePayloadMass(A.LiquidLitres);
     }
+    for(const auto& P:Plots) Sections.Append(PartitionPlot(P,Agents.Num()));
+    RefreshPlots();
     LastReason=TEXT("农业场景装配完成");
     UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] Initialized agents=%d airports=%d plots=%d"),Agents.Num(),Airports.Num(),Plots.Num());
 }
@@ -181,8 +282,6 @@ AUAVPawn* UAgricultureCoordinator::Pawn(int32 ID) const
     if(Manager) for(AUAVPawn* P:Manager->GetScenarioFleet()) if(P && P->GetAgentID()==ID) return P;
     return nullptr;
 }
-FAgriculturePlotState* UAgricultureCoordinator::Plot(int32 ID)
-{ return Plots.FindByPredicate([ID](const auto& P){return P.Config.Task.TaskID==ID;}); }
 FSupplyAirportState* UAgricultureCoordinator::Airport(int32 ID)
 { return Airports.FindByPredicate([ID](const auto& A){return A.Config.AirportID==ID;}); }
 
@@ -211,6 +310,7 @@ bool UAgricultureCoordinator::FlyTo(FAgricultureAgentState& A,const FVector& Tar
         A.Phase==EAgriculturePhase::Landing ? Config.DockSpeedCm : FMath::Max(50.0f,float(EndVelocity.Size())+50));
     if(P->GetMissionComponent()->GetMissionState()==EMissionState::Failed)
         P->GetMissionComponent()->ResetMission();
+    Speed=FMath::Max(Speed,float(P->GetUAVState().Velocity.Size())+1);
     if(!Manager->StartRoute(P,Target,Speed,Manager->TaskExecutionAccelerationCm,EndVelocity))
     { Fail(A,TEXT("Route infeasible")); return false; }
     A.bRouteActive=true; return true;
@@ -285,7 +385,7 @@ float UAgricultureCoordinator::EstimateWaitSeconds(const FSupplyAirportState& S,
         }
         else
         {
-            const auto* Field=Plots.FindByPredicate([&A](const auto& V){return V.Config.Task.TaskID==A->PlotID;});
+            const auto* Field=Sections.IsValidIndex(A->SectionID) ? &Sections[A->SectionID] : nullptr;
             const bool NeedsCleaning=!Field || A->Recipe!=Field->Config.Recipe || A->bCleaned;
             const bool FlushPending=NeedsCleaning && !A->bCleaned;
             const float Liquid=Field ? (FlushPending ? Config.TankCapacityLitres : Config.TankCapacityLitres-A->LiquidLitres) : 0;
@@ -329,7 +429,7 @@ FString UAgricultureCoordinator::ServiceStage(const FAgricultureAgentState& A) c
     if(A.Phase!=EAgriculturePhase::Servicing) return TEXT("");
     const auto* S=Airports.FindByPredicate([&A](const auto& V){return V.Config.AirportID==A.AirportID;});
     if(!S) return TEXT("无服务机场");
-    const auto* P=Plots.FindByPredicate([&A](const auto& V){return V.Config.Task.TaskID==A.PlotID;});
+    const auto* P=Sections.IsValidIndex(A.SectionID) ? &Sections[A.SectionID] : nullptr;
     const bool Cleaning=!P || A.bCleaned || A.Recipe!=P->Config.Recipe;
     if(Cleaning && !A.bCleaned) return TEXT("清洗/充电");
     if(A.PhaseSeconds<S->Config.MixSeconds+(Cleaning ? S->Config.CleanSeconds : 0)) return TEXT("配液/充电");
@@ -340,15 +440,15 @@ FString UAgricultureCoordinator::ServiceStage(const FAgricultureAgentState& A) c
 void UAgricultureCoordinator::AssignPlots()
 {
     TArray<int32> Order;
-    for(int32 I=0;I<Plots.Num();++I)
-        if(!Plots[I].bCompleted && !Plots[I].bFailed && Plots[I].AgentID==INDEX_NONE) Order.Add(I);
+    for(int32 I=0;I<Sections.Num();++I)
+        if(!Sections[I].bCompleted && !Sections[I].bFailed && Sections[I].AgentID==INDEX_NONE) Order.Add(I);
     Order.Sort([this](int32 L,int32 R){
-        const auto& A=Plots[L].Config.Task; const auto& B=Plots[R].Config.Task;
-        return A.Priority==B.Priority ? A.TaskID<B.TaskID : A.Priority>B.Priority;
+        const auto& A=Sections[L].Config.Task; const auto& B=Sections[R].Config.Task;
+        return A.Priority==B.Priority ? (A.TaskID==B.TaskID ? L<R : A.TaskID<B.TaskID) : A.Priority>B.Priority;
     });
     for(int32 I:Order)
     {
-        auto& P=Plots[I]; FAgricultureAgentState* Best=nullptr;
+        auto& P=Sections[I]; FAgricultureAgentState* Best=nullptr;
         TArray<FUAVCapability> Capabilities;
         for(auto& A:Agents) if((A.Phase==EAgriculturePhase::Idle || A.Phase==EAgriculturePhase::Completed) && A.PlotID==INDEX_NONE)
             if(AUAVPawn* UAV=Pawn(A.AgentID))
@@ -367,7 +467,8 @@ void UAgricultureCoordinator::AssignPlots()
         const int32 Assigned=Result.Assignments[0].AgentID;
         Best=Agents.FindByPredicate([Assigned](const auto& A){return A.AgentID==Assigned;});
         if(!Best) break;
-        P.AgentID=Best->AgentID; Best->PlotID=P.Config.Task.TaskID;
+        P.AgentID=Best->AgentID; Best->PlotID=P.Config.Task.TaskID;Best->SectionID=I;
+        UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] SectionAssigned Plot=%d Section=%d Agent=%d"),Best->PlotID,I,Best->AgentID);
         ChangePhase(*Best,Pawn(Best->AgentID)->IsParked() ? EAgriculturePhase::TakingOff : EAgriculturePhase::Transit);
     }
 }
@@ -387,12 +488,12 @@ void UAgricultureCoordinator::Fail(FAgricultureAgentState& A,const FString& Reas
     const bool AtBerth=FailedPawn && Reserved && (FailedPawn->IsParked() || FVector::Dist2D(FailedPawn->GetUAVState().Position,Reserved->Config.DockPosition)<500);
     if(!AtBerth) ReleaseAirport(A);
     else if(auto* S=Airport(A.AirportID)) {S->OccupantID=A.AgentID;S->Queue.Remove(A.AgentID);}
-    if(auto* Field=Plot(A.PlotID))
+    if(auto* Field=Section(A))
     {
         Field->AgentID=INDEX_NONE;
         if(Field->NextPoint%2==1 && Pawn(A.AgentID)) Field->ResumePosition=Field->StripPoints[Field->NextPoint-1]+(Field->StripPoints[Field->NextPoint]-Field->StripPoints[Field->NextPoint-1]).GetSafeNormal()*Field->StripCoveredCm;
     }
-    A.PlotID=INDEX_NONE;
+    A.PlotID=INDEX_NONE;A.SectionID=INDEX_NONE;
     ChangePhase(A,EAgriculturePhase::Failed);
     if(AUAVPawn* P=Pawn(A.AgentID))
     {
@@ -423,8 +524,10 @@ void UAgricultureCoordinator::RefreshSupplyRoutes(FAgricultureAgentState& A,bool
     SupplyPlanner->SetObstacles(Obstacles);
     A.SupplyPathLengths.Empty();A.SupplyTravelSeconds.Empty();
     const FVector Position=P->GetUAVState().Position;
-    FVector Lift=Position;Lift.Z=Config.TransitHeightCm;
-    const float LiftDistance=FVector::Dist(Position,Lift);
+    const FVector Lift=SupplyDepartureTarget(Position,P->GetUAVState().Velocity,Config.TransitHeightCm,Manager->TaskExecutionAccelerationCm);
+    const float BrakeTime=1.9f*P->GetUAVState().Velocity.Size()/FMath::Max(1.0f,Manager->TaskExecutionAccelerationCm);
+    const FVector Stop=Position+P->GetUAVState().Velocity*(BrakeTime*.5f);
+    const float LiftDistance=FVector::Dist(Position,Stop)+FMath::Abs(Config.TransitHeightCm-float(Stop.Z));
     const bool LiftClear=!SupplyPlanner->CheckLineCollision(Position,Lift,P->GetCollisionRadius());
     for(const auto& S:Airports)
     {
@@ -498,7 +601,7 @@ void UAgricultureCoordinator::RequestSupply(FAgricultureAgentState& A,int32 Excl
 {
     AUAVPawn* P=Pawn(A.AgentID); if(!P || A.Phase==EAgriculturePhase::Failed) return;
     if(bCollectSupplyRequests) {PendingSupplyRequests.Add(A.AgentID,ExcludedAirportID);return;}
-    if(auto* Field=Plot(A.PlotID))
+    if(auto* Field=Section(A))
         if(Field->NextPoint%2==1) Field->ResumePosition=Field->StripPoints[Field->NextPoint-1]+(Field->StripPoints[Field->NextPoint]-Field->StripPoints[Field->NextPoint-1]).GetSafeNormal()*Field->StripCoveredCm;
     ReleaseAirport(A);
     RefreshSupplyRoutes(A,true);
@@ -515,7 +618,11 @@ void UAgricultureCoordinator::RequestSupply(FAgricultureAgentState& A,int32 Excl
     }
     TArray<FSupplyAirportState> Candidates=Airports;
     for(auto& S:Candidates) if(S.Config.AirportID==ExcludedAirportID || !CanService(S)) S.Config.bEnabled=false;
-    const int32 Index=ChooseNearestAirport(Candidates,Distances,A.Battery*Config.BatteryFlightSeconds,
+    auto Preferred=Candidates;
+    for(auto& S:Preferred) if(S.Config.AirportID!=A.PlannedSupplyAirportID) S.Config.bEnabled=false;
+    int32 Index=ChooseNearestAirport(Preferred,Distances,A.Battery*Config.BatteryFlightSeconds,
+        Config.TransitSpeedCm,Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds,TravelTimes,WaitingTimes);
+    if(Index==INDEX_NONE) Index=ChooseNearestAirport(Candidates,Distances,A.Battery*Config.BatteryFlightSeconds,
         Config.TransitSpeedCm,Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds,TravelTimes,WaitingTimes);
     if(Index==INDEX_NONE)
     {
@@ -582,7 +689,7 @@ void UAgricultureCoordinator::UpdateAirport(FSupplyAirportState& S,float Dt)
         if(A.Phase!=EAgriculturePhase::Servicing || S.OccupantID!=A.AgentID) continue;
         AUAVPawn* P=Pawn(A.AgentID);
         if(!P || !P->IsParked() || !P->IsGroundContact()) {Fail(A,TEXT("Dock contact lost"));continue;}
-        auto* Field=Plot(A.PlotID);
+        auto* Field=Section(A);
         const FName Recipe=Field ? Field->Config.Recipe : A.Recipe;
         const float Fraction=Field ? Field->Config.ConcentrateFraction : 0.02f;
         A.Battery=FMath::Min(1.0f,A.Battery+Dt/FMath::Max(1.0f,S.Config.ChargeSeconds));
@@ -653,7 +760,7 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
     const FVector Previous=PreviousPositions.FindRef(A.AgentID);
     PreviousPositions.Add(A.AgentID,Position);
     if(!P->IsParked()) A.Battery=FMath::Max(0.0f,A.Battery-Dt/FMath::Max(1.0f,Config.BatteryFlightSeconds));
-    auto* Field=Plot(A.PlotID);
+    auto* Field=Section(A);
     auto* Station=Airport(A.AirportID);
     const auto Arrived=[&](float Radius){return FVector::Dist(Position,A.Target)<=Radius && P->GetUAVState().Velocity.Size()<5;};
     if(A.Phase==EAgriculturePhase::Idle)
@@ -687,6 +794,7 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
         float ReturnSeconds=MAX_FLT;
         for(int32 I=0;I<Airports.Num();++I) if(CanService(Airports[I]))
         {
+            if(A.PlannedSupplyAirportID!=INDEX_NONE && Airports[I].Config.AirportID!=A.PlannedSupplyAirportID) continue;
             const float Travel=A.SupplyTravelSeconds[I];
             ReturnSeconds=FMath::Min(ReturnSeconds,Travel+EstimateWaitSeconds(Airports[I],FMath::Max(0.0f,Travel-Config.AirportApproachSeconds)));
         }
@@ -752,8 +860,8 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
             Field->NextPoint+=2;
             if(Field->NextPoint>=Field->StripPoints.Num())
             {
-                Field->bCompleted=true;Field->AgentID=INDEX_NONE;A.PlotID=INDEX_NONE;
-                UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] Plot=%d Completed Area=%.2f Liquid=%.2f"),Field->Config.Task.TaskID,Field->CoveredSquareMetres,Field->AppliedLitres);
+                UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] SectionCompleted Plot=%d Section=%d Agent=%d Area=%.2f Liquid=%.2f"),Field->Config.Task.TaskID,A.SectionID,A.AgentID,Field->CoveredSquareMetres,Field->AppliedLitres);
+                Field->bCompleted=true;Field->AgentID=INDEX_NONE;A.PlotID=INDEX_NONE;A.SectionID=INDEX_NONE;
                 ChangePhase(A,EAgriculturePhase::Idle);
             }
         }
@@ -771,9 +879,8 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
         }
         if(A.TransitStage==0 && (A.bRouteActive || Position.Z<Config.TransitHeightCm-Config.ArrivalRadiusCm))
         {
-            FVector Lift=Position;Lift.Z=Config.TransitHeightCm;
-            if(A.bRouteActive) Lift=A.Target;
-            if(!FlyTo(A,Lift,150)) return;
+            if(!A.bRouteActive && !StartSupplyDeparture(A)) return;
+            if(P->GetTrajectoryTracker()->IsTimedOut()) {A.bRouteActive=false;return;}
             if(Arrived(Config.ArrivalRadiusCm)) {A.TransitStage=1;A.bRouteActive=false;}
             return;
         }
@@ -811,6 +918,46 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
     }
 }
 
+void UAgricultureCoordinator::PlanSupplyAssignments()
+{
+    TArray<FAgricultureAgentState*> Workers;
+    for(auto& A:Agents)
+    {
+        A.PlannedSupplyAirportID=INDEX_NONE;
+        if(A.Phase!=EAgriculturePhase::Transit && A.Phase!=EAgriculturePhase::Spraying) continue;
+        if(!Section(A) || A.AirportID!=INDEX_NONE) continue;
+        RefreshSupplyRoutes(A);
+        Workers.Add(&A);
+    }
+    if(Workers.IsEmpty()) return;
+    // 联合预分配将正在作业的飞机纳入泊位竞争，避免各机都依赖同一空闲机场。
+    TArray<int32> Current,Best;Current.Init(INDEX_NONE,Workers.Num());
+    TSet<int32> Used;float BestCost=MAX_FLT;
+    TFunction<void(int32,float)> Search=[&](int32 Index,float Cost)
+    {
+        if(Cost>=BestCost) return;
+        if(Index==Workers.Num()) {BestCost=Cost;Best=Current;return;}
+        const auto& A=*Workers[Index];
+        for(int32 I=0;I<Airports.Num();++I)
+        {
+            if(Used.Contains(I) || !CanService(Airports[I])) continue;
+            const float Travel=A.SupplyTravelSeconds[I];
+            const float Wait=EstimateWaitSeconds(Airports[I],FMath::Max(0.0f,Travel-Config.AirportApproachSeconds));
+            const float Required=Travel+Wait+Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds;
+            if(!FMath::IsFinite(Required) || Required>A.Battery*Config.BatteryFlightSeconds) continue;
+            Current[Index]=I;Used.Add(I);Search(Index+1,Cost+Travel+Wait);Used.Remove(I);
+        }
+    };
+    Search(0,0);
+    if(Best.Num()==Workers.Num())
+        for(int32 I=0;I<Workers.Num();++I) Workers[I]->PlannedSupplyAirportID=Airports[Best[I]].Config.AirportID;
+    else
+    {
+        // 无独立泊位匹配时先集中返供，保留各区断点并交由现有队列调度。
+        for(auto* A:Workers) PendingSupplyRequests.Add(A->AgentID,INDEX_NONE);
+    }
+}
+
 void UAgricultureCoordinator::ResolveSupplyRequests()
 {
     // 同一步请求先按可达机场的稀缺程度处理，每次预约后重新评估余下请求。
@@ -845,8 +992,10 @@ void UAgricultureCoordinator::Update(float Dt)
     AssignPlots();
     for(auto& S:Airports) UpdateAirport(S,Dt);
     bCollectSupplyRequests=true;
+    PlanSupplyAssignments();
     for(auto& A:Agents) UpdateAgent(A,Dt);
     bCollectSupplyRequests=false;ResolveSupplyRequests();
+    RefreshPlots();
     if(!Agents.ContainsByPredicate([](const auto& A){return A.Phase!=EAgriculturePhase::Failed;}))
         for(auto& P:Plots) if(!P.bCompleted) P.bFailed=true;
     for(auto& P:Plots)
@@ -854,9 +1003,9 @@ void UAgricultureCoordinator::Update(float Dt)
         const FBox Bounds(P.Config.Boundary);
         const float Area=Bounds.GetSize().X*Bounds.GetSize().Y/10000;
         if(!P.bCompleted && ElapsedSeconds>FMath::Min(P.Config.Task.Deadline,P.Config.Task.LatestFinish))
-        {P.bFailed=true;LastReason=TEXT("地块作业超时");}
-        Manager->GetTaskMonitor()->ReportExecution(P.Config.Task.TaskID,P.AgentID,
-            P.bCompleted ? ETaskStatus::Completed : P.bFailed ? ETaskStatus::Failed : P.AgentID==INDEX_NONE ? ETaskStatus::Pending : ETaskStatus::InProgress,
+        {P.bFailed=true;for(auto& S:Sections) if(S.Config.Task.TaskID==P.Config.Task.TaskID) S.bFailed=true;LastReason=TEXT("地块作业超时");}
+        Manager->GetTaskMonitor()->ReportExecution(P.Config.Task.TaskID,(P.AgentIDs.Num()==1 ? P.AgentIDs[0] : INDEX_NONE),
+            P.bCompleted ? ETaskStatus::Completed : P.bFailed ? ETaskStatus::Failed : P.AgentIDs.IsEmpty() ? ETaskStatus::Pending : ETaskStatus::InProgress,
             Area>0 ? P.CoveredSquareMetres/Area : 0);
     }
     LogSeconds+=Dt;
@@ -878,7 +1027,7 @@ void UAgricultureCoordinator::Update(float Dt)
                 (*MID)->SetVectorParameterValue(TEXT("Tint"),!S.Config.bEnabled || S.Config.WaterLitres<=0 || S.Config.ConcentrateLitres<=0 || S.WasteLitres>=S.Config.WasteCapacityLitres ? FLinearColor::Red :
                     S.OccupantID!=INDEX_NONE ? FLinearColor::Yellow : FLinearColor::Green);
         }
-        for(const auto& P:Plots)
+        for(const auto& P:Sections)
         {
             for(int32 I=0;I+1<P.NextPoint && I+1<P.StripPoints.Num();I+=2)
                 DrawDebugLine(GetWorld(),P.StripPoints[I]-FVector(0,0,Config.HeightAboveCanopyCm-20),P.StripPoints[I+1]-FVector(0,0,Config.HeightAboveCanopyCm-20),FColor::Green,false,1.2f,0,60);
@@ -919,13 +1068,13 @@ void UAgricultureCoordinator::Command(int32 Command,int32 ID)
         P.Config.Task.TaskID=Next;P.Config.Task.Priority=ETaskPriority::Critical;
         P.Config.Boundary={FVector(-2000,11000,0),FVector(2000,11000,0),FVector(2000,13000,0),FVector(-2000,13000,0)};
         P.bFailed=!BuildStrips(P.Config,P.Config.CanopyHeightCm+Config.HeightAboveCanopyCm,P.StripPoints);
-        Plots.Add(P);
+        Plots.Add(P);Sections.Append(PartitionPlot(P,Agents.Num()));
         // 已完成覆盖保留；中断普通地块后让紧急任务参与下一次分配。
-        for(auto& A:Agents) if(auto* Field=Plot(A.PlotID))
+        for(auto& A:Agents) if(auto* Field=Section(A))
         {
             if(A.AirportID!=INDEX_NONE) continue;
             if(A.Phase==EAgriculturePhase::Spraying) Field->ResumePosition=Field->StripPoints[Field->NextPoint-1]+(Field->StripPoints[Field->NextPoint]-Field->StripPoints[Field->NextPoint-1]).GetSafeNormal()*Field->StripCoveredCm;
-            Field->AgentID=INDEX_NONE;A.PlotID=INDEX_NONE;
+            Field->AgentID=INDEX_NONE;A.PlotID=INDEX_NONE;A.SectionID=INDEX_NONE;
             if(A.AirportID==INDEX_NONE) {Pawn(A.AgentID)->StopTrajectoryTracking();ChangePhase(A,EAgriculturePhase::Idle);}
         }
         LastReason=TEXT("紧急地块插入，保留已执行覆盖");
@@ -947,8 +1096,8 @@ FString UAgricultureCoordinator::Describe() const
     }
     for(const auto& A:Airports) S+=FString::Printf(TEXT("机场 %d %s 占用 %d 排队 %d\n水 %.0f L 原液 %.1f L 废液 %.1f L\n"),A.Config.AirportID,
         A.Config.bEnabled ? TEXT("可用") : TEXT("停用"),A.OccupantID,A.Queue.Num(),A.Config.WaterLitres,A.Config.ConcentrateLitres,A.WasteLitres);
-    for(const auto& P:Plots) S+=FString::Printf(TEXT("地块 %d → UAV %d 覆盖 %.0f m² %s\n"),P.Config.Task.TaskID,P.AgentID,P.CoveredSquareMetres,
-        P.bCompleted ? TEXT("完成") : P.bFailed ? TEXT("不可行") : P.AgentID==INDEX_NONE ? TEXT("待分配") : TEXT("执行中"));
+    for(const auto& P:Plots) S+=FString::Printf(TEXT("地块 %d → %d 架 UAV 覆盖 %.0f m² %s\n"),P.Config.Task.TaskID,P.AgentIDs.Num(),P.CoveredSquareMetres,
+        P.bCompleted ? TEXT("完成") : P.bFailed ? TEXT("不可行") : P.AgentIDs.IsEmpty() ? TEXT("待分配") : TEXT("执行中"));
     return S+TEXT("最近调度：")+LastReason;
 }
 
@@ -962,6 +1111,7 @@ FString UAgricultureCoordinator::GetTelemetryJson() const
     for(const auto& A:Agents)
     {
         auto V=MakeShared<FJsonObject>();V->SetNumberField(TEXT("agentId"),A.AgentID);V->SetNumberField(TEXT("plotId"),A.PlotID);
+        V->SetNumberField(TEXT("sectionId"),A.SectionID);
         V->SetNumberField(TEXT("airportId"),A.AirportID);V->SetNumberField(TEXT("battery"),A.Battery);V->SetNumberField(TEXT("liquidLitres"),A.LiquidLitres);
         V->SetNumberField(TEXT("serviceSeconds"),A.PhaseSeconds);V->SetBoolField(TEXT("cleaned"),A.bCleaned);
         V->SetStringField(TEXT("serviceStage"),ServiceStage(A));
@@ -981,12 +1131,23 @@ FString UAgricultureCoordinator::GetTelemetryJson() const
     Root->SetArrayField(TEXT("airports"),Values);Values.Empty();
     for(const auto& P:Plots)
     {
-        auto V=MakeShared<FJsonObject>();V->SetNumberField(TEXT("taskId"),P.Config.Task.TaskID);V->SetNumberField(TEXT("agentId"),P.AgentID);
-        V->SetNumberField(TEXT("nextPoint"),P.NextPoint);V->SetNumberField(TEXT("stripCoveredCm"),P.StripCoveredCm);
+        auto V=MakeShared<FJsonObject>();V->SetNumberField(TEXT("taskId"),P.Config.Task.TaskID);TArray<TSharedPtr<FJsonValue>> Assigned;
+        for(int32 ID:P.AgentIDs) Assigned.Add(MakeShared<FJsonValueNumber>(ID));
+        V->SetArrayField(TEXT("agentIds"),Assigned);
         V->SetNumberField(TEXT("coveredSquareMetres"),P.CoveredSquareMetres);V->SetNumberField(TEXT("appliedLitres"),P.AppliedLitres);
         V->SetBoolField(TEXT("completed"),P.bCompleted);V->SetBoolField(TEXT("failed"),P.bFailed);Values.Add(MakeShared<FJsonValueObject>(V));
     }
-    Root->SetArrayField(TEXT("plots"),Values);
+    Root->SetArrayField(TEXT("plots"),Values);Values.Empty();
+    for(int32 I=0;I<Sections.Num();++I)
+    {
+        const auto& S=Sections[I];auto V=MakeShared<FJsonObject>();
+        V->SetNumberField(TEXT("sectionId"),I);V->SetNumberField(TEXT("plotId"),S.Config.Task.TaskID);
+        V->SetNumberField(TEXT("agentId"),S.AgentID);V->SetNumberField(TEXT("nextPoint"),S.NextPoint);
+        V->SetNumberField(TEXT("stripCoveredCm"),S.StripCoveredCm);V->SetNumberField(TEXT("coveredSquareMetres"),S.CoveredSquareMetres);
+        V->SetBoolField(TEXT("completed"),S.bCompleted);V->SetBoolField(TEXT("failed"),S.bFailed);
+        Values.Add(MakeShared<FJsonValueObject>(V));
+    }
+    Root->SetArrayField(TEXT("sections"),Values);
     FString Json;FJsonSerializer::Serialize(Root,TJsonWriterFactory<TCHAR,TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json));return Json;
 }
 

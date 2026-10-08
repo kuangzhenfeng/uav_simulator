@@ -84,6 +84,8 @@ struct FAgricultureAgentState
 {
     int32 AgentID = INDEX_NONE;
     int32 PlotID = INDEX_NONE;
+    int32 SectionID = INDEX_NONE;
+    int32 PlannedSupplyAirportID = INDEX_NONE;
     int32 AirportID = INDEX_NONE;
     EAgriculturePhase Phase = EAgriculturePhase::Idle;
     float Battery = 1;
@@ -111,6 +113,7 @@ struct FAgriculturePlotState
     TArray<FVector> StripPoints;
     int32 NextPoint = 0;
     int32 AgentID = INDEX_NONE;
+    TArray<int32> AgentIDs;
     FVector ResumePosition = FVector::ZeroVector;
     double CoveredSquareMetres = 0;
     double AppliedLitres = 0;

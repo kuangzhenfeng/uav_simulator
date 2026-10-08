@@ -4,6 +4,7 @@
 #include "../../MultiAgent/TaskMonitor.h"
 #include "../../Control/AttitudeController.h"
 #include "../../Planning/AStarPathPlanner.h"
+#include "../../Planning/TrajectoryOptimizer.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgricultureStripTest,"UAVSimulator.MultiAgent.Agriculture.Strips",UAV_TEST_FLAGS)
@@ -18,6 +19,88 @@ bool FAgricultureStripTest::RunTest(const FString&)
     TestEqual(TEXT("Second reverse strip"),Points[3].X,0.0);
     P.Boundary[2].X=3000;
     TestFalse(TEXT("Unsupported polygon fails explicitly"),UAgricultureCoordinator::BuildStrips(P,400,Points));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgriculturePartitionTest,"UAVSimulator.MultiAgent.Agriculture.PartitionCoverage",UAV_TEST_FLAGS)
+bool FAgriculturePartitionTest::RunTest(const FString&)
+{
+    FAgriculturePlotState P;P.Config.Task.TaskID=42;
+    P.Config.Boundary={FVector(0,0,0),FVector(6000,0,0),FVector(6000,6100,0),FVector(0,6100,0)};
+    TestTrue(TEXT("Build uneven-width field"),UAgricultureCoordinator::BuildStrips(P.Config,400,P.StripPoints));
+    auto Parts=UAgricultureCoordinator::PartitionPlot(P,4);
+    TestEqual(TEXT("Four concurrent sections"),Parts.Num(),4);
+    TArray<FVector> Joined;double Covered=0,Applied=0;
+    for(auto& Part:Parts)
+    {
+        TestEqual(TEXT("Parent identity retained"),Part.Config.Task.TaskID,42);
+        Joined.Append(Part.StripPoints);
+        float Liquid=50;
+        for(int32 I=1;I<Part.StripPoints.Num();I+=2)
+        {
+            Part.NextPoint=I;Part.StripCoveredCm=0;
+            const FVector Start=Part.StripPoints[I-1],End=Part.StripPoints[I],Mid=(Start+End)/2;
+            TestTrue(TEXT("First half recorded"),UAgricultureCoordinator::RecordSpraySegment(Part,Liquid,Start,Mid,100));
+            const double Before=Part.CoveredSquareMetres;
+            TestTrue(TEXT("Repeated segment accepted"),UAgricultureCoordinator::RecordSpraySegment(Part,Liquid,Start,Mid,100));
+            TestEqual(TEXT("No double coverage on resume"),Part.CoveredSquareMetres,Before);
+            TestTrue(TEXT("Second half recorded"),UAgricultureCoordinator::RecordSpraySegment(Part,Liquid,Mid,End,100));
+        }
+        Covered+=Part.CoveredSquareMetres;Applied+=Part.AppliedLitres;
+    }
+    TestTrue(TEXT("Every original strip owned exactly once"),Joined==P.StripPoints);
+    TestTrue(TEXT("All sections cover exact parent area"),FMath::IsNearlyEqual(Covered,3660.0,.01));
+    TestTrue(TEXT("Application volume matches parent area"),FMath::IsNearlyEqual(Applied,54.9,.01));
+    TestTrue(TEXT("Empty fleet does not partition"),UAgricultureCoordinator::PartitionPlot(P,0).IsEmpty());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgricultureSectionStateTest,"UAVSimulator.MultiAgent.Agriculture.SectionOwnership",UAV_TEST_FLAGS)
+bool FAgricultureSectionStateTest::RunTest(const FString&)
+{
+    auto* C=NewObject<UAgricultureCoordinator>();
+    FAgriculturePlotState P;P.Config.Task.TaskID=7;
+    P.Config.Boundary={FVector(0,0,0),FVector(6000,0,0),FVector(6000,6000,0),FVector(0,6000,0)};
+    UAgricultureCoordinator::BuildStrips(P.Config,400,P.StripPoints);
+    C->Plots.Add(P);C->Sections=UAgricultureCoordinator::PartitionPlot(P,2);
+    for(int32 I=0;I<2;++I)
+    {
+        FAgricultureAgentState A;A.AgentID=I;A.PlotID=7;A.SectionID=I;A.Phase=EAgriculturePhase::Spraying;
+        C->Agents.Add(A);C->Sections[I].AgentID=I;C->Sections[I].NextPoint=1;
+        C->Sections[I].StripCoveredCm=100+I;C->Sections[I].CoveredSquareMetres=6+I;
+    }
+    C->RefreshPlots();
+    TestEqual(TEXT("Two agents own the same field"),C->Plots[0].AgentIDs.Num(),2);
+    TestEqual(TEXT("Coverage aggregates sections"),C->Plots[0].CoveredSquareMetres,13.0);
+    C->Agents[0].Phase=EAgriculturePhase::Returning;
+    TestTrue(TEXT("Supply keeps section ownership"),C->Section(C->Agents[0])==&C->Sections[0]);
+    C->Fail(C->Agents[0],TEXT("Injected test failure"));C->RefreshPlots();
+    TestEqual(TEXT("Fault releases only its section"),C->Sections[0].AgentID,INDEX_NONE);
+    TestEqual(TEXT("Other section stays assigned"),C->Sections[1].AgentID,1);
+    TestEqual(TEXT("Fault preserves coverage cursor"),C->Sections[0].StripCoveredCm,100.f);
+    TestEqual(TEXT("Fault preserves aggregate progress"),C->Plots[0].CoveredSquareMetres,13.0);
+    C->Sections[0].AgentID=2;C->Agents[0].AgentID=2;C->Agents[0].PlotID=7;C->Agents[0].SectionID=0;
+    TestTrue(TEXT("Replacement owns existing checkpoint"),C->Section(C->Agents[0])==&C->Sections[0]);
+    C->Sections[0].bCompleted=true;C->RefreshPlots();
+    TestFalse(TEXT("One section cannot finish parent"),C->Plots[0].bCompleted);
+    C->Sections[1].bCompleted=true;C->RefreshPlots();
+    TestTrue(TEXT("All sections finish parent"),C->Plots[0].bCompleted);
+    C->Reset();TestTrue(TEXT("Reset clears all section reservations"),C->GetSections().IsEmpty());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgricultureDepartureTest,"UAVSimulator.MultiAgent.Agriculture.DescendingSupplyDeparture",UAV_TEST_FLAGS)
+bool FAgricultureDepartureTest::RunTest(const FString&)
+{
+    const FVector Position(-6593,-4098.3,989.1),Velocity(176.4,-31.4,-243.2);
+    FTrajectory Route;
+    TestTrue(TEXT("Return departure builds"),UAgricultureCoordinator::BuildSupplyDeparture(Position,Velocity,1500,150,Route));
+    TestTrue(TEXT("Descending return transition is dynamically feasible"),Route.bIsValid);
+    for(const auto& Point:Route.Points)
+    {
+        TestTrue(TEXT("Transition retains safe height"),Point.Position.Z>500);
+        TestTrue(TEXT("Transition respects acceleration"),Point.Acceleration.Size()<=151);
+    }
     return true;
 }
 

@@ -205,9 +205,9 @@ void SCooperationDashboard::BuildCards()
     {
         const int32 ID=State.ID;
         TSharedRef<SVerticalBox> Card=SNew(SVerticalBox);
-        Card->AddSlot().AutoHeight()[DynamicText([this,ID](){const auto* P=Plot(ID);return P ? FString::Printf(TEXT("地块 %d   ·   %s"),ID,P->bFailed ? TEXT("失败") : P->bCompleted ? TEXT("完成") : P->AgentID==INDEX_NONE ? TEXT("待分配") : TEXT("作业中")) : TEXT("—");},12)];
+        Card->AddSlot().AutoHeight()[DynamicText([this,ID](){const auto* P=Plot(ID);return P ? FString::Printf(TEXT("地块 %d   ·   %s"),ID,P->bFailed ? TEXT("失败") : P->bCompleted ? TEXT("完成") : P->AgentIDs.IsEmpty() ? TEXT("待分配") : TEXT("作业中")) : TEXT("—");},12)];
         Card->AddSlot().AutoHeight().Padding(0,6)[Progress([this,ID](){const auto* P=Plot(ID);return P ? P->Progress() : 0;},[](){return Green;})];
-        Card->AddSlot().AutoHeight()[DynamicText([this,ID](){const auto* P=Plot(ID);return P ? FString::Printf(TEXT("%.1f%%   %.0f / %.0f m²\n执行 UAV %s"),P->Progress()*100,P->Covered,P->Area,*ObjectID(P->AgentID)) : TEXT("—");},10,Muted)];
+        Card->AddSlot().AutoHeight()[DynamicText([this,ID](){const auto* P=Plot(ID);return P ? FString::Printf(TEXT("%.1f%%   %.0f / %.0f m²\n执行 UAV %s"),P->Progress()*100,P->Covered,P->Area,*P->AgentLabel()) : TEXT("—");},10,Muted)];
         AddCard(ECooperationObject::Plot,ID,Card);
     }
     if(Cards->NumSlots()==0) Cards->AddSlot().AutoHeight()[Text(TEXT("暂无对象"),11,Muted)];
@@ -248,7 +248,7 @@ void SCooperationDashboard::BuildDetails()
                 +SVerticalBox::Slot().AutoHeight().Padding(0,4)[Button(TEXT("清空清水库存"),[this](){AgricultureCommand(2);})]]];
     }
     else if(Data->Selection==ECooperationObject::Plot)
-        Details->AddSlot().AutoHeight()[DynamicText([this,ID](){const auto* P=Plot(ID);return P ? FString::Printf(TEXT("地块 %d\n已覆盖 %.0f / %.0f m²（%.1f%%）\n累计施药 %.1f L\n执行 UAV %s\n%s"),ID,P->Covered,P->Area,P->Progress()*100,P->AppliedLitres,*ObjectID(P->AgentID),P->bFailed ? TEXT("任务失败") : P->bCompleted ? TEXT("覆盖完成") : TEXT("尚未完成")) : TEXT("对象已移除");})];
+        Details->AddSlot().AutoHeight()[DynamicText([this,ID](){const auto* P=Plot(ID);return P ? FString::Printf(TEXT("地块 %d\n已覆盖 %.0f / %.0f m²（%.1f%%）\n累计施药 %.1f L\n执行 UAV %s\n%s"),ID,P->Covered,P->Area,P->Progress()*100,P->AppliedLitres,*P->AgentLabel(),P->bFailed ? TEXT("任务失败") : P->bCompleted ? TEXT("覆盖完成") : TEXT("尚未完成")) : TEXT("对象已移除");})];
     else Details->AddSlot().AutoHeight()[Text(TEXT("点击卡片或态势图中的飞机、机场、地块查看详情。"),11,Muted)];
 }
 

@@ -100,25 +100,28 @@ void FCooperationViewData::Capture(const ACooperationGameMode& Manager)
     for (const auto& State : Agriculture->GetPlots())
     {
         FCooperationPlotView View;
-        View.ID = State.Config.Task.TaskID; View.AgentID = State.AgentID;
+        View.ID = State.Config.Task.TaskID; View.AgentIDs = State.AgentIDs;
         View.Bounds = FBox(State.Config.Boundary);
         View.Area = View.Bounds.GetSize().X * View.Bounds.GetSize().Y / 10000;
         View.Covered = State.CoveredSquareMetres; View.AppliedLitres = State.AppliedLitres;
         View.bCompleted = State.bCompleted; View.bFailed = State.bFailed;
-        // 与 RecordSpraySegment 使用同一有效宽度，断点进度只延伸已覆盖部分。
-        const int32 StripCount = State.StripPoints.Num() / 2;
-        const float Width = StripCount > 0 ? View.Bounds.GetSize().Y / StripCount : 0;
-        for (int32 I = 0; I+1 < State.StripPoints.Num(); I += 2)
+        for(const auto& Section:Agriculture->GetSections()) if(Section.Config.Task.TaskID==View.ID)
         {
-            const FVector Start = State.StripPoints[I];
-            const FVector End = State.StripPoints[I+1];
-            const float Length = FVector::Dist(Start, End);
-            const float Completed = I+1 < State.NextPoint ? Length : I+1 == State.NextPoint ? State.StripCoveredCm : 0;
-            if (Completed <= 0 || Width <= 0) continue;
-            const FVector Tip = Start + (End-Start).GetSafeNormal() * FMath::Min(Completed, Length);
-            const double Z = View.Bounds.Min.Z + State.Config.CanopyHeightCm + 25;
-            View.Coverage.Add(FBox(FVector(FMath::Min(Start.X,Tip.X), Start.Y-Width/2, Z),
-                FVector(FMath::Max(Start.X,Tip.X), Start.Y+Width/2, Z+2)));
+            // 与 RecordSpraySegment 使用同一有效宽度，断点进度只延伸已覆盖部分。
+            const int32 StripCount = Section.StripPoints.Num() / 2;
+            const float Width = StripCount > 0 ? FBox(Section.Config.Boundary).GetSize().Y / StripCount : 0;
+            for (int32 I = 0; I+1 < Section.StripPoints.Num(); I += 2)
+            {
+                const FVector Start = Section.StripPoints[I];
+                const FVector End = Section.StripPoints[I+1];
+                const float Length = FVector::Dist(Start, End);
+                const float Completed = I+1 < Section.NextPoint ? Length : I+1 == Section.NextPoint ? Section.StripCoveredCm : 0;
+                if (Completed <= 0 || Width <= 0) continue;
+                const FVector Tip = Start + (End-Start).GetSafeNormal() * FMath::Min(Completed, Length);
+                const double Z = View.Bounds.Min.Z + Section.Config.CanopyHeightCm + 25;
+                View.Coverage.Add(FBox(FVector(FMath::Min(Start.X,Tip.X), Start.Y-Width/2, Z),
+                    FVector(FMath::Max(Start.X,Tip.X), Start.Y+Width/2, Z+2)));
+            }
         }
         Area += View.Area; Covered += View.Covered;
         CompletedPlots += View.bCompleted ? 1 : 0;
