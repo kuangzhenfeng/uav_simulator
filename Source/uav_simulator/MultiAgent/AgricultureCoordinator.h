@@ -35,6 +35,7 @@ public:
     const TArray<FAgricultureAgentState>& GetAgents() const { return Agents; }
     const TArray<FSupplyAirportState>& GetAirports() const { return Airports; }
     const TArray<FAgriculturePlotState>& GetPlots() const { return Plots; }
+    const FAgricultureConfig& GetConfig() const { return Config; }
     static bool BuildStrips(const FAgriculturePlot& Plot, float Height, TArray<FVector>& OutPoints);
     static FVector FindEmergencyLandingSite(const FVector& Position,const TArray<FAgriculturePlotState>& Fields,float ClearanceCm,
         const TArray<FObstacleInfo>& Obstacles={},float CollisionRadius=0);
