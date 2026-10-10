@@ -1,4 +1,5 @@
 #include "AgricultureCoordinator.h"
+#include "../Utility/Filter.h"
 #include "AgentManager.h"
 #include "TaskAllocator.h"
 #include "TaskMonitor.h"
@@ -17,7 +18,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "EngineUtils.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogAgriculture, Log, All);
+DEFINE_LOG_CATEGORY(LogAgriculture);
 
 UAgricultureCoordinator::UAgricultureCoordinator()
 {
@@ -26,8 +27,8 @@ UAgricultureCoordinator::UAgricultureCoordinator()
 
 void UAgricultureCoordinator::Reset()
 {
-    bCollectSupplyRequests=false;PendingSupplyRequests.Empty();
-    Agents.Empty(); Airports.Empty(); Plots.Empty(); Sections.Empty(); PreviousPositions.Empty();StatusMaterials.Empty();VisualSeconds=0;
+    bCollectSupplyRequests=false;PendingSupplyRequests.Empty();SupplySlots.Empty();
+    Agents.Empty(); Airports.Empty(); Plots.Empty(); Sections.Empty(); PreviousPositions.Empty();StatusMaterials.Empty();VisualSeconds=0;SupplyPlanTime=-1;AssignmentPlanTime=-1;
     Config = FAgricultureConfig(); ElapsedSeconds = 0; LogSeconds = 0; LastReason.Empty();
 }
 
@@ -198,8 +199,7 @@ int32 UAgricultureCoordinator::ChooseNearestAirport(const TArray<FSupplyAirportS
     for(int32 I=0;I<Stations.Num() && I<Distances.Num();++I)
     {
         const auto& S=Stations[I];
-        if(!S.Config.bEnabled || S.Config.WaterLitres<=0 || S.Config.ConcentrateLitres<=0 ||
-           S.WasteLitres>=S.Config.WasteCapacityLitres || !FMath::IsFinite(Distances[I]) || Distances[I]<0) continue;
+        if(!S.Config.bEnabled || !FMath::IsFinite(Distances[I]) || Distances[I]<0) continue;
         const float Wait=WaitingSeconds.IsValidIndex(I) ? WaitingSeconds[I] : (S.OccupantID==INDEX_NONE ? 0 : S.Config.ChargeSeconds)+S.Queue.Num()*S.Config.ChargeSeconds;
         const float Travel=TravelSeconds.IsValidIndex(I) ? TravelSeconds[I] : Distances[I]/Speed;
         if(!FMath::IsFinite(Travel) || !FMath::IsFinite(Wait) || Travel+Wait+Reserve>FlightSeconds) continue;
@@ -216,6 +216,12 @@ void UAgricultureCoordinator::Initialize(UScenario* S,AMultiAgentGameMode* GM)
     if(!S || !GM) return;
     Config=S->Agriculture;
     if(!Config.bEnabled) return;
+    if(!FMath::IsFinite(Config.LiquidDensityKgPerLitre) || Config.LiquidDensityKgPerLitre<=0 ||
+        !FMath::IsFinite(Config.BatteryFlightSeconds) || Config.BatteryFlightSeconds<=0)
+    {
+        Config.bEnabled=false;LastReason=TEXT("药液密度和空载续航必须为有限正值");
+        UE_LOG(LogAgriculture,Error,TEXT("[Agriculture] Invalid liquid density or reference endurance"));return;
+    }
     for(const auto& C:S->SupplyAirports) { FSupplyAirportState A; A.Config=C; Airports.Add(A); }
     for(const auto& C:S->Plots)
     {
@@ -227,7 +233,9 @@ void UAgricultureCoordinator::Initialize(UScenario* S,AMultiAgentGameMode* GM)
     {
         P->SetExternallyDriven(true);
         FAgricultureAgentState A; A.AgentID=P->GetAgentID(); A.Battery=Config.InitialBatteryFraction;
-        A.LiquidLitres=Config.InitialLiquidLitres; A.Recipe=TEXT("CropA");
+        const auto Spec=FUAVProductManager::GetModelSpec(P->GetModelID());
+        A.EmptyMassKg=Spec.Mass;A.PayloadLimitKg=Spec.MaxPayloadKg;
+        A.LiquidLitres=FMath::Clamp(Config.InitialLiquidLitres,0.f,FMath::Min(Config.TankCapacityLitres,Spec.MaxPayloadKg/FMath::Max(.001f,Config.LiquidDensityKgPerLitre))); A.Recipe=TEXT("CropA");
         for(auto& Station:Airports)
             if(FVector::Dist(P->GetUAVState().Position,Station.Config.DockPosition)<1)
             {
@@ -237,12 +245,16 @@ void UAgricultureCoordinator::Initialize(UScenario* S,AMultiAgentGameMode* GM)
             }
         Agents.Add(A);
         PreviousPositions.Add(A.AgentID,P->GetUAVState().Position);
-        P->UpdatePayloadMass(A.LiquidLitres);
+        P->UpdatePayloadMass(A.LiquidLitres*Config.LiquidDensityKgPerLitre);
     }
     for(const auto& P:Plots) Sections.Append(PartitionPlot(P,Agents.Num()));
     RefreshPlots();
     LastReason=TEXT("农业场景装配完成");
     UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] Initialized agents=%d airports=%d plots=%d"),Agents.Num(),Airports.Num(),Plots.Num());
+    for(const auto& Field:Plots)
+        UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] PlotSchedule Plot=%d Priority=%d Deadline=%.2f LatestFinish=%.2f Area=%.2f"),
+            Field.Config.Task.TaskID,int32(Field.Config.Task.Priority),Field.Config.Task.Deadline,Field.Config.Task.LatestFinish,
+            FBox(Field.Config.Boundary).GetSize().X*FBox(Field.Config.Boundary).GetSize().Y/10000);
 }
 
 bool UAgricultureCoordinator::RecordSpraySegment(FAgriculturePlotState& P,float& Liquid,
@@ -263,6 +275,14 @@ bool UAgricultureCoordinator::RecordSpraySegment(FAgriculturePlotState& P,float&
     P.StripCoveredCm+=Applied;P.CoveredSquareMetres+=Applied*Width/10000;
     P.AppliedLitres+=Applied*LitresPerCm;Liquid=FMath::Max(0.0f,Liquid-Applied*LitresPerCm);
     return true;
+}
+
+float UAgricultureCoordinator::DrainLiquid(FAgricultureAgentState& A,FSupplyAirportState& S,float Amount,float Target)
+{
+    if(!S.Config.bEnabled || Amount<=0 || Target<0) return 0;
+    const float Drained=FMath::Min(Amount,FMath::Min(FMath::Max(0.f,A.LiquidLitres-Target),
+        FMath::Max(0.f,S.Config.WasteCapacityLitres-S.WasteLitres)));
+    A.LiquidLitres-=Drained;S.WasteLitres+=Drained;return Drained;
 }
 
 float UAgricultureCoordinator::TransferLiquid(FAgricultureAgentState& A,FSupplyAirportState& S,
@@ -292,7 +312,10 @@ void UAgricultureCoordinator::ChangePhase(FAgricultureAgentState& A,EAgriculture
         A.AgentID,*UEnum::GetValueAsString(Phase),A.PlotID,A.AirportID,A.Battery,A.LiquidLitres);
     A.Phase=Phase; A.PhaseSeconds=0; A.DockStableSeconds=0; A.bRouteActive=false;A.RouteRetries=0;A.TransitStage=0;
     A.bWorkRouteActive=false;A.WorkStripEndTimes.Empty();A.WorkStartTime=0;
-    if(Phase==EAgriculturePhase::Servicing) A.bCleaned=false;
+    A.PlannedSupplyAirportID=INDEX_NONE;A.PlannedSupplyDelaySeconds=0;SupplyPlanTime=-1;
+    A.SupplyEntryTravelSeconds.Empty();
+    if(Phase==EAgriculturePhase::Idle || Phase==EAgriculturePhase::Failed) AssignmentPlanTime=-1;
+    if(Phase==EAgriculturePhase::Servicing) {A.bCleaned=false;A.ServiceLiquidTarget=-1;A.ServiceBatteryTarget=1;A.ServiceAirportTargetID=INDEX_NONE;A.ServiceDepartureNotBefore=0;A.ServicePlanTime=-1;A.bServiceCleanBeforeTransfer=false;}
 }
 
 bool UAgricultureCoordinator::FlyTo(FAgricultureAgentState& A,const FVector& Target,float Speed,const FVector& EndVelocity)
@@ -358,7 +381,7 @@ bool UAgricultureCoordinator::StartWorkRoute(FAgricultureAgentState& A,FAgricult
 
 bool UAgricultureCoordinator::CanService(const FSupplyAirportState& S) const
 {
-    if(!S.Config.bEnabled || S.Config.WaterLitres<=0 || S.Config.ConcentrateLitres<=0 || S.WasteLitres>=S.Config.WasteCapacityLitres) return false;
+    if(!S.Config.bEnabled) return false;
     const auto* Occupant=Agents.FindByPredicate([&S](const auto& A){return A.AgentID==S.OccupantID;});
     return !Occupant || (Occupant->Phase!=EAgriculturePhase::Completed && Occupant->Phase!=EAgriculturePhase::Failed && Occupant->PlotID!=INDEX_NONE);
 }
@@ -367,7 +390,7 @@ float UAgricultureCoordinator::EstimateWaitSeconds(const FSupplyAirportState& S,
 {
     const float Departure=Config.CruiseTimeFactor*(FMath::Max(0.0f,Config.TransitHeightCm-float(S.Config.DockPosition.Z))/200.0f+1000.0f/150.0f)+2*Config.RouteArrivalAllowanceSeconds;
     float Remaining=0;
-    if(const auto* A=Agents.FindByPredicate([&S](const auto& V){return V.AgentID==S.OccupantID;}))
+    if(const auto* A=Agents.FindByPredicate([&S,WaitingAgentID](const auto& V){return V.AgentID==S.OccupantID && V.AgentID!=WaitingAgentID;}))
     {
         if(A->Phase==EAgriculturePhase::Resuming || A->Phase==EAgriculturePhase::TakingOff)
         {
@@ -386,12 +409,20 @@ float UAgricultureCoordinator::EstimateWaitSeconds(const FSupplyAirportState& S,
         else
         {
             const auto* Field=Sections.IsValidIndex(A->SectionID) ? &Sections[A->SectionID] : nullptr;
-            const bool NeedsCleaning=!Field || A->Recipe!=Field->Config.Recipe || A->bCleaned;
+            // 估算占用者的服务时长时不再次估算队列，避免补给预测与等待预测相互递归。
+            const auto Plan=Field && A->ServiceLiquidTarget==-1 ? PlanDockService(*A,*Field,S,false) : FAgricultureServicePlan();
+            const bool LocalService=Field && (A->ServiceLiquidTarget>=0 || (A->ServiceLiquidTarget==-1 && Plan.LiquidLitres>=0));
+            const bool SourceCleaning=Field && (A->bServiceCleanBeforeTransfer || (A->ServiceLiquidTarget==-1 && Plan.bCleanBeforeTransfer));
+            const bool NeedsCleaning=(LocalService || SourceCleaning) && (A->Recipe!=Field->Config.Recipe || A->bCleaned);
             const bool FlushPending=NeedsCleaning && !A->bCleaned;
-            const float Liquid=Field ? (FlushPending ? Config.TankCapacityLitres : Config.TankCapacityLitres-A->LiquidLitres) : 0;
-            const float Prep=S.Config.MixSeconds+(NeedsCleaning ? S.Config.CleanSeconds : 0);
+            const float TargetLiquid=Field ? (A->ServiceLiquidTarget>=0 ? A->ServiceLiquidTarget : A->ServiceLiquidTarget==-1 ? Plan.LiquidLitres : 0) : 0;
+            const float TargetBattery=Field ? (A->ServiceLiquidTarget!=-1 ? A->ServiceBatteryTarget : Plan.BatteryFraction) : 1;
+            const float Liquid=Field ? FMath::Max(0.f,TargetLiquid-(FlushPending ? 0 : A->LiquidLitres)) : 0;
+            const float Drain=Field && !FlushPending && (A->ServiceLiquidTarget>=0 || (A->ServiceLiquidTarget==-1 && Plan.LiquidLitres>=0)) ?
+                FMath::Max(0.f,A->LiquidLitres-TargetLiquid) : 0;
+            const float Prep=LocalService ? S.Config.MixSeconds+(NeedsCleaning ? S.Config.CleanSeconds : 0) : SourceCleaning ? S.Config.CleanSeconds : 0;
             const float Elapsed=A->Phase==EAgriculturePhase::Servicing ? A->PhaseSeconds : 0;
-            const float LiquidTime=FMath::Max(0.0f,Prep-Elapsed)+Liquid/FMath::Max(.001f,S.Config.RefillLitresPerMinute/60);
+            const float LiquidTime=FMath::Max(0.0f,Prep-Elapsed)+(Liquid+Drain)/FMath::Max(.001f,S.Config.RefillLitresPerMinute/60);
             float Approach=A->Phase==EAgriculturePhase::Servicing ? 0 : Config.AirportApproachSeconds;
             if(const auto* P=Pawn(A->AgentID))
             {
@@ -415,26 +446,54 @@ float UAgricultureCoordinator::EstimateWaitSeconds(const FSupplyAirportState& S,
                     Approach=(Active ? Route : Config.CruiseTimeFactor*FVector::Dist(P->GetUAVState().Position,Target)/30.0f+Config.RouteArrivalAllowanceSeconds)+FMath::Max(0.0f,Config.DockStableSeconds-A->DockStableSeconds);
                 }
             }
-            const float ChargeTime=FMath::Min(1.0f,1-A->Battery+Approach/Config.BatteryFlightSeconds)*S.Config.ChargeSeconds;
+            const float ChargeTime=FMath::Clamp(TargetBattery-A->Battery+Approach/FlightSeconds(*A),0.f,1.f)*S.Config.ChargeSeconds;
             Remaining=Approach+FMath::Max(ChargeTime,LiquidTime)+Departure;
+            Remaining=FMath::Max(Remaining,float(FMath::Max(0.0,A->ServiceDepartureNotBefore-ElapsedSeconds))+Departure);
         }
     }
-    const int32 Ahead=WaitingAgentID==INDEX_NONE ? S.Queue.Num() : FMath::Max(0,S.Queue.Find(WaitingAgentID));
-    Remaining+=Ahead*(S.Config.ChargeSeconds+Config.AirportApproachSeconds+Departure);
+    const int32 QueueIndex=S.Queue.Find(WaitingAgentID);
+    const int32 Ahead=QueueIndex==INDEX_NONE ? S.Queue.Num() : QueueIndex;
+    const int32 StationIndex=Airports.IndexOfByPredicate([&S](const auto& V){return V.Config.AirportID==S.Config.AirportID;});
+    for(int32 I=0;I<Ahead;++I)
+    {
+        const auto* Queued=Agents.FindByPredicate([&S,I](const auto& V){return V.AgentID==S.Queue[I];});
+        if(!Queued) {Remaining+=S.Config.ChargeSeconds+Config.AirportApproachSeconds+Departure;continue;}
+        const float Travel=Queued->SupplyTravelSeconds.IsValidIndex(StationIndex) && Queued->SupplyTravelSeconds[StationIndex]<MAX_FLT ?
+            Queued->SupplyTravelSeconds[StationIndex] : Config.AirportApproachSeconds;
+        const float ApproachStart=FMath::Max(0.f,Travel-Config.AirportApproachSeconds);
+        const float Holding=FMath::Max(0.f,Remaining-ApproachStart);
+        auto Arriving=*Queued;Arriving.Battery=FMath::Max(0.f,Queued->Battery-(Travel+Holding)/FlightSeconds(*Queued));
+        const auto* Field=Sections.IsValidIndex(Queued->SectionID) ? &Sections[Queued->SectionID] : nullptr;
+        const auto Plan=Field ? PlanDockService(Arriving,*Field,S,false) : FAgricultureServicePlan();
+        const bool Cleaning=Field && (Plan.LiquidLitres>=0 || Plan.bCleanBeforeTransfer) && Arriving.Recipe!=Field->Config.Recipe;
+        const float TargetBattery=Field && Plan.AirportID!=INDEX_NONE ? Plan.BatteryFraction : 1;
+        const float Fill=Field && Plan.LiquidLitres>=0 ? FMath::Max(0.f,Plan.LiquidLitres-(Cleaning ? 0 : Arriving.LiquidLitres)) : 0;
+        const float Drain=Field && !Cleaning && Plan.LiquidLitres>=0 ? FMath::Max(0.f,Arriving.LiquidLitres-Plan.LiquidLitres) : 0;
+        const float Preparation=Field && Plan.LiquidLitres>=0 ? S.Config.MixSeconds+(Cleaning ? S.Config.CleanSeconds : 0) : Plan.bCleanBeforeTransfer ? S.Config.CleanSeconds : 0;
+        const float Service=FMath::Max((TargetBattery-Arriving.Battery)*S.Config.ChargeSeconds,
+            Preparation+(Fill+Drain)/FMath::Max(.001f,S.Config.RefillLitresPerMinute/60));
+        // 排队飞机到达进近区后才能占用泊位，充电和加液并行；不假定每架都从零充满。
+        Remaining=FMath::Max(Remaining,ApproachStart)+
+            Config.AirportApproachSeconds+Service+Departure;
+    }
     return FMath::Max(0.0f,Remaining-ArrivalSeconds);
 }
 
 FString UAgricultureCoordinator::ServiceStage(const FAgricultureAgentState& A) const
 {
     if(A.Phase!=EAgriculturePhase::Servicing) return TEXT("");
+    if(A.ServiceLiquidTarget<-1 && !A.bServiceCleanBeforeTransfer) return TEXT("充电/改降");
+    if(A.ServiceLiquidTarget>=0 && A.LiquidLitres>A.ServiceLiquidTarget+.01f) return TEXT("残液减载/充电");
     const auto* S=Airports.FindByPredicate([&A](const auto& V){return V.Config.AirportID==A.AirportID;});
     if(!S) return TEXT("无服务机场");
     const auto* P=Sections.IsValidIndex(A.SectionID) ? &Sections[A.SectionID] : nullptr;
-    const bool Cleaning=!P || A.bCleaned || A.Recipe!=P->Config.Recipe;
+    if(!P) return A.Battery<.999f ? TEXT("充电") : TEXT("服务完成");
+    const bool Cleaning=A.bCleaned || A.Recipe!=P->Config.Recipe;
     if(Cleaning && !A.bCleaned) return TEXT("清洗/充电");
+    if(A.ServiceLiquidTarget<-1) return TEXT("充电/改降");
     if(A.PhaseSeconds<S->Config.MixSeconds+(Cleaning ? S->Config.CleanSeconds : 0)) return TEXT("配液/充电");
-    if(P && A.LiquidLitres<Config.TankCapacityLitres-.01f) return TEXT("加液/充电");
-    return A.Battery<.999f ? TEXT("充电") : TEXT("服务完成");
+    if(P && A.LiquidLitres<(A.ServiceLiquidTarget>=0 ? A.ServiceLiquidTarget : Config.TankCapacityLitres)-.01f) return TEXT("加液/充电");
+    return A.Battery<A.ServiceBatteryTarget-.001f ? TEXT("充电") : TEXT("服务完成");
 }
 
 double UAgricultureCoordinator::RemainingWorkSeconds(const FAgriculturePlotState& Part,double& Liquid) const
@@ -452,50 +511,10 @@ double UAgricultureCoordinator::RemainingWorkSeconds(const FAgriculturePlotState
     return Length/FMath::Max(1.f,Config.SpraySpeedCm)+Turns*(2*Headland/FMath::Max(1.f,Config.SpraySpeedCm)+PI*Width/FMath::Max(1.f,Config.SpraySpeedCm));
 }
 
-double UAgricultureCoordinator::EstimateSectionCost(const FAgricultureAgentState& A,const FVector& Position,const FAgriculturePlotState& Part) const
-{
-    if(Part.Config.Task.RequiredCapabilities!=0 || Part.Config.Task.RequiredPayload>Config.TankCapacityLitres) return DBL_MAX;
-    const int32 FirstEnd=Part.NextPoint%2==0 ? Part.NextPoint+1 : Part.NextPoint;
-    if(!Part.StripPoints.IsValidIndex(FirstEnd)) return DBL_MAX;
-    const FVector Direction=(Part.StripPoints[FirstEnd]-Part.StripPoints[FirstEnd-1]).GetSafeNormal();
-    const FVector Entry=Part.StripPoints[FirstEnd-1]+Direction*Part.StripCoveredCm;
-    const FVector End=Part.StripPoints.Last();
-    double Liquid=0;const double Work=RemainingWorkSeconds(Part,Liquid);
-    const double Cruise=Config.CruiseTimeFactor/FMath::Max(1.f,FMath::Min(Config.TransitSpeedCm,400.f));
-    const double Travel=FVector::Dist(Position,Entry)*Cruise;
-    double Return=DBL_MAX;
-    for(const auto& Station:Airports) if(CanService(Station) || Station.OccupantID==A.AgentID)
-        if(Station.Config.bEnabled && Station.Config.WaterLitres>0 && Station.Config.ConcentrateLitres>0 && Station.WasteLitres<Station.Config.WasteCapacityLitres)
-            Return=FMath::Min(Return,FVector::Dist(End,Station.Config.DockPosition)*Cruise+Config.AirportApproachSeconds);
-    if(Return==DBL_MAX) return DBL_MAX;
-    const double Reserve=Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds;
-    const bool NeedsSupply=A.Recipe!=Part.Config.Recipe || A.LiquidLitres<FMath::Min(double(Config.TankCapacityLitres),Liquid+1) ||
-        A.Battery*Config.BatteryFlightSeconds<Travel+Work+Return+Reserve;
-    double Cost=Travel+Work;
-    if(NeedsSupply)
-    {
-        double ViaSupply=DBL_MAX;
-        for(const auto& Station:Airports)
-        {
-            const bool AtOwnBerth=Station.OccupantID==A.AgentID && A.AirportID==Station.Config.AirportID;
-            if((!CanService(Station) && !AtOwnBerth) || !Station.Config.bEnabled || Station.Config.WaterLitres<=0 || Station.Config.ConcentrateLitres<=0 || Station.WasteLitres>=Station.Config.WasteCapacityLitres) continue;
-            const double ToSupply=AtOwnBerth ? 0 : FVector::Dist(Position,Station.Config.DockPosition)*Cruise+Config.AirportApproachSeconds;
-            const double Wait=AtOwnBerth ? 0 : EstimateWaitSeconds(Station,FMath::Max(0.0,ToSupply-Config.AirportApproachSeconds));
-            if(!AtOwnBerth && ToSupply+Wait+Reserve>A.Battery*Config.BatteryFlightSeconds) continue;
-            const bool Cleaning=A.Recipe!=Part.Config.Recipe;
-            const double Fill=Config.TankCapacityLitres-(Cleaning ? 0 : A.LiquidLitres);
-            const double LiquidTime=Station.Config.MixSeconds+(Cleaning ? Station.Config.CleanSeconds : 0)+Fill/FMath::Max(.001f,Station.Config.RefillLitresPerMinute/60);
-            const double Charge=FMath::Min(1.0,1-A.Battery+ToSupply/Config.BatteryFlightSeconds)*Station.Config.ChargeSeconds;
-            ViaSupply=FMath::Min(ViaSupply,ToSupply+Wait+FMath::Max(LiquidTime,Charge)+FVector::Dist(Station.Config.DockPosition,Entry)*Cruise+Work);
-        }
-        Cost=ViaSupply;
-    }
-    const double StartDelay=FMath::Max(0.0,double(Part.Config.Task.EarliestStart)-ElapsedSeconds);
-    return Cost<DBL_MAX && ElapsedSeconds+StartDelay+Cost<=FMath::Min(Part.Config.Task.Deadline,Part.Config.Task.LatestFinish) ? StartDelay+Cost : DBL_MAX;
-}
-
 void UAgricultureCoordinator::AssignPlots()
 {
+    if(AssignmentPlanTime>=0 && ElapsedSeconds-AssignmentPlanTime<.5f) return;
+    AssignmentPlanTime=ElapsedSeconds;
     TArray<FAgricultureAgentState*> Available;
     for(auto& A:Agents) if((A.Phase==EAgriculturePhase::Idle || A.Phase==EAgriculturePhase::Completed) && A.PlotID==INDEX_NONE && Pawn(A.AgentID)) Available.Add(&A);
     if(Available.IsEmpty()) return;
@@ -503,35 +522,45 @@ void UAgricultureCoordinator::AssignPlots()
     for(int32 I=0;I<Sections.Num();++I) if(!Sections[I].bCompleted && !Sections[I].bFailed && Sections[I].AgentID==INDEX_NONE) Candidates.Add(I);
     if(Candidates.IsEmpty()) return;
     Candidates.Sort([this](int32 L,int32 R){return Sections[L].Config.Task.Priority>Sections[R].Config.Task.Priority;});
-    const auto Cutoff=Sections[Candidates[FMath::Min(Available.Num(),Candidates.Num())-1]].Config.Task.Priority;
-    Candidates.RemoveAll([&](int32 I){return Sections[I].Config.Task.Priority<Cutoff;});
+    const double PlanningStarted=FPlatformTime::Seconds();
     TArray<TArray<double>> Costs;double Maximum=1;
-    for(const auto* A:Available)
+    TArray<TArray<FAgriculturePlotState>> Orders;
+    for(auto* A:Available)
     {
-        TArray<double> Row;
+        TArray<double> Row;TArray<FAgriculturePlotState> OrderedRow;
+        auto* Aircraft=Pawn(A->AgentID);const auto* Dock=Airport(A->AirportID);
+        const bool AtOwnDock=Aircraft->IsParked() && Dock && Dock->OccupantID==A->AgentID;
+        if(AtOwnDock) RefreshSupplyRoutes(*A,true);
         for(int32 I:Candidates)
         {
-            const double Cost=EstimateSectionCost(*A,Pawn(A->AgentID)->GetUAVState().Position,Sections[I]);
+            const FVector Position=Pawn(A->AgentID)->GetUAVState().Position;
+            double Cost=DBL_MAX;
+            OrderedRow.Add(ChooseWorkOrder(*A,Position,Sections[I],&Cost));
+            if(Cost<DBL_MAX && AtOwnDock && PlanDockService(*A,OrderedRow.Last(),*Dock).AirportID==INDEX_NONE) Cost=DBL_MAX;
             Row.Add(Cost);if(Cost<DBL_MAX) Maximum=FMath::Max(Maximum,Cost);
         }
-        Costs.Add(MoveTemp(Row));
+        Costs.Add(MoveTemp(Row));Orders.Add(MoveTemp(OrderedRow));
     }
-    // 优先级是硬调度顺序；同级分区通过联合匹配减少总转场、作业和服务耗时。
+    // 先保留所有可执行候选，避免不可行的高优先级任务阻塞机队；匹配数量相同时优先高优先级任务。
     const double PriorityPenalty=(2*Available.Num()+1)*Maximum;
     for(auto& Row:Costs) for(int32 J=0;J<Candidates.Num();++J) if(Row[J]<DBL_MAX)
         Row[J]+=PriorityPenalty*(int32(ETaskPriority::Critical)-int32(Sections[Candidates[J]].Config.Task.Priority));
-    const auto Assigned=UTaskAllocator::MatchMinimumCost(Costs);
+    const auto Assigned=UTaskAllocator::MatchMinimumMakespan(Costs);
+    const double PlanningMilliseconds=(FPlatformTime::Seconds()-PlanningStarted)*1000;
+    if(PlanningMilliseconds>50)
+        UE_LOG_THROTTLE(10.0,LogAgriculture,Log,TEXT("[Agriculture] AssignmentPlanning FarmTime=%.2f Milliseconds=%.2f Available=%d Candidates=%d"),ElapsedSeconds,PlanningMilliseconds,Available.Num(),Candidates.Num());
     for(int32 I=0;I<Available.Num();++I) if(Assigned[I]!=INDEX_NONE)
     {
         auto& A=*Available[I];const int32 SectionIndex=Candidates[Assigned[I]];auto& Part=Sections[SectionIndex];
+        Part=MoveTemp(Orders[I][Assigned[I]]);
         Part.AgentID=A.AgentID;A.PlotID=Part.Config.Task.TaskID;A.SectionID=SectionIndex;
         UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] SectionAssigned Plot=%d Section=%d Agent=%d EstimatedSeconds=%.2f"),A.PlotID,SectionIndex,A.AgentID,
             Costs[I][Assigned[I]]-PriorityPenalty*(int32(ETaskPriority::Critical)-int32(Part.Config.Task.Priority)));
-        auto* P=Pawn(A.AgentID);auto* Station=Airport(A.AirportID);double Liquid=0;
-        const double Work=RemainingWorkSeconds(Part,Liquid);
-        const bool SupplyFirst=A.Recipe!=Part.Config.Recipe || A.LiquidLitres<FMath::Min(double(Config.TankCapacityLitres),Liquid+1) ||
-            A.Battery*Config.BatteryFlightSeconds<Work+Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds;
-        if(P->IsParked() && Station && Station->OccupantID==A.AgentID && Station->Config.bEnabled && Station->Config.WaterLitres>0 && Station->Config.ConcentrateLitres>0 && SupplyFirst)
+        auto* P=Pawn(A.AgentID);auto* Station=Airport(A.AirportID);
+        const auto Service=Station ? PlanDockService(A,Part,*Station) : FAgricultureServicePlan();
+        const bool SupplyFirst=A.Recipe!=Part.Config.Recipe || (Station && (Service.LiquidLitres<0 ||
+            FMath::Abs(A.LiquidLitres-Service.LiquidLitres)>.01f || A.Battery<Service.BatteryFraction-.001f));
+        if(P->IsParked() && Station && Station->OccupantID==A.AgentID && Station->Config.bEnabled && SupplyFirst)
             ChangePhase(A,EAgriculturePhase::Servicing);
         else ChangePhase(A,P->IsParked() ? EAgriculturePhase::TakingOff : EAgriculturePhase::Transit);
     }
@@ -542,6 +571,22 @@ void UAgricultureCoordinator::ReleaseAirport(FAgricultureAgentState& A)
     if(auto* S=Airport(A.AirportID))
     { S->Queue.Remove(A.AgentID); if(S->OccupantID==A.AgentID) S->OccupantID=INDEX_NONE; }
     A.AirportID=INDEX_NONE;
+}
+
+void UAgricultureCoordinator::DeferDockedSection(FAgricultureAgentState& A)
+{
+    if(auto* Field=Section(A))
+    {
+        UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] SectionDeferred Agent=%d Plot=%d Section=%d Airport=%d Reason=NoFeasibleDockService"),
+            A.AgentID,A.PlotID,A.SectionID,A.AirportID);
+        Field->AgentID=INDEX_NONE;
+    }
+    // 不可行的是当前任务与补给组合；保留地面泊位、药液和断点，健康飞机充电后重新参与调度。
+    A.PlotID=INDEX_NONE;A.SectionID=INDEX_NONE;A.ServiceLiquidTarget=-1;A.ServiceBatteryTarget=1;
+    A.ServiceAirportTargetID=INDEX_NONE;A.ServiceDepartureNotBefore=0;A.ServicePlanTime=-1;
+    A.bServiceCleanBeforeTransfer=false;A.PlannedSupplyAirportID=INDEX_NONE;A.PlannedSupplyDelaySeconds=0;
+    AssignmentPlanTime=-1;SupplyPlanTime=-1;
+    LastReason=TEXT("当前补给组合不可行，保留覆盖断点并重新分配任务");
 }
 
 void UAgricultureCoordinator::Fail(FAgricultureAgentState& A,const FString& Reason)
@@ -577,7 +622,8 @@ void UAgricultureCoordinator::Fail(FAgricultureAgentState& A,const FString& Reas
 
 void UAgricultureCoordinator::RefreshSupplyRoutes(FAgricultureAgentState& A,bool Force)
 {
-    if(!Force && A.SupplyForecastTime>=0 && ElapsedSeconds-A.SupplyForecastTime<.5f) return;
+    if(!Force && A.SupplyForecastTime>=0 && ElapsedSeconds-A.SupplyForecastTime<.5f &&
+        (A.Phase!=EAgriculturePhase::Transit || A.SupplyEntryTravelSeconds.Num()==Airports.Num())) return;
     AUAVPawn* P=Pawn(A.AgentID);if(!P) return;
     if(!SupplyPlanner) SupplyPlanner=NewObject<UAStarPathPlanner>(this);
     TArray<FObstacleInfo> Obstacles=P->GetObstacleManager()->GetAllObstacles();
@@ -586,13 +632,25 @@ void UAgricultureCoordinator::RefreshSupplyRoutes(FAgricultureAgentState& A,bool
         return Other && (Other==P || (!Other->IsParked() && !Other->IsCrashed()));
     });
     SupplyPlanner->SetObstacles(Obstacles);
-    A.SupplyPathLengths.Empty();A.SupplyTravelSeconds.Empty();
+    A.SupplyPathLengths.Empty();A.SupplyTravelSeconds.Empty();A.SupplyEntryTravelSeconds.Empty();
     const FVector Position=P->GetUAVState().Position;
     const FVector Lift=SupplyDepartureTarget(Position,P->GetUAVState().Velocity,Config.TransitHeightCm,Manager->TaskExecutionAccelerationCm);
-    const float BrakeTime=1.9f*P->GetUAVState().Velocity.Size()/FMath::Max(1.0f,Manager->TaskExecutionAccelerationCm);
-    const FVector Stop=Position+P->GetUAVState().Velocity*(BrakeTime*.5f);
-    const float LiftDistance=FVector::Dist(Position,Stop)+FMath::Abs(Config.TransitHeightCm-float(Stop.Z));
     const bool LiftClear=!SupplyPlanner->CheckLineCollision(Position,Lift,P->GetCollisionRadius());
+    const auto* Field=A.Phase==EAgriculturePhase::Transit ? Section(A) : nullptr;
+    FVector Entry=Position,EntryVelocity=FVector::ZeroVector,EntryLift=Position;
+    bool EntryClear=false;
+    if(Field)
+    {
+        const int32 End=Field->NextPoint%2==0 ? Field->NextPoint+1 : Field->NextPoint;
+        if(Field->StripPoints.IsValidIndex(End))
+        {
+            const FVector Direction=(Field->StripPoints[End]-Field->StripPoints[End-1]).GetSafeNormal();
+            Entry=Field->StripPoints[End-1]+Direction*Field->StripCoveredCm;
+            EntryVelocity=Direction*Config.SpraySpeedCm;
+            EntryLift=SupplyDepartureTarget(Entry,EntryVelocity,Config.TransitHeightCm,Manager->TaskExecutionAccelerationCm);
+            EntryClear=!SupplyPlanner->CheckLineCollision(Entry,EntryLift,P->GetCollisionRadius());
+        }
+    }
     for(const auto& S:Airports)
     {
         FVector Goal=S.Config.DockPosition;Goal.Z=Config.TransitHeightCm;
@@ -610,19 +668,36 @@ void UAgricultureCoordinator::RefreshSupplyRoutes(FAgricultureAgentState& A,bool
         if(!Path.IsEmpty())
         {
             Distance=0;for(int32 I=1;I<Path.Num();++I) Distance+=FVector::Dist(Path[I-1],Path[I]);
-            const float CurrentLeg=Retained ? FMath::Max(0.0f,Tracker->GetTrajectory().TotalDuration-Tracker->GetCurrentTime())+Config.RouteArrivalAllowanceSeconds :
-                Config.CruiseTimeFactor*LiftDistance/150.0f+(LiftDistance>Config.ArrivalRadiusCm ? Config.RouteArrivalAllowanceSeconds : 0);
-            Travel=CurrentLeg+Config.CruiseTimeFactor*Distance/Config.TransitSpeedCm+(Distance>1 ? Config.RouteArrivalAllowanceSeconds : 0)+Config.AirportApproachSeconds+1;
+            if(Retained)
+                Travel=FMath::Max(0.0f,Tracker->GetTrajectory().TotalDuration-Tracker->GetCurrentTime())+Config.RouteArrivalAllowanceSeconds+
+                    Config.CruiseTimeFactor*Distance/Config.TransitSpeedCm+(Distance>1 ? Config.RouteArrivalAllowanceSeconds : 0)+Config.AirportApproachSeconds+1;
+            else Travel=float(SupplyTravelTime(Position,P->GetUAVState().Velocity,Distance,Manager->TaskExecutionAccelerationCm));
+            const float BrakeTime=1.9f*P->GetUAVState().Velocity.Size()/FMath::Max(1.0f,Manager->TaskExecutionAccelerationCm);
+            const FVector Stop=Position+P->GetUAVState().Velocity*(BrakeTime*.5f);
+            const float LiftDistance=FVector::Dist(Position,Stop)+FMath::Abs(Config.TransitHeightCm-float(Stop.Z));
             Distance+=Retained ? FVector::Dist(Position,Start) : LiftDistance;
         }
         A.SupplyPathLengths.Add(Distance);A.SupplyTravelSeconds.Add(Travel);
+        float EntryTravel=MAX_FLT;
+        if(EntryClear)
+        {
+            TArray<FVector> EntryPath;
+            if(!SupplyPlanner->CheckLineCollision(EntryLift,Goal,P->GetCollisionRadius())) EntryPath={EntryLift,Goal};
+            else SupplyPlanner->PlanPath(EntryLift,Goal,EntryPath);
+            if(!EntryPath.IsEmpty())
+            {
+                double EntryDistance=0;for(int32 I=1;I<EntryPath.Num();++I) EntryDistance+=FVector::Dist(EntryPath[I-1],EntryPath[I]);
+                EntryTravel=float(SupplyTravelTime(Entry,EntryVelocity,EntryDistance,Manager->TaskExecutionAccelerationCm));
+            }
+        }
+        A.SupplyEntryTravelSeconds.Add(EntryTravel);
     }
     A.SupplyForecastTime=ElapsedSeconds;
 }
 
 bool UAgricultureCoordinator::RedirectSupplyReservation(FAgricultureAgentState& Request,int32 ExcludedAirportID)
 {
-    const float Reserve=Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds;
+    const float Reserve=Config.BatteryReserveFraction*FlightSeconds(Request)+Config.SupplyTimeBufferSeconds;
     for(int32 I=0;I<Airports.Num();++I)
     {
         auto& Station=Airports[I];if(Station.Config.AirportID==ExcludedAirportID) continue;
@@ -638,8 +713,8 @@ bool UAgricultureCoordinator::RedirectSupplyReservation(FAgricultureAgentState& 
             if(Released.OccupantID==Other.AgentID) Released.OccupantID=INDEX_NONE;
             if(!CanService(Released)) continue;
             const float Travel=Request.SupplyTravelSeconds[I];
-            const float Wait=EstimateWaitSeconds(Released,FMath::Max(0.0f,Travel-Config.AirportApproachSeconds));
-            if(ChooseNearestAirport({Released},{Request.SupplyPathLengths[I]},Request.Battery*Config.BatteryFlightSeconds,
+            const float Wait=EstimateWaitSeconds(Released,FMath::Max(0.0f,Travel-Config.AirportApproachSeconds),Request.AgentID);
+            if(ChooseNearestAirport({Released},{Request.SupplyPathLengths[I]},Request.Battery*FlightSeconds(Request),
                 Config.TransitSpeedCm,Reserve,{Travel},{Wait})==INDEX_NONE) continue;
             RefreshSupplyRoutes(Other,true);
             TArray<FSupplyAirportState> Alternatives=Airports;TArray<float> Waiting;
@@ -648,8 +723,8 @@ bool UAgricultureCoordinator::RedirectSupplyReservation(FAgricultureAgentState& 
                 if(J==I || !CanService(Alternatives[J])) Alternatives[J].Config.bEnabled=false;
                 Waiting.Add(EstimateWaitSeconds(Alternatives[J],FMath::Max(0.0f,Other.SupplyTravelSeconds[J]-Config.AirportApproachSeconds),Other.AgentID));
             }
-            const int32 Alternate=ChooseNearestAirport(Alternatives,Other.SupplyPathLengths,Other.Battery*Config.BatteryFlightSeconds,
-                Config.TransitSpeedCm,Reserve,Other.SupplyTravelSeconds,Waiting);
+            const int32 Alternate=ChooseNearestAirport(Alternatives,Other.SupplyPathLengths,Other.Battery*FlightSeconds(Other),
+                Config.TransitSpeedCm,Config.BatteryReserveFraction*FlightSeconds(Other)+Config.SupplyTimeBufferSeconds,Other.SupplyTravelSeconds,Waiting);
             if(Alternate==INDEX_NONE) continue;
             ReleaseAirport(Other);Other.AirportID=Airports[Alternate].Config.AirportID;Other.RequestTime=ElapsedSeconds;
             Airports[Alternate].Queue.AddUnique(Other.AgentID);ChangePhase(Other,EAgriculturePhase::Returning);
@@ -674,20 +749,26 @@ void UAgricultureCoordinator::RequestSupply(FAgricultureAgentState& A,int32 Excl
     TArray<float> WaitingTimes;
     for(int32 I=0;I<Airports.Num();++I)
     {
-        const float Wait=EstimateWaitSeconds(Airports[I],FMath::Max(0.0f,TravelTimes[I]-Config.AirportApproachSeconds));
+        const float Wait=EstimateWaitSeconds(Airports[I],FMath::Max(0.0f,TravelTimes[I]-Config.AirportApproachSeconds),A.AgentID);
         WaitingTimes.Add(Wait);
         UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] SupplyCandidate Agent=%d Airport=%d PathCm=%.0f Travel=%.1f Wait=%.1f Reserve=%.1f Buffer=%.1f Available=%.1f Healthy=%d"),
             A.AgentID,Airports[I].Config.AirportID,Distances[I],TravelTimes[I],Wait,
-            Config.BatteryReserveFraction*Config.BatteryFlightSeconds,Config.SupplyTimeBufferSeconds,A.Battery*Config.BatteryFlightSeconds,CanService(Airports[I]) ? 1 : 0);
+            Config.BatteryReserveFraction*FlightSeconds(A),Config.SupplyTimeBufferSeconds,A.Battery*FlightSeconds(A),CanService(Airports[I]) ? 1 : 0);
     }
     TArray<FSupplyAirportState> Candidates=Airports;
     for(auto& S:Candidates) if(S.Config.AirportID==ExcludedAirportID || !CanService(S)) S.Config.bEnabled=false;
+    const auto LandingCandidates=Candidates;
+    const auto* Remaining=Section(A);
+    for(auto& S:Candidates)
+        if(S.Config.bEnabled && Remaining && PlanService(A,*Remaining,AvailableSupplyStock(S,A.AgentID)).LiquidLitres<0) S.Config.bEnabled=false;
     auto Preferred=Candidates;
     for(auto& S:Preferred) if(S.Config.AirportID!=A.PlannedSupplyAirportID) S.Config.bEnabled=false;
-    int32 Index=ChooseNearestAirport(Preferred,Distances,A.Battery*Config.BatteryFlightSeconds,
-        Config.TransitSpeedCm,Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds,TravelTimes,WaitingTimes);
-    if(Index==INDEX_NONE) Index=ChooseNearestAirport(Candidates,Distances,A.Battery*Config.BatteryFlightSeconds,
-        Config.TransitSpeedCm,Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds,TravelTimes,WaitingTimes);
+    int32 Index=ChooseNearestAirport(Preferred,Distances,A.Battery*FlightSeconds(A),
+        Config.TransitSpeedCm,Config.BatteryReserveFraction*FlightSeconds(A)+Config.SupplyTimeBufferSeconds,TravelTimes,WaitingTimes);
+    if(Index==INDEX_NONE) Index=ChooseNearestAirport(Candidates,Distances,A.Battery*FlightSeconds(A),
+        Config.TransitSpeedCm,Config.BatteryReserveFraction*FlightSeconds(A)+Config.SupplyTimeBufferSeconds,TravelTimes,WaitingTimes);
+    if(Index==INDEX_NONE) Index=ChooseNearestAirport(LandingCandidates,Distances,A.Battery*FlightSeconds(A),
+        Config.TransitSpeedCm,Config.BatteryReserveFraction*FlightSeconds(A)+Config.SupplyTimeBufferSeconds,TravelTimes,WaitingTimes);
     if(Index==INDEX_NONE)
     {
         if(RedirectSupplyReservation(A,ExcludedAirportID)) {RequestSupply(A,ExcludedAirportID);return;}
@@ -744,11 +825,10 @@ void UAgricultureCoordinator::UpdateAirport(FSupplyAirportState& S,float Dt)
     for(auto& A:Agents) if(A.AirportID==S.Config.AirportID)
     {
         if(A.Phase==EAgriculturePhase::Failed) continue;
-        if(!S.Config.bEnabled || S.Config.WaterLitres<=0 || S.Config.ConcentrateLitres<=0 ||
-            S.WasteLitres>=S.Config.WasteCapacityLitres)
+        if(!S.Config.bEnabled)
         {
             if(auto* P=Pawn(A.AgentID)) P->ReleaseFromSurface();
-            RequestSupply(A);LastReason=FString::Printf(TEXT("机场 %d 停用或资源不足，改降"),S.Config.AirportID);continue;
+            RequestSupply(A);LastReason=FString::Printf(TEXT("机场 %d 停用，改降"),S.Config.AirportID);continue;
         }
         if(A.Phase!=EAgriculturePhase::Servicing || S.OccupantID!=A.AgentID) continue;
         AUAVPawn* P=Pawn(A.AgentID);
@@ -757,18 +837,103 @@ void UAgricultureCoordinator::UpdateAirport(FSupplyAirportState& S,float Dt)
         const FName Recipe=Field ? Field->Config.Recipe : A.Recipe;
         const float Fraction=Field ? Field->Config.ConcentrateFraction : 0.02f;
         A.Battery=FMath::Min(1.0f,A.Battery+Dt/FMath::Max(1.0f,S.Config.ChargeSeconds));
-        const bool NeedsCleaning=A.Recipe!=Recipe || A.bCleaned || !Field;
-        if((A.Recipe!=Recipe || !Field) && !A.bCleaned)
+        if(Field && A.ServiceLiquidTarget==-1)
+        {
+            *Field=ChooseWorkOrder(A,S.Config.DockPosition,*Field);
+            RefreshSupplyRoutes(A,true);
+            const auto Plan=PlanDockService(A,*Field,S);
+            if(Plan.AirportID==INDEX_NONE) {DeferDockedSection(A);continue;}
+            A.ServiceLiquidTarget=Plan.LiquidLitres<0 ? -2 : Plan.LiquidLitres;A.ServiceBatteryTarget=Plan.BatteryFraction;
+            A.ServiceAirportTargetID=Plan.AirportID;
+            A.ServiceDepartureNotBefore=ElapsedSeconds+Plan.DepartureDelaySeconds;
+            A.ServicePlanTime=ElapsedSeconds;
+            A.bServiceCleanBeforeTransfer=Plan.bCleanBeforeTransfer;
+            UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] ServicePlan Agent=%d Airport=%d TargetAirport=%d LiquidTarget=%.2f BatteryTarget=%.3f EstimatedSeconds=%.2f CompletionSeconds=%.2f DepartureNotBeforeSeconds=%.2f CleanBeforeTransfer=%d"),
+                A.AgentID,S.Config.AirportID,A.ServiceAirportTargetID,A.ServiceLiquidTarget,A.ServiceBatteryTarget,Plan.ServiceSeconds,Plan.CompletionSeconds,A.ServiceDepartureNotBefore,int32(A.bServiceCleanBeforeTransfer));
+            if(Plan.LiquidLitres>=0)
+            {
+                const auto Forecast=ForecastSortie(A,S.Config.DockPosition,*Field,S,Plan.LiquidLitres,Plan.BatteryFraction);
+                UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] ServiceBudget Agent=%d Airport=%d FlightSeconds=%.2f ReturnSeconds=%.2f RequiredBattery=%.3f AppliedLitres=%.2f"),
+                    A.AgentID,S.Config.AirportID,Forecast.FlightSeconds,Forecast.ReturnSeconds,Forecast.RequiredBattery,Forecast.AppliedLitres);
+            }
+        }
+        const bool NeedsCleaning=Field && (A.ServiceLiquidTarget>=0 || A.bServiceCleanBeforeTransfer) && (A.Recipe!=Recipe || A.bCleaned);
+        if(NeedsCleaning && !A.bCleaned)
         {
             if(A.PhaseSeconds<S.Config.CleanSeconds) continue;
-            if(!CleanResidue(A,S,Recipe)) {S.Config.bEnabled=false;continue;}
+            const float WaterBefore=S.Config.WaterLitres,WasteBefore=S.WasteLitres;
+            if(!CleanResidue(A,S,Recipe)) {A.ServiceLiquidTarget=-1;continue;}
+            ConsumeSupplyReservation(S.Config.AirportID,A.AgentID,WaterBefore-S.Config.WaterLitres,0,S.WasteLitres-WasteBefore);
+            P->UpdatePayloadMass(A.LiquidLitres*Config.LiquidDensityKgPerLitre);
         }
-        const float ReadyTime=S.Config.MixSeconds+(NeedsCleaning ? S.Config.CleanSeconds : 0);
+        const float ReadyTime=Field && A.ServiceLiquidTarget>=0 ? S.Config.MixSeconds+(NeedsCleaning ? S.Config.CleanSeconds : 0) : A.bServiceCleanBeforeTransfer ? S.Config.CleanSeconds : 0;
         if(A.PhaseSeconds<ReadyTime) continue;
-        if(Field) TransferLiquid(A,S,S.Config.RefillLitresPerMinute/60*Dt,Config.TankCapacityLitres,Fraction);
-        P->UpdatePayloadMass(A.LiquidLitres);
-        if(A.Battery>=0.999f && (!Field || A.LiquidLitres>=Config.TankCapacityLitres-0.01f))
+        const float TargetLiquid=Field ? A.ServiceLiquidTarget : A.LiquidLitres;
+        const float TargetBattery=Field ? A.ServiceBatteryTarget : 1;
+        if(Field && TargetLiquid<0)
         {
+            const bool OldPlanReady=A.Battery>=A.ServiceBatteryTarget-.001f && ElapsedSeconds>=A.ServiceDepartureNotBefore;
+            if(!OldPlanReady && A.ServicePlanTime>=0 && ElapsedSeconds-A.ServicePlanTime<.5f) continue;
+            A.ServicePlanTime=ElapsedSeconds;
+            const auto DeparturePlan=PlanDockService(A,*Field,S);
+            if(DeparturePlan.AirportID==INDEX_NONE) {DeferDockedSection(A);continue;}
+            if(DeparturePlan.LiquidLitres>=0 || DeparturePlan.AirportID==INDEX_NONE ||
+                DeparturePlan.DepartureDelaySeconds>.05 || DeparturePlan.BatteryFraction>A.Battery+.001f ||
+                DeparturePlan.bCleanBeforeTransfer!=A.bServiceCleanBeforeTransfer)
+            {
+                const bool NewCleaning=(DeparturePlan.LiquidLitres>=0 || DeparturePlan.bCleanBeforeTransfer) &&
+                    A.Recipe!=Field->Config.Recipe && !A.bCleaned;
+                A.ServiceLiquidTarget=DeparturePlan.LiquidLitres>=0 ? DeparturePlan.LiquidLitres : -2;
+                A.ServiceBatteryTarget=DeparturePlan.BatteryFraction;A.ServiceAirportTargetID=DeparturePlan.AirportID;
+                A.ServiceDepartureNotBefore=ElapsedSeconds+DeparturePlan.DepartureDelaySeconds;
+                A.bServiceCleanBeforeTransfer=DeparturePlan.bCleanBeforeTransfer;
+                if(NewCleaning) A.PhaseSeconds=0;
+                else if(DeparturePlan.LiquidLitres>=0) A.PhaseSeconds=A.bCleaned ? S.Config.CleanSeconds : 0;
+                UE_LOG_THROTTLE(2.0,LogAgriculture,Log,TEXT("[Agriculture] TransferPreflight Agent=%d SourceAirport=%d TargetAirport=%d GroundDelay=%.2f BatteryTarget=%.3f"),
+                    A.AgentID,S.Config.AirportID,A.ServiceAirportTargetID,DeparturePlan.DepartureDelaySeconds,A.ServiceBatteryTarget);
+                continue;
+            }
+            A.ServiceAirportTargetID=DeparturePlan.AirportID;
+            if(A.ServiceAirportTargetID!=INDEX_NONE)
+            {
+                const auto* Destination=Airport(A.ServiceAirportTargetID);
+                if(!Destination || !CanService(*Destination) || PlanService(A,*Field,AvailableSupplyStock(*Destination,A.AgentID),false).LiquidLitres<0)
+                {A.ServiceLiquidTarget=-1;continue;}
+                A.PlannedSupplyAirportID=A.ServiceAirportTargetID;
+            }
+            bool Alternative=A.ServiceAirportTargetID!=INDEX_NONE;
+            for(const auto& Candidate:Airports)
+                if(Candidate.Config.AirportID!=S.Config.AirportID && CanService(Candidate) &&
+                    PlanService(A,*Field,AvailableSupplyStock(Candidate,A.AgentID),false).LiquidLitres>=0) {Alternative=true;break;}
+            if(!Alternative) {DeferDockedSection(A);continue;}
+            UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] SupplyRelocation Agent=%d Airport=%d Plot=%d Liquid=%.2f Battery=%.3f"),
+                A.AgentID,S.Config.AirportID,A.PlotID,A.LiquidLitres,A.Battery);
+            P->ReleaseFromSurface();ChangePhase(A,EAgriculturePhase::TakingOff);continue;
+        }
+        if(Field)
+        {
+            const float WaterBefore=S.Config.WaterLitres,ConcentrateBefore=S.Config.ConcentrateLitres,WasteBefore=S.WasteLitres;
+            DrainLiquid(A,S,S.Config.RefillLitresPerMinute/60*Dt,TargetLiquid);
+            TransferLiquid(A,S,S.Config.RefillLitresPerMinute/60*Dt,TargetLiquid,Fraction);
+            ConsumeSupplyReservation(S.Config.AirportID,A.AgentID,WaterBefore-S.Config.WaterLitres,ConcentrateBefore-S.Config.ConcentrateLitres,S.WasteLitres-WasteBefore);
+        }
+        P->UpdatePayloadMass(A.LiquidLitres*Config.LiquidDensityKgPerLitre);
+        if(A.Battery>=TargetBattery-.001f && (!Field || FMath::Abs(A.LiquidLitres-TargetLiquid)<=.01f))
+        {
+            if(Field)
+            {
+                const auto DeparturePlan=PlanDockService(A,*Field,S);
+                if(DeparturePlan.LiquidLitres<0 || FMath::Abs(DeparturePlan.LiquidLitres-A.LiquidLitres)>.01f || DeparturePlan.BatteryFraction>A.Battery+.001f)
+                {
+                    A.ServiceLiquidTarget=DeparturePlan.LiquidLitres<0 ? -2 : DeparturePlan.LiquidLitres;
+                    A.ServiceBatteryTarget=DeparturePlan.BatteryFraction;A.ServiceAirportTargetID=DeparturePlan.AirportID;
+                    A.ServiceDepartureNotBefore=ElapsedSeconds+DeparturePlan.DepartureDelaySeconds;
+                    A.bServiceCleanBeforeTransfer=DeparturePlan.bCleanBeforeTransfer;
+                    UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] ServiceReplan Agent=%d Airport=%d TargetAirport=%d LiquidTarget=%.2f BatteryTarget=%.3f"),
+                        A.AgentID,S.Config.AirportID,A.ServiceAirportTargetID,A.ServiceLiquidTarget,A.ServiceBatteryTarget);
+                    continue;
+                }
+            }
             if(!Field) {S.Queue.Remove(A.AgentID);ChangePhase(A,EAgriculturePhase::Completed);}
             else {P->ReleaseFromSurface();ChangePhase(A,EAgriculturePhase::Resuming);}
         }
@@ -782,7 +947,7 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
     if(A.Phase==EAgriculturePhase::Failed)
     {
         A.PhaseSeconds+=Dt;
-        if(!P->IsParked() && !P->IsCrashed()) A.Battery=FMath::Max(0.0f,A.Battery-Dt/FMath::Max(1.0f,Config.BatteryFlightSeconds));
+        if(!P->IsParked() && !P->IsCrashed()) A.Battery=FMath::Max(0.0f,A.Battery-Dt/FMath::Max(1.0f,FlightSeconds(A)));
         if(P->IsGroundContact() && P->GetUAVState().Velocity.Size()<=Config.DockSpeedCm) {P->ParkOnSurface();return;}
         if(P->IsCrashed()) return;
         if(A.RouteRetries>0 && A.PhaseSeconds<5) return;
@@ -823,7 +988,8 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
     const FVector Position=P->GetUAVState().Position;
     const FVector Previous=PreviousPositions.FindRef(A.AgentID);
     PreviousPositions.Add(A.AgentID,Position);
-    if(!P->IsParked()) A.Battery=FMath::Max(0.0f,A.Battery-Dt/FMath::Max(1.0f,Config.BatteryFlightSeconds));
+    const float FrameStartLiquid=A.LiquidLitres,FrameStartBattery=A.Battery;
+    if(!P->IsParked()) A.Battery=FMath::Max(0.0f,A.Battery-Dt/FMath::Max(1.0f,FlightSeconds(A)));
     auto* Field=Section(A);
     auto* Station=Airport(A.AirportID);
     const auto Arrived=[&](float Radius){return FVector::Dist(Position,A.Target)<=Radius && P->GetUAVState().Velocity.Size()<5;};
@@ -846,8 +1012,14 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
                 A.TransitStage=1;A.bRouteActive=false;if(!FlyTo(A,Exit,150)) return;
                 return;
             }
+            const int32 DepartureAirportID=A.AirportID;
             ReleaseAirport(A);
-            if(Field && (A.LiquidLitres<1 || A.Battery<0.4f || A.Recipe!=Field->Config.Recipe)) RequestSupply(A);
+            if(A.ServiceLiquidTarget<-1)
+            {
+                A.PlannedSupplyAirportID=A.ServiceAirportTargetID;
+                RequestSupply(A,DepartureAirportID);return;
+            }
+            if(Field && (A.LiquidLitres<1 || A.Battery<=Config.BatteryReserveFraction || A.Recipe!=Field->Config.Recipe)) RequestSupply(A);
             else ChangePhase(A,EAgriculturePhase::Transit);
         }
         return;
@@ -855,32 +1027,63 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
     if(Field && (A.Phase==EAgriculturePhase::Transit || A.Phase==EAgriculturePhase::Spraying))
     {
         RefreshSupplyRoutes(A);
-        float ReturnSeconds=MAX_FLT;
+        float ReturnSeconds=MAX_FLT,EmergencyReturnSeconds=MAX_FLT,ReturnTravelSeconds=MAX_FLT,ReturnWaitSeconds=0;
         for(int32 I=0;I<Airports.Num();++I) if(CanService(Airports[I]))
         {
-            if(A.PlannedSupplyAirportID!=INDEX_NONE && Airports[I].Config.AirportID!=A.PlannedSupplyAirportID) continue;
             const float Travel=A.SupplyTravelSeconds[I];
-            ReturnSeconds=FMath::Min(ReturnSeconds,Travel+EstimateWaitSeconds(Airports[I],FMath::Max(0.0f,Travel-Config.AirportApproachSeconds)));
+            const float Budget=Travel+EstimateWaitSeconds(Airports[I],FMath::Max(0.0f,Travel-Config.AirportApproachSeconds),A.AgentID);
+            EmergencyReturnSeconds=FMath::Min(EmergencyReturnSeconds,Budget);
+            if(A.PlannedSupplyAirportID!=INDEX_NONE && Airports[I].Config.AirportID!=A.PlannedSupplyAirportID) continue;
+            if(Budget<ReturnSeconds) {ReturnSeconds=Budget;ReturnTravelSeconds=Travel;ReturnWaitSeconds=Budget-Travel;}
         }
-        float WorkSeconds=0;
-        if(A.bWorkRouteActive)
-            WorkSeconds=FMath::Max(0.0f,A.WorkStripEndTimes.FindRef(Field->NextPoint)-P->GetTrajectoryTracker()->GetCurrentTime())/
-                FMath::Max(0.01f,P->GetTrajectoryTracker()->MinAdaptiveTimeScale);
-        else if(A.Phase==EAgriculturePhase::Spraying)
+        double WorkSeconds=0,NextLiquid=A.LiquidLitres,Extension=0;
+        const bool Spraying=A.Phase==EAgriculturePhase::Spraying;
+        if(Spraying)
         {
             const float Length=FVector::Dist(Field->StripPoints[Field->NextPoint-1],Field->StripPoints[Field->NextPoint]);
-            WorkSeconds=Config.CruiseTimeFactor*FMath::Max(0.0f,Length-Field->StripCoveredCm)/Config.SpraySpeedCm;
+            const double Advance=FMath::Min(500.0,FMath::Max(0.0,double(Length-Field->StripCoveredCm)));
+            const double Width=FBox(Field->Config.Boundary).GetSize().Y/FMath::Max(1,Field->StripPoints.Num()/2);
+            NextLiquid=FMath::Max(0.0,double(A.LiquidLitres)-Advance*Width*Field->Config.ApplicationLitresPerHa/1.e8);
+            WorkSeconds=Advance/FMath::Max(1.f,Config.SpraySpeedCm);
+            if(A.bWorkRouteActive) WorkSeconds/=FMath::Max(.01f,P->GetTrajectoryTracker()->MinAdaptiveTimeScale);
+            Extension=Config.CruiseTimeFactor*Advance/FMath::Max(1.f,FMath::Min(Config.TransitSpeedCm,400.f));
         }
         else
         {
-            const FVector Target=Field->ResumePosition.IsNearlyZero() ? Field->StripPoints[Field->NextPoint] : Field->ResumePosition;
-            const float Speed=A.TransitStage==1 ? 100 : FMath::Min(Config.TransitSpeedCm,400.0f);
-            WorkSeconds=Config.CruiseTimeFactor*FVector::Dist(Position,Target)/Speed;
+            const int32 FirstEnd=Field->NextPoint%2==0 ? Field->NextPoint+1 : Field->NextPoint;
+            const FVector Direction=(Field->StripPoints[FirstEnd]-Field->StripPoints[FirstEnd-1]).GetSafeNormal();
+            const FVector Target=Field->StripPoints[FirstEnd-1]+Direction*Field->StripCoveredCm;
+            const float EntrySeconds=2*FCoveragePlanner::HeadlandDistance(Config.SpraySpeedCm,Manager->TaskExecutionAccelerationCm)/
+                FMath::Max(1.f,FMath::Min(Config.SpraySpeedCm,100.f)+Config.SpraySpeedCm);
+            WorkSeconds=A.bWorkRouteActive ? FMath::Max(0.f,A.WorkStartTime+EntrySeconds-P->GetTrajectoryTracker()->GetCurrentTime()) :
+                Config.CruiseTimeFactor*FVector::Dist(Position,Target)/FMath::Max(1.f,FMath::Min(Config.TransitSpeedCm,400.f));
+            if(A.bWorkRouteActive) WorkSeconds/=FMath::Max(.01f,P->GetTrajectoryTracker()->MinAdaptiveTimeScale);
+            // 转场完成后的返场从条带入口计算，当前位置的应急返场独立校验。
+            ReturnSeconds=MAX_FLT;
+            for(int32 I=0;I<Airports.Num();++I) if(CanService(Airports[I]))
+                {
+                    const auto& AirportState=Airports[I];
+                    if(A.PlannedSupplyAirportID!=INDEX_NONE && AirportState.Config.AirportID!=A.PlannedSupplyAirportID) continue;
+                    const double Travel=A.SupplyEntryTravelSeconds[I];
+                    const double Wait=EstimateWaitSeconds(AirportState,float(FMath::Max(0.0,WorkSeconds+Travel-Config.AirportApproachSeconds)),A.AgentID);
+                    if(Travel+Wait<ReturnSeconds)
+                    {ReturnSeconds=float(Travel+Wait);ReturnTravelSeconds=float(Travel);ReturnWaitSeconds=float(Wait);}
+                }
         }
-        // 触发返供必须早于预约接纳的硬储备边界，覆盖预测刷新和调度决策期间的耗电。
-        const float ReturnFraction=(ReturnSeconds+WorkSeconds+Config.SupplyTimeBufferSeconds+Config.RouteArrivalAllowanceSeconds)/Config.BatteryFlightSeconds+Config.BatteryReserveFraction;
+        const double WorkEnergy=SegmentEnergyFraction(A.EmptyMassKg,Config.LiquidDensityKgPerLitre,A.LiquidLitres,NextLiquid,WorkSeconds,Config.BatteryFlightSeconds);
+        const double ReturnEnergy=SegmentEnergyFraction(A.EmptyMassKg,Config.LiquidDensityKgPerLitre,NextLiquid,NextLiquid,
+            ReturnSeconds+Extension+Config.SupplyTimeBufferSeconds+Config.RouteArrivalAllowanceSeconds,Config.BatteryFlightSeconds);
+        const double EmergencyEnergy=Spraying ? 0 : SegmentEnergyFraction(A.EmptyMassKg,Config.LiquidDensityKgPerLitre,
+            A.LiquidLitres,A.LiquidLitres,EmergencyReturnSeconds+Config.SupplyTimeBufferSeconds+Config.RouteArrivalAllowanceSeconds,Config.BatteryFlightSeconds);
+        const double ReturnFraction=FMath::Max(WorkEnergy+ReturnEnergy,EmergencyEnergy)+Config.BatteryReserveFraction;
         if(A.Recipe!=Field->Config.Recipe || A.LiquidLitres<1 || A.Battery<ReturnFraction)
         {
+            UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] SupplyTrigger Agent=%d Phase=%d Battery=%.3f Required=%.3f Liquid=%.2f WorkSeconds=%.2f ReturnSeconds=%.2f Extension=%.2f PlannedAirport=%d"),
+                A.AgentID,int32(A.Phase),A.Battery,ReturnFraction,A.LiquidLitres,WorkSeconds,ReturnSeconds,Extension,A.PlannedSupplyAirportID);
+            const int32 End=Field->NextPoint%2==0 ? Field->NextPoint+1 : Field->NextPoint;
+            const FVector Entry=Field->StripPoints[End-1]+(Field->StripPoints[End]-Field->StripPoints[End-1]).GetSafeNormal()*Field->StripCoveredCm;
+            UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] SupplyBudget Agent=%d Section=%d Position=%s Entry=%s ReturnTravelSeconds=%.2f ReturnWaitSeconds=%.2f EmergencyReturnSeconds=%.2f WorkEnergy=%.4f ReturnEnergy=%.4f EmergencyEnergy=%.4f"),
+                A.AgentID,A.SectionID,*Position.ToString(),*Entry.ToString(),ReturnTravelSeconds,ReturnWaitSeconds,EmergencyReturnSeconds,WorkEnergy,ReturnEnergy,EmergencyEnergy);
             const bool RecipeChanged=A.Recipe!=Field->Config.Recipe;const bool LiquidLow=A.LiquidLitres<1;RequestSupply(A);
             if(A.Phase!=EAgriculturePhase::Failed) LastReason=RecipeChanged ? TEXT("任务配方变化，返航清洗配液") : LiquidLow ? TEXT("药液不足，返航补给并保留断点") : TEXT("作业转场与返航电量储备触发补给");
             return;
@@ -911,7 +1114,9 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
             Field->ResumePosition=Start+Direction*FMath::Max(-Config.ArrivalRadiusCm*1.5f,Field->StripCoveredCm-Config.ArrivalRadiusCm*1.5f);
             LastReason=TEXT("回飞未施用的连续断点");ChangePhase(A,EAgriculturePhase::Transit);return;
         }
-        P->UpdatePayloadMass(A.LiquidLitres);
+        if(!P->IsParked()) A.Battery=FMath::Max(0.f,FrameStartBattery-float(SegmentEnergyFraction(A.EmptyMassKg,
+            Config.LiquidDensityKgPerLitre,FrameStartLiquid,A.LiquidLitres,Dt,Config.BatteryFlightSeconds)));
+        P->UpdatePayloadMass(A.LiquidLitres*Config.LiquidDensityKgPerLitre);
         DrawDebugLine(GetWorld(),Start,Position,FColor::Green,false,Dt*2,0,30);
         const bool HasNext=Field->StripPoints.IsValidIndex(Field->NextPoint+2);
         // 实机越过条带边界后再切覆盖游标，避免地头两行的同一纵向平面被误判为漏喷。
@@ -938,10 +1143,11 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
         {
             RefreshSupplyRoutes(A);
             const float Travel=A.SupplyTravelSeconds[Airports.IndexOfByPredicate([Station](const auto& S){return S.Config.AirportID==Station->Config.AirportID;})];
-            if(A.Battery*Config.BatteryFlightSeconds < EstimateWaitSeconds(*Station,FMath::Max(0.0f,Travel-Config.AirportApproachSeconds),A.AgentID)+Travel+Config.BatteryReserveFraction*Config.BatteryFlightSeconds)
+            if(A.Battery*FlightSeconds(A) < EstimateWaitSeconds(*Station,FMath::Max(0.0f,Travel-Config.AirportApproachSeconds),A.AgentID)+Travel+Config.BatteryReserveFraction*FlightSeconds(A))
             {RequestSupply(A,Station->Config.AirportID);if(A.Phase!=EAgriculturePhase::Failed) LastReason=TEXT("等待电量储备不足，重新选择可达机场");return;}
         }
-        if(A.TransitStage==0 && (A.bRouteActive || Position.Z<Config.TransitHeightCm-Config.ArrivalRadiusCm))
+        if(A.TransitStage==0 && (A.bRouteActive || P->GetUAVState().Velocity.Size()>=5 ||
+            FMath::Abs(Position.Z-Config.TransitHeightCm)>Config.ArrivalRadiusCm))
         {
             if(!A.bRouteActive && !StartSupplyDeparture(A)) return;
             if(P->GetTrajectoryTracker()->IsTimedOut()) {A.bRouteActive=false;return;}
@@ -956,6 +1162,7 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
             if(!Station->Config.WaitingPoints.IsValidIndex(Slot)) {RequestSupply(A);return;}
             Target=Station->Config.WaitingPoints[Slot];
             ChangePhase(A,EAgriculturePhase::Waiting);
+            A.TransitStage=1;
         }
         if(!FlyTo(A,Target,Config.TransitSpeedCm)) return;
         if(Station->OccupantID==A.AgentID && Arrived(Config.ArrivalRadiusCm)) ChangePhase(A,EAgriculturePhase::Approaching);
@@ -984,38 +1191,205 @@ void UAgricultureCoordinator::UpdateAgent(FAgricultureAgentState& A,float Dt)
 
 void UAgricultureCoordinator::PlanSupplyAssignments()
 {
+    if(SupplyPlanTime>=0 && ElapsedSeconds-SupplyPlanTime<.5f) return;
+    SupplyPlanTime=ElapsedSeconds;
     TArray<FAgricultureAgentState*> Workers;
     for(auto& A:Agents)
     {
-        A.PlannedSupplyAirportID=INDEX_NONE;
-        if(A.Phase!=EAgriculturePhase::Transit && A.Phase!=EAgriculturePhase::Spraying) continue;
-        if(!Section(A) || A.AirportID!=INDEX_NONE) continue;
-        RefreshSupplyRoutes(A);
-        Workers.Add(&A);
+        A.PlannedSupplyAirportID=INDEX_NONE;A.PlannedSupplyDelaySeconds=0;
+        if((A.Phase!=EAgriculturePhase::Transit && A.Phase!=EAgriculturePhase::Spraying) || !Section(A) || A.AirportID!=INDEX_NONE) continue;
+        RefreshSupplyRoutes(A);Workers.Add(&A);
     }
-    if(Workers.IsEmpty()) return;
-    // 联合预分配将正在作业的飞机纳入泊位竞争，避免各机都依赖同一空闲机场。
-    TArray<TArray<double>> Costs;
-    for(const auto* A:Workers)
+    // 先安排续航余量最小的飞机；同一机场可被多架飞机预约不同时间段。
+    Workers.Sort([this](const FAgricultureAgentState& L,const FAgricultureAgentState& R)
     {
-        TArray<double> Row;Row.Init(DBL_MAX,Airports.Num());
+        const float Left=(L.Battery-Config.BatteryReserveFraction)*FlightSeconds(L);
+        const float Right=(R.Battery-Config.BatteryReserveFraction)*FlightSeconds(R);
+        return Left==Right ? L.AgentID<R.AgentID : Left<Right;
+    });
+    auto SupplyStocks=Airports;
+    TArray<double> Available;
+    for(const auto& Station:Airports) Available.Add(ElapsedSeconds+EstimateWaitSeconds(Station,0,INDEX_NONE));
+    SupplySlots.Empty();SupplySlots.SetNum(Airports.Num());auto& Slots=SupplySlots;
+    const auto DepartureSeconds=[this](const FSupplyAirportState& S)
+    {return Config.CruiseTimeFactor*(FMath::Max(0.0,double(Config.TransitHeightCm)-S.Config.DockPosition.Z)/200+1000.0/150)+2*Config.RouteArrivalAllowanceSeconds;};
+    const auto ReserveService=[&](int32 I,const FAgricultureAgentState& A,const FAgriculturePlotState& Field,float Target,double Begin,double End)
+    {
+        auto& Stock=SupplyStocks[I];FAgricultureSupplySlot Slot{A.AgentID,Begin,End};
+        Slot.WaterLitres=Stock.Config.WaterLitres;Slot.ConcentrateLitres=Stock.Config.ConcentrateLitres;Slot.WasteLitres=-Stock.WasteLitres;
+        ReserveSupplyStock(Stock,A,Field,Target);
+        Slot.WaterLitres-=Stock.Config.WaterLitres;Slot.ConcentrateLitres-=Stock.Config.ConcentrateLitres;Slot.WasteLitres+=Stock.WasteLitres;
+        Slots[I].Add(Slot);
+    };
+    TMap<int32,FAgricultureServicePlan> DockPlans;
+    for(const auto& A:Agents)
+    {
+        if(A.Phase!=EAgriculturePhase::Servicing) continue;
+        if(A.ServiceLiquidTarget<-1)
+        {
+            if(A.bServiceCleanBeforeTransfer && !A.bCleaned)
+            {
+                const auto* Field=Section(A);
+                const int32 I=Airports.IndexOfByPredicate([&A](const auto& S){return S.Config.AirportID==A.AirportID;});
+                if(Field && I!=INDEX_NONE)
+                    ReserveService(I,A,*Field,0,ElapsedSeconds,FMath::Max(A.ServiceDepartureNotBefore,
+                        double(ElapsedSeconds)+FMath::Max(0.f,Airports[I].Config.CleanSeconds-A.PhaseSeconds))+DepartureSeconds(Airports[I]));
+            }
+            continue;
+        }
+        const auto* Field=Sections.IsValidIndex(A.SectionID) ? &Sections[A.SectionID] : nullptr;
+        const int32 I=Airports.IndexOfByPredicate([&A](const auto& S){return S.Config.AirportID==A.AirportID;});
+        if(!Field || I==INDEX_NONE) continue;
+        FAgricultureServicePlan Service;
+        if(A.ServiceLiquidTarget>=0) {Service.LiquidLitres=A.ServiceLiquidTarget;Service.BatteryFraction=A.ServiceBatteryTarget;}
+        else Service=PlanService(A,*Field,SupplyStocks[I],false);
+        if(Service.LiquidLitres<0) continue;
+        const bool Cleaning=A.Recipe!=Field->Config.Recipe;
+        const double Prep=FMath::Max(0.0,double(Airports[I].Config.MixSeconds+(Cleaning ? Airports[I].Config.CleanSeconds : 0))-A.PhaseSeconds);
+        const double Fill=FMath::Max(0.f,Service.LiquidLitres-(Cleaning ? 0 : A.LiquidLitres))/FMath::Max(.001f,Airports[I].Config.RefillLitresPerMinute/60);
+        const double Drain=Cleaning ? 0 : FMath::Max(0.f,A.LiquidLitres-Service.LiquidLitres)/FMath::Max(.001f,Airports[I].Config.RefillLitresPerMinute/60);
+        Service.ServiceSeconds=FMath::Max(Prep+Fill+Drain,double(FMath::Max(0.f,Service.BatteryFraction-A.Battery)*Airports[I].Config.ChargeSeconds));
+        DockPlans.Add(A.AgentID,Service);
+        ReserveService(I,A,*Field,Service.LiquidLitres,ElapsedSeconds,ElapsedSeconds+Service.ServiceSeconds+DepartureSeconds(Airports[I]));
+    }
+    const auto BookSortie=[&](FAgricultureAgentState Future,const FAgriculturePlotState& Field,int32 I,double Offset)
+    {
+        const auto& Station=Airports[I];auto& Stock=SupplyStocks[I];
+        const auto Forecast=ForecastSortie(Future,Station.Config.DockPosition,Field,Station,Future.LiquidLitres,Future.Battery,false);
+        if(!Forecast.bFeasible) return;
+        Future.LiquidLitres=FMath::Max(0.f,Future.LiquidLitres-float(Forecast.AppliedLitres));
+        Future.Battery=FMath::Max(0.f,Future.Battery-float(Forecast.EnergyFraction));
+        auto Remaining=Field;AdvanceForecastProgress(Remaining,Forecast.AppliedLitres);
+        const auto Next=Forecast.bCompleted ? FAgricultureServicePlan() : PlanService(Future,Remaining,Stock,false);
+        const double WaterBefore=Stock.Config.WaterLitres,ConcentrateBefore=Stock.Config.ConcentrateLitres,WasteBefore=Stock.WasteLitres;
+        double NextService=(1-Future.Battery)*Station.Config.ChargeSeconds;
+        if(!Forecast.bCompleted && Next.LiquidLitres>=0)
+        {NextService=Next.ServiceSeconds;ReserveSupplyStock(Stock,Future,Remaining,Next.LiquidLitres);}
+        const double Begin=FMath::Max(double(ElapsedSeconds),ElapsedSeconds+Offset+Forecast.EntryFlightSeconds+Forecast.EntryReturnSeconds-
+            Config.AirportApproachSeconds-Config.SupplyTimeBufferSeconds);
+        const double End=ElapsedSeconds+Offset+Forecast.FlightSeconds+Forecast.ReturnSeconds+NextService+DepartureSeconds(Station);
+        if(End>Begin) Slots[I].Add({Future.AgentID,Begin,End,WaterBefore-Stock.Config.WaterLitres,
+            ConcentrateBefore-Stock.Config.ConcentrateLitres,Stock.WasteLitres-WasteBefore});
+    };
+    // 已在补给和起飞的航次也承诺未来返场窗口，避免后分配的飞机插队耗尽其返场储备。
+    for(auto& A:Agents)
+    {
+        if(A.Phase!=EAgriculturePhase::Servicing && A.Phase!=EAgriculturePhase::TakingOff && A.Phase!=EAgriculturePhase::Resuming) continue;
+        const auto* Field=Sections.IsValidIndex(A.SectionID) ? &Sections[A.SectionID] : nullptr;
+        const int32 I=Airports.IndexOfByPredicate([&A](const auto& S){return S.Config.AirportID==A.AirportID;});
+        if(!Field || I==INDEX_NONE) continue;
+        const auto& Station=Airports[I];
+        if(A.ServiceLiquidTarget<-1)
+        {
+            const int32 Destination=Airports.IndexOfByPredicate([&A](const auto& S){return S.Config.AirportID==A.ServiceAirportTargetID;});
+            if(Destination==INDEX_NONE || Destination==I) continue;
+            if(A.Phase!=EAgriculturePhase::Servicing) RefreshSupplyRoutes(A);
+            const auto& Target=Airports[Destination];auto& Stock=SupplyStocks[Destination];
+            const FVector Lift=SupplyDepartureTarget(Station.Config.DockPosition,FVector::ZeroVector,Config.TransitHeightCm,150);
+            FVector Goal=Target.Config.DockPosition;Goal.Z=Config.TransitHeightCm;
+            const double Travel=(A.SupplyTravelSeconds.IsValidIndex(Destination) ? A.SupplyTravelSeconds[Destination] :
+                SupplyTravelTime(Station.Config.DockPosition,FVector::ZeroVector,FVector::Dist(Lift,Goal),150))+
+                (A.Phase==EAgriculturePhase::Servicing || A.TransitStage==0 ? Config.CruiseTimeFactor*1000.0/150+Config.RouteArrivalAllowanceSeconds : 0);
+            if(!FMath::IsFinite(Travel) || Travel>=MAX_FLT) continue;
+            const double CleaningRemaining=A.bServiceCleanBeforeTransfer && !A.bCleaned ?
+                FMath::Max(0.f,Station.Config.CleanSeconds-A.PhaseSeconds) : 0;
+            const double Ready=A.Phase==EAgriculturePhase::Servicing ?
+                FMath::Max(A.ServiceDepartureNotBefore,double(ElapsedSeconds)+FMath::Max(CleaningRemaining,double(FMath::Max(0.f,A.ServiceBatteryTarget-A.Battery)*Station.Config.ChargeSeconds))) : ElapsedSeconds;
+            const float DepartureBattery=A.Phase==EAgriculturePhase::Servicing ? FMath::Max(A.Battery,A.ServiceBatteryTarget) : A.Battery;
+            auto Arriving=A;
+            if(A.bServiceCleanBeforeTransfer && A.Recipe!=Field->Config.Recipe) {Arriving.LiquidLitres=0;Arriving.Recipe=Field->Config.Recipe;}
+            Arriving.Battery=FMath::Max(0.f,DepartureBattery-float(Travel/FlightSeconds(Arriving)));
+            const auto Service=PlanService(Arriving,*Field,Stock,false);
+            if(Service.LiquidLitres<0) continue;
+            const double Begin=FMath::Max(double(ElapsedSeconds),Ready+Travel-Config.AirportApproachSeconds);
+            const double End=Ready+Travel+Service.ServiceSeconds+DepartureSeconds(Target);
+            ReserveService(Destination,Arriving,*Field,Service.LiquidLitres,Begin,End);
+            auto Loaded=Arriving;Loaded.LiquidLitres=Service.LiquidLitres;Loaded.Battery=FMath::Max(Arriving.Battery,Service.BatteryFraction);
+            Loaded.Recipe=Field->Config.Recipe;
+            BookSortie(Loaded,*Field,Destination,Ready+Travel+Service.ServiceSeconds-ElapsedSeconds);
+            continue;
+        }
+        FAgricultureServicePlan Service;
+        if(A.Phase!=EAgriculturePhase::Servicing)
+        {Service.LiquidLitres=A.LiquidLitres;Service.BatteryFraction=FMath::Min(1.f,A.Battery+A.PhaseSeconds/FlightSeconds(A));}
+        else if(const auto* Planned=DockPlans.Find(A.AgentID)) Service=*Planned;
+        if(Service.LiquidLitres<0) continue;
+        auto Future=A;Future.LiquidLitres=Service.LiquidLitres;Future.Battery=FMath::Max(A.Battery,Service.BatteryFraction);
+        Future.Recipe=Field->Config.Recipe;
+        double Offset=-A.PhaseSeconds;
+        if(A.Phase==EAgriculturePhase::Servicing)
+            Offset=Service.ServiceSeconds;
+        BookSortie(Future,*Field,I,Offset);
+    }
+    for(auto* A:Workers)
+    {
+        int32 Best=INDEX_NONE;double BestFinish=DBL_MAX,BestWait=0,BestAvailable=0,BestBegin=0;
+        FSupplyAirportState BestStock;FAgricultureSupplySlot BestSlot;
+        FString CommitmentBudget=TEXT("StationMissing");
+        const auto* Field=Section(*A);const auto* P=Pawn(A->AgentID);if(!Field || !P) continue;
+        // 起飞载荷和电量以服务机场返场为约束；承诺仍可履行时不能重新按远期成本改站。
+        const int32 Committed=Airports.IndexOfByPredicate([A](const auto& S){return S.Config.AirportID==A->ServiceAirportTargetID;});
+        for(int32 CandidatePass=0;CandidatePass<2 && Best==INDEX_NONE;++CandidatePass)
         for(int32 I=0;I<Airports.Num();++I)
         {
-            if(!CanService(Airports[I])) continue;
-            const float Travel=A->SupplyTravelSeconds[I];
-            const float Wait=EstimateWaitSeconds(Airports[I],FMath::Max(0.0f,Travel-Config.AirportApproachSeconds));
-            const float Required=Travel+Wait+Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds;
-            if(FMath::IsFinite(Required) && Required<=A->Battery*Config.BatteryFlightSeconds) Row[I]=Travel+Wait;
+            if((CandidatePass==0 && I!=Committed) || (CandidatePass==1 && I==Committed)) continue;
+            const auto& Station=Airports[I];if(!CanService(Station))
+            {if(I==Committed) CommitmentBudget=TEXT("StationUnavailable");continue;}
+            const auto Forecast=ForecastSortie(*A,P->GetUAVState().Position,*Field,Station,A->LiquidLitres,A->Battery);
+            const double Travel=Forecast.bFeasible ? Forecast.ReturnSeconds : A->SupplyTravelSeconds[I];
+            const double Arrival=ElapsedSeconds+(Forecast.bFeasible ? Forecast.FlightSeconds : 0)+Travel;
+            double Wait=FMath::Max(0.0,Available[I]-(Arrival-Config.AirportApproachSeconds));
+            const double Liquid=FMath::Max(0.0,double(A->LiquidLitres)-Forecast.AppliedLitres);
+            auto Future=*A;auto Remaining=*Field;auto Stock=SupplyStocks[I];
+            Future.LiquidLitres=float(Liquid);
+            const float ArrivalBattery=FMath::Max(0.f,A->Battery-float(Forecast.bFeasible ? Forecast.EnergyFraction : Travel/FlightSeconds(*A)));
+            if(Forecast.bFeasible) AdvanceForecastProgress(Remaining,Forecast.AppliedLitres);
+            const double Departure=Config.CruiseTimeFactor*(FMath::Max(0.0,double(Config.TransitHeightCm)-Station.Config.DockPosition.Z)/200+1000.0/150)+2*Config.RouteArrivalAllowanceSeconds;
+            FAgricultureServicePlan Service;double Duration=0;bool SlotFeasible=false;
+            for(int32 Pass=0;Pass<=Slots[I].Num()+1;++Pass)
+            {
+                Future.Battery=FMath::Max(0.f,ArrivalBattery-float(SegmentEnergyFraction(A->EmptyMassKg,Config.LiquidDensityKgPerLitre,Liquid,Liquid,Wait,Config.BatteryFlightSeconds)));
+                Service=Forecast.bCompleted ? FAgricultureServicePlan() : PlanService(Future,Remaining,Stock,false);
+                if(!Forecast.bCompleted && Service.LiquidLitres<0) break;
+                Duration=Forecast.bCompleted ? double((1-Future.Battery)*Station.Config.ChargeSeconds) : Service.ServiceSeconds;
+                const double ExtraWait=FindSupplySlotWait(Arrival+Wait-Config.AirportApproachSeconds,
+                    Config.AirportApproachSeconds+Duration+Departure,Slots[I],A->AgentID);
+                if(ExtraWait<1.e-6) {SlotFeasible=true;break;}
+                Wait+=ExtraWait;
+            }
+            const double Required=Forecast.bFeasible ? Forecast.RequiredBattery+
+                SegmentEnergyFraction(A->EmptyMassKg,Config.LiquidDensityKgPerLitre,Liquid,Liquid,Wait,Config.BatteryFlightSeconds) :
+                (Travel+Wait+Config.SupplyTimeBufferSeconds)/FlightSeconds(*A)+Config.BatteryReserveFraction;
+            if(I==Committed)
+                CommitmentBudget=FString::Printf(TEXT("ForecastFeasible=%d Completed=%d Applied=%.3f Travel=%.2f Wait=%.2f Required=%.5f Battery=%.5f SlotFeasible=%d ServiceLiquid=%.2f StockWater=%.2f StockConcentrate=%.2f StockWaste=%.2f"),
+                    int32(Forecast.bFeasible),int32(Forecast.bCompleted),Forecast.AppliedLitres,Travel,Wait,Required,A->Battery,
+                    int32(SlotFeasible),Service.LiquidLitres,SupplyStocks[I].Config.WaterLitres,SupplyStocks[I].Config.ConcentrateLitres,SupplyStocks[I].WasteLitres);
+            if(!SlotFeasible || !FMath::IsFinite(Required) || Required>A->Battery) continue;
+            if(!Forecast.bCompleted)
+                ReserveSupplyStock(Stock,Future,Remaining,Service.LiquidLitres);
+            // 补给完成得早不代表作业完成得早，评分必须包含补给后的剩余航次。
+            const double Finish=Arrival+Wait+(Forecast.bCompleted ? Duration : Service.CompletionSeconds);
+            if(Finish<BestFinish)
+            {
+                Best=I;BestFinish=Finish;BestWait=Wait;BestStock=Stock;
+                BestAvailable=Arrival+Wait+Duration+Departure;
+                BestBegin=FMath::Max(double(ElapsedSeconds),Forecast.bFeasible ?
+                    ElapsedSeconds+Forecast.EntryFlightSeconds+Forecast.EntryReturnSeconds-Config.AirportApproachSeconds-Config.SupplyTimeBufferSeconds :
+                    Arrival+Wait-Config.AirportApproachSeconds);
+                BestSlot={A->AgentID,BestBegin,BestAvailable,SupplyStocks[I].Config.WaterLitres-Stock.Config.WaterLitres,
+                    SupplyStocks[I].Config.ConcentrateLitres-Stock.Config.ConcentrateLitres,Stock.WasteLitres-SupplyStocks[I].WasteLitres};
+            }
         }
-        Costs.Add(MoveTemp(Row));
-    }
-    const auto Assigned=UTaskAllocator::MatchMinimumCost(Costs);
-    if(!Assigned.Contains(INDEX_NONE))
-        for(int32 I=0;I<Workers.Num();++I) Workers[I]->PlannedSupplyAirportID=Airports[Assigned[I]].Config.AirportID;
-    else
-    {
-        // 无独立泊位匹配时先集中返供，保留各区断点并交由现有队列调度。
-        for(auto* A:Workers) PendingSupplyRequests.Add(A->AgentID,INDEX_NONE);
+        if(Best!=INDEX_NONE)
+        {
+            if(A->ServiceAirportTargetID!=INDEX_NONE && A->ServiceAirportTargetID!=Airports[Best].Config.AirportID)
+                UE_LOG(LogAgriculture,Log,TEXT("[Agriculture] SortieReturnReplanned Agent=%d PreviousAirport=%d Airport=%d Reason=CommitmentUnavailable %s"),
+                    A->AgentID,A->ServiceAirportTargetID,Airports[Best].Config.AirportID,*CommitmentBudget);
+            A->ServiceAirportTargetID=Airports[Best].Config.AirportID;
+            A->PlannedSupplyAirportID=Airports[Best].Config.AirportID;
+            A->PlannedSupplyDelaySeconds=float(BestWait);Slots[Best].Add(BestSlot);SupplyStocks[Best]=BestStock;
+        }
+        // 预测无法排入未来时隙时保留作业，由逐段安全检查决定实际返供时机。
     }
 }
 
@@ -1035,7 +1409,7 @@ void UAgricultureCoordinator::ResolveSupplyRequests()
                 const auto& S=Airports[I];if(S.Config.AirportID==*Excluded || !CanService(S)) continue;
                 const float Travel=A.SupplyTravelSeconds[I];
                 const float Wait=EstimateWaitSeconds(S,FMath::Max(0.0f,Travel-Config.AirportApproachSeconds),A.AgentID);
-                if(FMath::IsFinite(Travel) && Travel+Wait+Config.BatteryReserveFraction*Config.BatteryFlightSeconds+Config.SupplyTimeBufferSeconds<=A.Battery*Config.BatteryFlightSeconds) ++Count;
+                if(FMath::IsFinite(Travel) && Travel+Wait+Config.BatteryReserveFraction*FlightSeconds(A)+Config.SupplyTimeBufferSeconds<=A.Battery*FlightSeconds(A)) ++Count;
             }
             if(!Best || Count<BestCount || (Count==BestCount && (A.Battery<Best->Battery || (A.Battery==Best->Battery && A.AgentID<Best->AgentID))))
             {Best=&A;BestCount=Count;}
@@ -1109,6 +1483,7 @@ void UAgricultureCoordinator::Update(float Dt)
 
 void UAgricultureCoordinator::Command(int32 Command,int32 ID)
 {
+    AssignmentPlanTime=-1;SupplyPlanTime=-1;
     if(Command==0)
     {
         if(auto* A=Agents.FindByPredicate([ID](const auto& V){return V.AgentID==ID;}))
@@ -1173,7 +1548,14 @@ FString UAgricultureCoordinator::GetTelemetryJson() const
     {
         auto V=MakeShared<FJsonObject>();V->SetNumberField(TEXT("agentId"),A.AgentID);V->SetNumberField(TEXT("plotId"),A.PlotID);
         V->SetNumberField(TEXT("sectionId"),A.SectionID);
+        V->SetBoolField(TEXT("cleanBeforeTransfer"),A.bServiceCleanBeforeTransfer);
         V->SetNumberField(TEXT("airportId"),A.AirportID);V->SetNumberField(TEXT("battery"),A.Battery);V->SetNumberField(TEXT("liquidLitres"),A.LiquidLitres);
+        V->SetNumberField(TEXT("massKg"),A.EmptyMassKg+A.LiquidLitres*Config.LiquidDensityKgPerLitre);
+        V->SetNumberField(TEXT("powerRatio"),PayloadPowerRatio(A.EmptyMassKg,A.LiquidLitres,Config.LiquidDensityKgPerLitre));
+        V->SetNumberField(TEXT("serviceLiquidTarget"),A.ServiceLiquidTarget);V->SetNumberField(TEXT("serviceBatteryTarget"),A.ServiceBatteryTarget);
+        V->SetNumberField(TEXT("serviceDepartureNotBefore"),A.ServiceDepartureNotBefore);
+        V->SetNumberField(TEXT("serviceAirportTargetId"),A.ServiceAirportTargetID);
+        V->SetNumberField(TEXT("plannedSupplyAirportId"),A.PlannedSupplyAirportID);V->SetNumberField(TEXT("plannedSupplyDelaySeconds"),A.PlannedSupplyDelaySeconds);
         V->SetNumberField(TEXT("serviceSeconds"),A.PhaseSeconds);V->SetBoolField(TEXT("cleaned"),A.bCleaned);
         V->SetStringField(TEXT("serviceStage"),ServiceStage(A));
         V->SetStringField(TEXT("phase"),UEnum::GetValueAsString(A.Phase));Values.Add(MakeShared<FJsonValueObject>(V));
@@ -1190,6 +1572,15 @@ FString UAgricultureCoordinator::GetTelemetryJson() const
         V->SetArrayField(TEXT("queue"),Queue);Values.Add(MakeShared<FJsonValueObject>(V));
     }
     Root->SetArrayField(TEXT("airports"),Values);Values.Empty();
+    for(int32 I=0;I<SupplySlots.Num() && I<Airports.Num();++I) for(const auto& Slot:SupplySlots[I])
+    {
+        auto V=MakeShared<FJsonObject>();V->SetNumberField(TEXT("airportId"),Airports[I].Config.AirportID);
+        V->SetNumberField(TEXT("agentId"),Slot.AgentID);V->SetNumberField(TEXT("beginSeconds"),Slot.BeginSeconds);
+        V->SetNumberField(TEXT("endSeconds"),Slot.EndSeconds);Values.Add(MakeShared<FJsonValueObject>(V));
+        V->SetNumberField(TEXT("reservedWaterLitres"),Slot.WaterLitres);V->SetNumberField(TEXT("reservedConcentrateLitres"),Slot.ConcentrateLitres);
+        V->SetNumberField(TEXT("reservedWasteLitres"),Slot.WasteLitres);
+    }
+    Root->SetArrayField(TEXT("futureSupplySlots"),Values);Values.Empty();
     for(const auto& P:Plots)
     {
         auto V=MakeShared<FJsonObject>();V->SetNumberField(TEXT("taskId"),P.Config.Task.TaskID);TArray<TSharedPtr<FJsonValue>> Assigned;
@@ -1211,4 +1602,3 @@ FString UAgricultureCoordinator::GetTelemetryJson() const
     Root->SetArrayField(TEXT("sections"),Values);
     FString Json;FJsonSerializer::Serialize(Root,TJsonWriterFactory<TCHAR,TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json));return Json;
 }
-

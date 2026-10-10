@@ -58,6 +58,32 @@ TArray<int32> UTaskAllocator::MatchMinimumCost(const TArray<TArray<double>>& Cos
     return Result;
 }
 
+TArray<int32> UTaskAllocator::MatchMinimumMakespan(const TArray<TArray<double>>& Costs)
+{
+    const auto Unrestricted=MatchMinimumCost(Costs);
+    int32 Target=0;for(int32 Column:Unrestricted) if(Column!=INDEX_NONE) ++Target;
+    if(Target==0) return Unrestricted;
+    TArray<double> Bounds;
+    for(const auto& Row:Costs) for(double Cost:Row)
+        if(FMath::IsFinite(Cost) && FMath::Abs(Cost)<1.e100) Bounds.Add(Cost);
+    Bounds.Sort();
+    int32 Low=0,High=Bounds.Num()-1;
+    const auto MatchAt=[&](double Bound)
+    {
+        auto Restricted=Costs;
+        for(auto& Row:Restricted) for(double& Cost:Row) if(Cost>Bound) Cost=DBL_MAX;
+        return MatchMinimumCost(Restricted);
+    };
+    while(Low<High)
+    {
+        const int32 Middle=Low+(High-Low)/2;
+        const auto Matching=MatchAt(Bounds[Middle]);
+        int32 Count=0;for(int32 Column:Matching) if(Column!=INDEX_NONE) ++Count;
+        if(Count>=Target) High=Middle;else Low=Middle+1;
+    }
+    return MatchAt(Bounds[Low]);
+}
+
 void UTaskAllocator::Reset()
 {
 	CurrentAllocation = FTaskAllocationResult();

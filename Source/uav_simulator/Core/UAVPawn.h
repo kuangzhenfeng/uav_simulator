@@ -219,7 +219,7 @@ public:
 	bool IsNMPCStuck() const { return bNMPCStuck; }
 
 	// 获取当前 NMPC 加速度（供 AgentManager 状态缓存传播到 CBF-QP）
-	FVector GetNMPCAcceleration() const { return SmoothedNMPCAcceleration; }
+	FVector GetExecutedAcceleration() const;
 
 	// 获取最近一次 NMPC 求解结果（含预测轨迹，可视化用）。
 	// bHasCachedNMPC 为 false 时返回 nullptr。
@@ -457,7 +457,7 @@ private:
 	// NMPC 调用节流：缓存上次结果，避免每个子步都调用
 	float NMPCSolveAccumulator = 0.0f;
 	FVector CachedNMPCAcceleration = FVector::ZeroVector;
-	FVector SmoothedNMPCAcceleration = FVector::ZeroVector;
+	FVector ExecutedAcceleration = FVector::ZeroVector;
 	bool bHasCachedNMPC = false;
 	// 最近一次 NMPC 完整结果（供可视化拉取预测轨迹）
 	FNMPCAvoidanceResult CachedNMPCResult;

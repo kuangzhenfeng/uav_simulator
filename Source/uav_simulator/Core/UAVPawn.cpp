@@ -298,6 +298,14 @@ void AUAVPawn::SetPayloadMass(float NewPayloadMass)
 	AttitudeControllerComponent->HoverThrust = Spec.HoverThrust * TotalMass / Spec.Mass;
 }
 
+FVector AUAVPawn::GetExecutedAcceleration() const
+{
+    if (bParked) return FVector::ZeroVector;
+    if (ControlMode == EUAVControlMode::Trajectory && !IsCrashed()) return ExecutedAcceleration;
+    return DynamicsComponent
+        ? CurrentState.Rotation.Quaternion().RotateVector(DynamicsComponent->GetLinearAcceleration()) : FVector::ZeroVector;
+}
+
 #if WITH_DEV_AUTOMATION_TESTS
 void AUAVPawn::SetUAVStateForTest(const FUAVState& InState)
 {
@@ -898,8 +906,6 @@ FVector AUAVPawn::PrepareTrajectoryAcceleration(const FVector& NMPCAcceleration)
 {
 	FVector DesiredPos = TrajectoryTrackerComponent->GetDesiredState().Position;
 
-	float YError = DesiredPos.Y - CurrentState.Position.Y;
-	float ZError = DesiredPos.Z - CurrentState.Position.Z;
 	// 横向误差取到参考折线的距离，避免把沿航路滞后误当成横向偏离。
     float CrossTrackDev = FVector::Dist(DesiredPos, CurrentState.Position);
     const auto& Points=TrajectoryTrackerComponent->GetTrajectory().Points;
@@ -934,20 +940,6 @@ FVector AUAVPawn::PrepareTrajectoryAcceleration(const FVector& NMPCAcceleration)
 
 	// 轨迹误差由 NMPC 代价处理，执行层保持可行控制量。
 	const FVector Result = NMPCAcceleration;
-
-	if (CrossTrackDev > 500.0f)
-	{
-		UE_LOG_THROTTLE(0.5, LogUAVMetrics, Log,
-			TEXT("[DEVIATION_DETAIL] Agent=%d Dev=%.1f MaxDev=%.1f Pos=(%.0f,%.0f,%.0f) Desired=(%.0f,%.0f,%.0f) ErrorYZ=(%.0f,%.0f) Vel=(%.0f,%.0f,%.0f) InAccel=(%.0f,%.0f,%.0f) ProtectedAccel=(%.0f,%.0f,%.0f) ObsDist=%.0f"),
-			AgentID, CrossTrackDev, MetricsMaxCrossTrackDev,
-			CurrentState.Position.X, CurrentState.Position.Y, CurrentState.Position.Z,
-			DesiredPos.X, DesiredPos.Y, DesiredPos.Z,
-			YError, ZError,
-			CurrentState.Velocity.X, CurrentState.Velocity.Y, CurrentState.Velocity.Z,
-			NMPCAcceleration.X, NMPCAcceleration.Y, NMPCAcceleration.Z,
-			Result.X, Result.Y, Result.Z,
-			CachedNearestObsDist);
-	}
 
 	return Result;
 }
@@ -1015,20 +1007,22 @@ void AUAVPawn::UpdateController(float DeltaTime)
 			}
 
 			// 平滑和执行约束已包含在预测优化中，不在安全滤波前叠加启发式控制。
-			SmoothedNMPCAcceleration = CachedNMPCAcceleration;
 			FVector EffectiveAccel = PrepareTrajectoryAcceleration(CachedNMPCAcceleration);
+            bool bUsingJointControl = false;
             if (auto* GM = Cast<AMultiAgentGameMode>(GetWorld()->GetAuthGameMode()))
                 if (GM->KeepsDemoOpen())
                 {
                     FVector JointAccel;
                     const bool bJoint=GM->GetJointNMPCCache(AgentID, JointAccel);
-                    if (bJoint) EffectiveAccel = JointAccel;
+                    if (bJoint) { EffectiveAccel = JointAccel; bUsingJointControl = true; }
                     UE_LOG_THROTTLE(2.0,LogUAVMultiAgent,Log,TEXT("[ControlSource] Agent=%d joint=%d acceleration=(%.1f,%.1f,%.1f) z=%.1f vz=%.1f referenceZ=%.1f referenceVz=%.1f"),AgentID,bJoint,EffectiveAccel.X,EffectiveAccel.Y,EffectiveAccel.Z,CurrentState.Position.Z,CurrentState.Velocity.Z,TrajectoryTrackerComponent->GetDesiredState(TrajectoryTrackerComponent->GetCurrentTime()).Position.Z,TrajectoryTrackerComponent->GetDesiredState(TrajectoryTrackerComponent->GetCurrentTime()).Velocity.Z);
                 }
 
+            const FVector SelectedAcceleration = EffectiveAccel;
 				// ---- CBF-QP 统一安全滤波 ----
 				bMetricsCBFActiveThisFrame = false;
 				FVector CBFAccelSnapshot = FVector::ZeroVector;
+                TArray<FAgentStateSnapshot> NeighborStates;
 
 				if (CBFQPFilter && CBFQPConfig.Mode != ECBFMode::Disabled)
 				{
@@ -1049,7 +1043,6 @@ void AUAVPawn::UpdateController(float DeltaTime)
 						}
 					}
 
-					TArray<FAgentStateSnapshot> NeighborStates;
 					if (CommunicationComponent)
 					{
 						NeighborStates = CommunicationComponent->ReceiveNeighborStates(CBFQPConfig.DSafe * 6.0f);
@@ -1142,6 +1135,7 @@ void AUAVPawn::UpdateController(float DeltaTime)
 				}
 			}
 
+            ExecutedAcceleration = EffectiveAccel;
 			// 加速度 → 姿态+推力 → 电机
 			FRotator DesiredAttitude;
 			float DesiredThrust;
@@ -1151,6 +1145,43 @@ void AUAVPawn::UpdateController(float DeltaTime)
 
 			FMotorOutput MotorOutput = AttitudeControllerComponent->ComputeControlWithFeedforward(
 				CurrentState, DesiredAttitude, DesiredAngularAccel, DeltaTime, DesiredThrust);
+
+            if (MetricsCurrentCrossTrackDev > 200.0f)
+            {
+                for (const auto& Neighbor : NeighborStates)
+                {
+                    const FVector DeltaPosition = CurrentState.Position - Neighbor.State.Position;
+                    const FVector DeltaVelocity = CurrentState.Velocity - Neighbor.State.Velocity;
+                    const FVector Normal = -2.0f * DeltaPosition;
+                    const double H = DeltaPosition.SizeSquared() - FMath::Square(CBFQPConfig.DSafe);
+                    const double HDot = 2.0 * FVector::DotProduct(DeltaPosition, DeltaVelocity);
+                    const double Bound = 2.0 * DeltaVelocity.SizeSquared()
+                        - 2.0 * FVector::DotProduct(DeltaPosition, Neighbor.ExecutedAcceleration)
+                        + CBFQPConfig.Alpha1 * HDot + CBFQPConfig.Alpha0 * H;
+                    const double Scale = FMath::Max(1.0, Normal.Size());
+                    const double NominalViolation = (FVector::DotProduct(Normal, SelectedAcceleration) - Bound) / Scale;
+                    if (NominalViolation > 0.1)
+                        UE_LOG_THROTTLE(0.2, LogUAVMetrics, Log,
+                            TEXT("[DEVIATION_CONSTRAINT] Agent=%d Neighbor=%d SelfPos=%s SelfVel=%s NeighborPos=%s NeighborVel=%s NeighborAccel=%s H=%.1f HDot=%.1f NominalViolation=%.3f FinalViolation=%.3f"),
+                            AgentID, Neighbor.AgentID, *CurrentState.Position.ToString(), *CurrentState.Velocity.ToString(),
+                            *Neighbor.State.Position.ToString(), *Neighbor.State.Velocity.ToString(), *Neighbor.ExecutedAcceleration.ToString(),
+                            H, HDot, NominalViolation, (FVector::DotProduct(Normal, EffectiveAccel) - Bound) / Scale);
+                }
+                const FTrajectoryPoint Reference = TrajectoryTrackerComponent->GetDesiredState();
+                const FVector ActualAcceleration = DynamicsComponent
+                    ? CurrentState.Rotation.Quaternion().RotateVector(DynamicsComponent->GetLinearAcceleration()) : FVector::ZeroVector;
+                float MinMotor = 1.0f, MaxMotor = 0.0f;
+                for (const float Motor : MotorOutput.Thrusts) { MinMotor = FMath::Min(MinMotor, Motor); MaxMotor = FMath::Max(MaxMotor, Motor); }
+                // 在联合控制选择和安全滤波之后记录命令，便于区分参考误差与姿态执行滞后。
+                UE_LOG_THROTTLE(0.2, LogUAVMetrics, Log,
+                    TEXT("[DEVIATION_DETAIL] Agent=%d Dev=%.1f MaxDev=%.1f Joint=%d CBF=%d TrackTime=%.3f Mass=%.2f Pos=%s Vel=%s ReferencePos=%s ReferenceVel=%s ReferenceAccel=%s LocalAccel=%s SelectedAccel=%s FinalAccel=%s ActualAccel=%s DesiredAttitude=%s ActualAttitude=%s Thrust=%.4f Motors=(%.4f,%.4f) ObsDist=%.1f"),
+                    AgentID, MetricsCurrentCrossTrackDev, MetricsMaxCrossTrackDev, bUsingJointControl, bMetricsCBFActiveThisFrame,
+                    TrajectoryTrackerComponent->GetCurrentTime(), PositionControllerComponent->UAVMass,
+                    *CurrentState.Position.ToString(), *CurrentState.Velocity.ToString(), *Reference.Position.ToString(),
+                    *Reference.Velocity.ToString(), *Reference.Acceleration.ToString(), *CachedNMPCAcceleration.ToString(),
+                    *SelectedAcceleration.ToString(), *EffectiveAccel.ToString(), *ActualAcceleration.ToString(),
+                    *DesiredAttitude.ToString(), *CurrentState.Rotation.ToString(), DesiredThrust, MinMotor, MaxMotor, CachedNearestObsDist);
+            }
 
 			if (DynamicsComponent)
 			{
@@ -1370,6 +1401,7 @@ bool AUAVPawn::ParkOnSurface()
 	StopTrajectoryTracking();
 	DynamicsComponent->EmergencyStopMotors();
 	bParked=true;
+    ExecutedAcceleration = FVector::ZeroVector;
 	return true;
 }
 

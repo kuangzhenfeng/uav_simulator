@@ -622,7 +622,7 @@ void AMultiAgentGameMode::RefreshStateCache()
 			Snapshot.State = Pawn->GetUAVState();
 			Snapshot.TargetPosition = Pawn->GetTargetPosition();
 			Snapshot.Timestamp = GetWorld()->GetTimeSeconds();
-			Snapshot.NMPCAcceleration = Pawn->GetNMPCAcceleration();
+			Snapshot.ExecutedAcceleration = Pawn->GetExecutedAcceleration();
 		}
 	}
 }
@@ -655,8 +655,8 @@ void AMultiAgentGameMode::UpdateTrafficScales()
             for (int32 K = 1; K <= 24; ++K)
             {
                 const float T = K * 0.5f;
-                const FVector A = Tracker->GetDesiredState(Tracker->GetCurrentTime() + T).Position;
-                const FVector B = OtherTracker->GetDesiredState(OtherTracker->GetCurrentTime() + T).Position;
+                const FVector A = Tracker->GetPredictionState(T).Position;
+                const FVector B = OtherTracker->GetPredictionState(T).Position;
                 const FVector R = PrevA - PrevB;
                 const FVector D = (A-B)-R;
                 const float Alpha = FMath::Clamp(-FVector::DotProduct(R,D)/FMath::Max(D.SizeSquared(),1.e-6),0.0,1.0);

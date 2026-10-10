@@ -61,7 +61,10 @@ bool FCoveragePlanner::Build(const TArray<FVector>& Points,int32 FirstEnd,float 
         if(!Append(Start,Direction*Speed,true) || !Append(Points[End],Direction*Speed,true)) return false;
         Times.Add(End,Result.TotalDuration);
         const bool HasNext=Points.IsValidIndex(End+2);
-        const float TurnSpeed=HasNext ? FMath::Min(Speed,0.6f*FMath::Sqrt(Acceleration*FVector::Dist(Points[End],Points[End+1])*0.5f)) : 0;
+        const FVector Gap=HasNext ? Points[End+1]-Points[End] : FVector::ZeroVector;
+        const double LateralSpacing=(Gap-Direction*FVector::DotProduct(Gap,Direction)).Size();
+        // 断点续作可使相邻端点纵向错开，纵向距离不能增大转弯半径或放宽地头速度。
+        const float TurnSpeed=HasNext ? FMath::Min(Speed,float(0.6*FMath::Sqrt(Acceleration*LateralSpacing*0.5))) : 0;
         if(!Append(Points[End]+Direction*Headland,Direction*TurnSpeed,true)) return false;
         if(HasNext)
         {

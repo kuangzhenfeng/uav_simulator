@@ -199,8 +199,8 @@ void UCBFQPFilter::BuildCBFConstraints(
 		//   但我们用 A·u ≤ b 形式: A = 2*Δp, b = ...
 		//   即: (2*Δp)·ui ≤ (2*||Δv||² + 2*Δp·uj + α₁*h_dot + α₀*h)
 
-		// 使用邻居的 NMPC 加速度作为 uj 的估计（协作假设）
-		FVector Uj = Neighbor.NMPCAcceleration;
+		// 使用邻机最终执行命令，避免将被联合控制或安全层覆盖的求解量作为真实动作。
+		FVector Uj = Neighbor.ExecutedAcceleration;
 
 		float VelNormSq = DeltaV.SizeSquared();
 		float DeltaPDotUj = FVector::DotProduct(DeltaP, Uj);

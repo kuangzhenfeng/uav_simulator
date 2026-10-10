@@ -5,6 +5,8 @@
 #include "AgricultureTypes.h"
 #include "AgricultureCoordinator.generated.h"
 
+DECLARE_LOG_CATEGORY_EXTERN(LogAgriculture, Log, All);
+
 class AMultiAgentGameMode;
 class AUAVPawn;
 class UScenario;
@@ -46,11 +48,16 @@ public:
         const TArray<FObstacleInfo>& Obstacles={},float CollisionRadius=0);
     static int32 ChooseNearestAirport(const TArray<FSupplyAirportState>& Candidates,
         const TArray<float>& PathLengths, float AvailableFlightSeconds, float SpeedCm, float ReserveSeconds,const TArray<float>& TravelSeconds={},const TArray<float>& WaitingSeconds={});
+    static double SegmentEnergyFraction(float EmptyMassKg,float DensityKgPerLitre,double StartLitres,double EndLitres,double Seconds,double ReferenceSeconds);
+    static float PayloadPowerRatio(float EmptyMassKg,float LiquidLitres,float DensityKgPerLitre);
     static bool RecordSpraySegment(FAgriculturePlotState& Plot,float& Liquid,const FVector& Previous,const FVector& Position,float BandCm);
     static bool CleanResidue(FAgricultureAgentState& Agent,FSupplyAirportState& Airport,FName Recipe);
+    static float DrainLiquid(FAgricultureAgentState& Agent,FSupplyAirportState& Airport,float Amount,float Target);
     static float TransferLiquid(FAgricultureAgentState& Agent,FSupplyAirportState& Airport,
         float RequestedLitres,float CapacityLitres,float ConcentrateFraction);
 private:
+    double SupplyTransferTravelSeconds(const FAgricultureAgentState& Agent,const FSupplyAirportState& Source,const FSupplyAirportState& Destination) const;
+    double SupplyTravelTime(const FVector& Position,const FVector& Velocity,double PathDistance,float Acceleration) const;
     friend class FAgricultureBerthQueueTest;
     friend class FAgricultureSectionStateTest;
     friend class FAgricultureEfficiencyTest;
@@ -62,6 +69,7 @@ private:
     TArray<FSupplyAirportState> Airports;
     TArray<FAgriculturePlotState> Plots;
     TArray<FAgriculturePlotState> Sections;
+    TArray<TArray<FAgricultureSupplySlot>> SupplySlots;
     FAgriculturePlotState* Section(const FAgricultureAgentState& Agent);
     void RefreshPlots();
     TMap<int32,FVector> PreviousPositions;
@@ -69,10 +77,16 @@ private:
     float ElapsedSeconds = 0;
     float LogSeconds = 0;
     float VisualSeconds = 0;
+    float SupplyPlanTime = -1;
+    float AssignmentPlanTime = -1;
     bool bCollectSupplyRequests = false;
     TMap<int32,int32> PendingSupplyRequests;
     void ResolveSupplyRequests();
     void PlanSupplyAssignments();
+    static double FindSupplySlotWait(double StartSeconds,double DurationSeconds,const TArray<FAgricultureSupplySlot>& Slots,int32 AgentID);
+    static void ReserveSupplyStock(FSupplyAirportState& Station,const FAgricultureAgentState& Agent,const FAgriculturePlotState& Field,float TargetLitres);
+    FSupplyAirportState AvailableSupplyStock(const FSupplyAirportState& Station,int32 AgentID) const;
+    void ConsumeSupplyReservation(int32 AirportID,int32 AgentID,double WaterLitres,double ConcentrateLitres,double WasteLitres);
     AUAVPawn* Pawn(int32 ID) const;
     FSupplyAirportState* Airport(int32 ID);
     void ChangePhase(FAgricultureAgentState& Agent, EAgriculturePhase Phase);
@@ -80,8 +94,15 @@ private:
     bool StartSupplyDeparture(FAgricultureAgentState& Agent);
     bool StartWorkRoute(FAgricultureAgentState& Agent,FAgriculturePlotState& Field);
     bool CanService(const FSupplyAirportState& Station) const;
-    float EstimateWaitSeconds(const FSupplyAirportState& Station,float ArrivalSeconds,int32 WaitingAgentID=INDEX_NONE) const;
+    float EstimateWaitSeconds(const FSupplyAirportState& Station,float ArrivalSeconds,int32 WaitingAgentID) const;
     FString ServiceStage(const FAgricultureAgentState& Agent) const;
+    float FlightSeconds(const FAgricultureAgentState& Agent) const;
+    static void AdvanceForecastProgress(FAgriculturePlotState& Field,double AppliedLitres);
+    FAgricultureSortieForecast ForecastSortie(const FAgricultureAgentState& Agent,const FVector& Position,const FAgriculturePlotState& Field,
+        const FSupplyAirportState& Station,float LiquidLitres,float BatteryFraction,bool IncludeQueue=true,double StationWaitSnapshotSeconds=-1) const;
+    FAgricultureServicePlan PlanService(const FAgricultureAgentState& Agent,const FAgriculturePlotState& Field,const FSupplyAirportState& Station,bool IncludeQueue=true) const;
+    FAgricultureServicePlan PlanDockService(const FAgricultureAgentState& Agent,const FAgriculturePlotState& Field,const FSupplyAirportState& Station,bool IncludeQueue=true) const;
+    FAgriculturePlotState ChooseWorkOrder(const FAgricultureAgentState& Agent,const FVector& Position,const FAgriculturePlotState& Field,double* OutCost=nullptr) const;
     void AssignPlots();
     double EstimateSectionCost(const FAgricultureAgentState& Agent,const FVector& Position,const FAgriculturePlotState& Part) const;
     double RemainingWorkSeconds(const FAgriculturePlotState& Part,double& LiquidLitres) const;
@@ -89,6 +110,7 @@ private:
     bool RedirectSupplyReservation(FAgricultureAgentState& Agent,int32 ExcludedAirportID);
     void RefreshSupplyRoutes(FAgricultureAgentState& Agent,bool Force=false);
     void ReleaseAirport(FAgricultureAgentState& Agent);
+    void DeferDockedSection(FAgricultureAgentState& Agent);
     void UpdateAirport(FSupplyAirportState& Station, float DeltaTime);
     void UpdateAgent(FAgricultureAgentState& Agent, float DeltaTime);
     void Fail(FAgricultureAgentState& Agent, const FString& Reason);

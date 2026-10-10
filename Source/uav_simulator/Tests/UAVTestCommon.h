@@ -355,7 +355,7 @@ namespace UAVTestHelpers
 			const FVector& Velocity = FVector::ZeroVector,
 			const FRotator& Rotation = FRotator::ZeroRotator,
 			const FVector& TargetPosition = FVector::ZeroVector,
-			const FVector& NMPCAcceleration = FVector::ZeroVector)
+			const FVector& ExecutedAcceleration = FVector::ZeroVector)
 		{
 			FAgentStateSnapshot Snapshot;
 			Snapshot.AgentID = AgentID;
@@ -363,7 +363,7 @@ namespace UAVTestHelpers
 			Snapshot.State.Velocity = Velocity;
 			Snapshot.State.Rotation = Rotation;
 			Snapshot.TargetPosition = TargetPosition;
-			Snapshot.NMPCAcceleration = NMPCAcceleration;
+			Snapshot.ExecutedAcceleration = ExecutedAcceleration;
 			Snapshot.Timestamp = 0.0;
 			return Snapshot;
 		}

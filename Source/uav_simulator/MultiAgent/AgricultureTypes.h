@@ -64,7 +64,8 @@ struct FAgricultureConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite) float TankCapacityLitres = 50;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) float InitialLiquidLitres = 12;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) float InitialBatteryFraction = 0.8f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite) float BatteryFlightSeconds = 600;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) float BatteryFlightSeconds = 600; // 空载悬停基准续航，载荷通过诱导功率模型折算
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) float LiquidDensityKgPerLitre = 1;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) float BatteryReserveFraction = 0.15f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) float TransitHeightCm = 1500;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) float HeightAboveCanopyCm = 300;
@@ -88,6 +89,15 @@ struct FAgricultureAgentState
     int32 PlannedSupplyAirportID = INDEX_NONE;
     int32 AirportID = INDEX_NONE;
     EAgriculturePhase Phase = EAgriculturePhase::Idle;
+    float EmptyMassKg = 22;
+    float PayloadLimitKg = 50;
+    float ServiceLiquidTarget = -1; // -1 尚未规划，-2 充电后转移至更合适的补给机场
+    float ServiceBatteryTarget = 1;
+    int32 ServiceAirportTargetID = INDEX_NONE;
+    double ServiceDepartureNotBefore = 0;
+    float ServicePlanTime = -1;
+    bool bServiceCleanBeforeTransfer = false;
+    float PlannedSupplyDelaySeconds = 0;
     float Battery = 1;
     float LiquidLitres = 0;
     FName Recipe;
@@ -102,6 +112,7 @@ struct FAgricultureAgentState
     float SupplyForecastTime = -1;
     TArray<float> SupplyPathLengths;
     TArray<float> SupplyTravelSeconds;
+    TArray<float> SupplyEntryTravelSeconds;
     bool bWorkRouteActive = false;
     float WorkStartTime = 0;
     TMap<int32,float> WorkStripEndTimes;
@@ -128,4 +139,41 @@ struct FSupplyAirportState
     int32 OccupantID = INDEX_NONE;
     TArray<int32> Queue;
     float WasteLitres = 0;
+};
+
+/** 同一航次逐段预测，能量单位为额定电池容量的比例。 */
+struct FAgricultureSortieForecast
+{
+    double FlightSeconds = 0;
+    double EnergyFraction = 0;
+    double AppliedLitres = 0;
+    double RequiredBattery = 0;
+    double ReturnSeconds = 0;
+    double EntryFlightSeconds = 0;
+    double EntryReturnSeconds = 0;
+    FVector EndPosition = FVector::ZeroVector;
+    bool bCompleted = false;
+    bool bFeasible = false;
+};
+
+/** 机场占用窗口，起止时间使用农业仿真的绝对秒数。 */
+struct FAgricultureSupplySlot
+{
+    int32 AgentID = INDEX_NONE;
+    double BeginSeconds = 0;
+    double EndSeconds = 0;
+    double WaterLitres = 0;
+    double ConcentrateLitres = 0;
+    double WasteLitres = 0;
+};
+
+struct FAgricultureServicePlan
+{
+    int32 AirportID = INDEX_NONE;
+    float LiquidLitres = -1;
+    float BatteryFraction = 1;
+    double ServiceSeconds = 0;
+    double CompletionSeconds = DBL_MAX;
+    double DepartureDelaySeconds = 0;
+    bool bCleanBeforeTransfer = false;
 };

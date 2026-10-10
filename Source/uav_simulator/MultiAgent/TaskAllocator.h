@@ -26,6 +26,9 @@ public:
 	/** 矩形匈牙利匹配：先最大化有效分配数量，再最小化总代价；无穷代价表示不可行。 */
 	static TArray<int32> MatchMinimumCost(const TArray<TArray<double>>& Costs);
 
+    /** 先最大化分配数，再最小化最晚完成时间，最后最小化完成时间之和。 */
+    static TArray<int32> MatchMinimumMakespan(const TArray<TArray<double>>& CompletionTimes);
+
 	/**
 	 * 一次性任务分配
 	 * @param Tasks 待分配任务列表

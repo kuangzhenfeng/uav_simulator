@@ -6,6 +6,58 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrajectoryAccelerationTransitionTest,
+    "UAVSimulator.Planning.TrajectoryOptimizer.AccelerationTransition",UAV_TEST_FLAGS)
+bool FTrajectoryAccelerationTransitionTest::RunTest(const FString&)
+{
+    auto* Optimizer=NewObject<UTrajectoryOptimizer>();
+    const FVector Velocity(104.735,107.265,-1.344),Acceleration(77.601,63.361,.145);
+    Optimizer->SetStartVelocity(Velocity);Optimizer->SetStartAcceleration(Acceleration);
+    const FVector End(21082.422,0,0);
+    const auto Route=Optimizer->OptimizeTrajectory({FVector::ZeroVector,End},600,150);
+    TestTrue(TEXT("Long route with moving acceleration boundary is feasible"),Route.bIsValid);
+    if(!Route.bIsValid) return false;
+    UAV_TEST_VECTOR_EQUAL(Route.Points[0].Velocity,Velocity,.01f);
+    UAV_TEST_VECTOR_EQUAL(Route.Points[0].Acceleration,Acceleration,.01f);
+    UAV_TEST_VECTOR_EQUAL(Route.Points.Last().Position,End,1.f);
+    UAV_TEST_VECTOR_EQUAL(Route.Points.Last().Velocity,FVector::ZeroVector,.1f);
+    TestTrue(TEXT("Boundary transition avoids runaway duration"),Route.TotalDuration<200);
+    for(const auto& Point:Route.Points)
+    {
+        TestTrue(TEXT("Transition and long route respect speed"),Point.Velocity.Size()<=601);
+        TestTrue(TEXT("Transition and long route respect acceleration"),Point.Acceleration.Size()<=151);
+    }
+    const auto Before=Optimizer->SampleTrajectory(Route,.999f),After=Optimizer->SampleTrajectory(Route,1.001f);
+    UAV_TEST_VECTOR_EQUAL(Before.Position,After.Position,1.f);
+    UAV_TEST_VECTOR_EQUAL(Before.Velocity,After.Velocity,1.f);
+    UAV_TEST_VECTOR_EQUAL(Before.Acceleration,After.Acceleration,1.f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrajectorySamplingBudgetTest,
+    "UAVSimulator.Planning.TrajectoryOptimizer.SamplingBudget",UAV_TEST_FLAGS)
+bool FTrajectorySamplingBudgetTest::RunTest(const FString&)
+{
+    auto* Optimizer=NewObject<UTrajectoryOptimizer>();
+    const TArray<FVector> Path={FVector::ZeroVector,FVector(100,0,0)};
+    TestFalse(TEXT("Extreme duration is rejected before sample allocation"),
+        Optimizer->OptimizeTrajectoryWithTiming(Path,{10000000.f}).bIsValid);
+    TestFalse(TEXT("Negative segment duration is rejected"),
+        Optimizer->OptimizeTrajectoryWithTiming({FVector::ZeroVector,FVector(100,0,0),FVector(200,0,0)},{2,-1}).bIsValid);
+    Optimizer->DefaultSampleInterval=0;
+    TestFalse(TEXT("Zero sample interval cannot enter sampling loop"),Optimizer->OptimizeTrajectoryWithTiming(Path,{2}).bIsValid);
+    Optimizer->DefaultSampleInterval=.05f;
+    const auto Route=Optimizer->OptimizeTrajectoryWithTiming(Path,{2.03f});
+    TestTrue(TEXT("Fractional final sampling interval remains valid"),Route.bIsValid);
+    if(!Route.bIsValid) return false;
+    TestEqual(TEXT("Final timestamp is exact"),Route.Points.Last().TimeStamp,Route.TotalDuration);
+    for(int32 I=1;I<Route.Points.Num();++I)
+        TestTrue(TEXT("Sample timestamps strictly advance"),Route.Points[I].TimeStamp>Route.Points[I-1].TimeStamp);
+    TestTrue(TEXT("Resampling zero interval returns without allocation"),Optimizer->GetDenseSamples(Route,0).IsEmpty());
+    TestTrue(TEXT("Excessively dense resampling respects resource budget"),Optimizer->GetDenseSamples(Route,1.e-9f).IsEmpty());
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrajectoryUnequalTimingContinuityTest,
     "UAVSimulator.Planning.TrajectoryOptimizer.UnequalTimingContinuity",UAV_TEST_FLAGS)
 bool FTrajectoryUnequalTimingContinuityTest::RunTest(const FString&)

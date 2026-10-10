@@ -4,6 +4,18 @@
 #include "../uav_simulator.h"
 #include "uav_simulator/Debug/UAVLogConfig.h"
 
+namespace
+{
+    constexpr int32 MaximumTrajectorySamples=200000;
+    bool SampleCount(double Duration,double Interval,int32& Count)
+    {
+        if(!FMath::IsFinite(Duration) || !FMath::IsFinite(Interval) || Duration<=0 || Interval<=0) return false;
+        const double Steps=FMath::CeilToDouble(Duration/Interval);
+        if(!FMath::IsFinite(Steps) || Steps>=MaximumTrajectorySamples) return false;
+        Count=int32(Steps)+1;return true;
+    }
+}
+
 UTrajectoryOptimizer::UTrajectoryOptimizer()
 {
 	PrimaryComponentTick.bCanEverTick = true;
@@ -31,6 +43,50 @@ FTrajectory UTrajectoryOptimizer::OptimizeTrajectory(const TArray<FVector>& Wayp
 		return Result;
 	}
 
+    if(!FMath::IsFinite(MaxVelocity) || !FMath::IsFinite(MaxAcceleration) || MaxVelocity<=0 || MaxAcceleration<=0 ||
+        StartVelocity.ContainsNaN() || EndVelocity.ContainsNaN() || StartAcceleration.ContainsNaN() || EndAcceleration.ContainsNaN()) return Result;
+
+    if(StartAcceleration.Size()>1)
+    {
+        // 固定非零边界加速度时，延长整段时长反而增大峰值速度；先用连续过渡归零加速度。
+        const double SpeedLimit=FMath::Max(double(MaxVelocity),StartVelocity.Size()+.001);
+        const double A=StartAcceleration.SizeSquared()*.25,B=FVector::DotProduct(StartVelocity,StartAcceleration);
+        const double SpeedTime=(-B+FMath::Sqrt(FMath::Max(0.0,B*B+4*A*(SpeedLimit*SpeedLimit-StartVelocity.SizeSquared()))))/(2*A);
+        const double LocalDistance=FVector::Dist(Waypoints[0],Waypoints[1])*.25;
+        const double Acceleration=StartAcceleration.Size(),Velocity=StartVelocity.Size();
+        const double DistanceTime=2*LocalDistance/(Velocity+FMath::Sqrt(Velocity*Velocity+1.4*Acceleration*LocalDistance));
+        const float TransitionTime=float(FMath::Min(1.0,FMath::Min(SpeedTime*.99,DistanceTime)));
+        if(!FMath::IsFinite(TransitionTime) || TransitionTime<.001f || Acceleration>MaxAcceleration*1.0021) return Result;
+        const FVector TransitionEnd=Waypoints[0]+StartVelocity*TransitionTime+StartAcceleration*(.35*TransitionTime*TransitionTime);
+        const FVector TransitionVelocity=StartVelocity+StartAcceleration*(.5*TransitionTime);
+        FTrajectory Transition;
+        {
+            TGuardValue<FVector> VelocityGuard(EndVelocity,TransitionVelocity);
+            TGuardValue<FVector> AccelerationGuard(EndAcceleration,FVector::ZeroVector);
+            Transition=OptimizeTrajectoryWithTiming({Waypoints[0],TransitionEnd},{TransitionTime});
+        }
+        if(!Transition.bIsValid) return Result;
+        const auto TransitionSegments=Segments;
+        auto* Continuation=NewObject<UTrajectoryOptimizer>(this);
+        Continuation->DefaultSampleInterval=DefaultSampleInterval;
+        Continuation->StartVelocity=Transition.Points.Last().Velocity;
+        Continuation->EndVelocity=EndVelocity;Continuation->EndAcceleration=EndAcceleration;
+        TArray<FVector> Remaining=Waypoints;Remaining[0]=Transition.Points.Last().Position;
+        const auto Tail=Continuation->OptimizeTrajectory(Remaining,MaxVelocity,MaxAcceleration);
+        if(!Tail.bIsValid || Transition.Points.Num()+Tail.Points.Num()-1>MaximumTrajectorySamples) return Result;
+        Result=MoveTemp(Transition);
+        for(int32 I=1;I<Tail.Points.Num();++I)
+        {
+            auto Point=Tail.Points[I];Point.TimeStamp+=TransitionTime;
+            if(Point.TimeStamp<=Result.Points.Last().TimeStamp) return FTrajectory();
+            Result.AddPoint(Point);
+        }
+        Segments=TransitionSegments;
+        for(auto Segment:Continuation->Segments) {Segment.StartTime+=TransitionTime;Segments.Add(MoveTemp(Segment));}
+        Result.TotalDuration=TransitionTime+Tail.TotalDuration;Result.bIsValid=true;
+        return Result;
+    }
+
 	// 计算时间分配
 	TArray<float> SegmentTimes = ComputeTimeAllocation(Waypoints, MaxVelocity, MaxAcceleration);
 
@@ -42,10 +98,15 @@ FTrajectory UTrajectoryOptimizer::OptimizeTrajectory(const TArray<FVector>& Wayp
         float Scale=1;
         for(const auto& Point:Result.Points)
         {
+            if(Point.Position.ContainsNaN() || Point.Velocity.ContainsNaN() || Point.Acceleration.ContainsNaN())
+            {Result.bIsValid=false;return Result;}
             Scale=FMath::Max(Scale,Point.Velocity.Size()/FMath::Max(MaxVelocity,StartVelocity.Size()+1.e-3f));
             Scale=FMath::Max(Scale,FMath::Sqrt(Point.Acceleration.Size()/FMath::Max(MaxAcceleration,StartAcceleration.Size()+1.e-3f)));
         }
         if(Scale<=1.001f) return Result;
+        if(Scale>2)
+            UE_LOG(LogUAVPlanning,Warning,TEXT("TrajectoryOptimizer: Retiming Attempt=%d Scale=%.6g Duration=%.6g StartVelocity=%s EndVelocity=%s StartAcceleration=%s MaxVelocity=%.3f MaxAcceleration=%.3f"),
+                Attempt,double(Scale),double(Result.TotalDuration),*StartVelocity.ToString(),*EndVelocity.ToString(),*StartAcceleration.ToString(),MaxVelocity,MaxAcceleration);
         for(float& Time:SegmentTimes) Time*=Scale*1.01f;
     }
     Result.bIsValid=false;
@@ -63,29 +124,28 @@ FTrajectory UTrajectoryOptimizer::OptimizeTrajectoryWithTiming(const TArray<FVec
 		return Result;
 	}
 
-	// 求解最小Snap多项式
-	SolveMinimumSnap(Waypoints, SegmentTimes);
-
 	// 计算总时长
-	float TotalDuration = 0.0f;
+	double Duration = 0;
 	for (float T : SegmentTimes)
 	{
-		TotalDuration += T;
+        if(!FMath::IsFinite(T) || T<=0) return Result;
+		Duration += T;
 	}
-
-	if (!FMath::IsFinite(TotalDuration) || TotalDuration <= 0.0f)
+    int32 Count=0;
+	if (!SampleCount(Duration,DefaultSampleInterval,Count))
 	{
-		UE_LOG(LogUAVPlanning, Error, TEXT("TrajectoryOptimizer: Invalid total duration: %.3f"), TotalDuration);
+		UE_LOG(LogUAVPlanning, Warning, TEXT("TrajectoryOptimizer: Invalid sampling budget Duration=%.6g Interval=%.6g"),Duration,double(DefaultSampleInterval));
 		return Result;
 	}
-
-	// 生成轨迹点
-	TArray<FTrajectoryPoint> DenseSamples = GetDenseSamples(Result, DefaultSampleInterval);
+    for(const auto& Waypoint:Waypoints) if(Waypoint.ContainsNaN()) return Result;
+    const float TotalDuration=float(Duration);
+    SolveMinimumSnap(Waypoints, SegmentTimes);
+    Result.Points.Reserve(Count);
 
 	// 直接从段采样生成轨迹
-	float CurrentTime = 0.0f;
-	while (true)
+	for(int32 Sample=0;Sample<Count;++Sample)
 	{
+        const float CurrentTime=float(FMath::Min(double(Sample)*DefaultSampleInterval,Duration));
 		FTrajectoryPoint Point;
 		Point.TimeStamp = CurrentTime;
 
@@ -107,9 +167,13 @@ FTrajectory UTrajectoryOptimizer::OptimizeTrajectoryWithTiming(const TArray<FVec
 			Point.Acceleration = FVector(AccX, AccY, AccZ);
 		}
 
+        if(Point.Position.ContainsNaN() || Point.Velocity.ContainsNaN() || Point.Acceleration.ContainsNaN()) return FTrajectory();
+        if(!Result.Points.IsEmpty() && CurrentTime<=Result.Points.Last().TimeStamp)
+        {
+            if(Sample==Count-1 && CurrentTime==Result.Points.Last().TimeStamp) {Result.Points.Last()=Point;continue;}
+            return FTrajectory();
+        }
 		Result.AddPoint(Point);
-		if(CurrentTime>=TotalDuration) break;
-		CurrentTime = FMath::Min(CurrentTime + DefaultSampleInterval, TotalDuration);
 	}
 
 	Result.TotalDuration = TotalDuration;
@@ -190,22 +254,18 @@ TArray<FTrajectoryPoint> UTrajectoryOptimizer::GetDenseSamples(const FTrajectory
 {
 	TArray<FTrajectoryPoint> Samples;
 
-	if (!Traj.bIsValid)
+    int32 Count=0;
+	if (!Traj.bIsValid || !SampleCount(Traj.TotalDuration,SampleInterval,Count))
 	{
 		return Samples;
 	}
 
-	float CurrentTime = 0.0f;
-	while (CurrentTime <= Traj.TotalDuration)
+    Samples.Reserve(Count);
+	for(int32 Sample=0;Sample<Count;++Sample)
 	{
+        const float CurrentTime=float(FMath::Min(double(Sample)*SampleInterval,double(Traj.TotalDuration)));
+        if(!Samples.IsEmpty() && CurrentTime<=Samples.Last().TimeStamp) continue;
 		Samples.Add(SampleTrajectory(Traj, CurrentTime));
-		CurrentTime += SampleInterval;
-	}
-
-	// 确保包含终点
-	if (Samples.Num() > 0 && Samples.Last().TimeStamp < Traj.TotalDuration)
-	{
-		Samples.Add(SampleTrajectory(Traj, Traj.TotalDuration));
 	}
 
 	return Samples;

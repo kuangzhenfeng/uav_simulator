@@ -120,6 +120,7 @@ protected:
 	FVector EndAcceleration = FVector::ZeroVector;
 
 private:
+    friend class FTrajectorySamplingBudgetTest;
 	// 多项式轨迹段
 	TArray<FPolynomialSegment> Segments;
 

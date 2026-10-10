@@ -41,9 +41,9 @@ struct FAgentStateSnapshot
 	UPROPERTY(BlueprintReadOnly, Category = "MultiAgent")
 	FVector TargetPosition;
 
-	// 最近一次 NMPC 输出加速度 (供邻居 CBF-QP 使用)
+	// 世界坐标系中的最终执行加速度，停靠时为零，供邻机安全约束预测。
 	UPROPERTY(BlueprintReadOnly, Category = "MultiAgent")
-	FVector NMPCAcceleration;
+	FVector ExecutedAcceleration;
 
 	// 快照时间戳
 	UPROPERTY(BlueprintReadOnly, Category = "MultiAgent")
@@ -51,7 +51,7 @@ struct FAgentStateSnapshot
 
 	FAgentStateSnapshot()
 		: TargetPosition(FVector::ZeroVector)
-		, NMPCAcceleration(FVector::ZeroVector)
+		, ExecutedAcceleration(FVector::ZeroVector)
 	{}
 };
 

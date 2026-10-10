@@ -96,6 +96,21 @@ bool FCoverageCompleteRouteTest::RunTest(const FString&)
         FCoveragePlanner::Build(Strips,ResumeEnd,Covered,ResumeApproach,300,150,Work,EndTimes));
     TestEqual(TEXT("Completed strips are omitted on resume"),EndTimes.Num(),8);
     TestFalse(TEXT("Invalid strip cursor is rejected"),FCoveragePlanner::Build(Strips,4,0,Approach,300,150,Work,EndTimes));
+    const TArray<FVector> OffsetStrips={FVector(10003,6000,400),FVector(7001.847,6000,400),
+        FVector(10003.799,6600,400),FVector(13000,6600,400)};
+    const FVector OffsetEntry=OffsetStrips[0]+FVector(Headland,0,0);
+    Optimizer->SetEndVelocity(FVector(-100,0,0));
+    const FTrajectory OffsetApproach=Optimizer->OptimizeTrajectory({OffsetEntry+FVector(1000,0,0),OffsetEntry},300,150);
+    TestTrue(TEXT("Reversed partial strip joins a longitudinally offset remainder"),
+        FCoveragePlanner::Build(OffsetStrips,1,0,OffsetApproach,300,150,Work,EndTimes));
+    bool OffsetLimits=Work.bIsValid;float OffsetPreviousTime=-1;
+    for(const auto& Point:Work.Points)
+    {
+        OffsetLimits &= Point.TimeStamp>OffsetPreviousTime && Point.Velocity.Size()<=301 && Point.Acceleration.Size()<=151;
+        OffsetPreviousTime=Point.TimeStamp;
+    }
+    TestTrue(TEXT("Offset headland keeps continuous time and physical speed/acceleration limits"),OffsetLimits);
+    TestEqual(TEXT("Offset continuation retains both unsprayed coverage milestones"),EndTimes.Num(),2);
     return true;
 }
 #endif
